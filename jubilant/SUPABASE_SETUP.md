@@ -262,7 +262,7 @@ AI calls must run **server-side** (to keep your API key private). This repo incl
 In Netlify site settings → **Environment variables**, set:
 
 - `GEMINI_API_KEY` (required)
-- `GEMINI_MODEL` (optional, default: `gemini-1.5-flash`)
+- `GEMINI_MODEL` (optional, default: `gemini-2.0-flash`)
 
 Then redeploy.
 

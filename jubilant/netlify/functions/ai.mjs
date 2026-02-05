@@ -101,7 +101,7 @@ const geminiGenerateText = async ({ apiKey, model, prompt, temperature = 0.2, ma
 
   const raw = await res.text();
   if (!res.ok) {
-    return { ok: false, error: `Gemini error (${res.status}): ${raw.slice(0, 500)}` };
+    return { ok: false, status: res.status, error: `Gemini error (${res.status}): ${raw.slice(0, 500)}` };
   }
 
   const data = safeJsonParse(raw);
@@ -119,7 +119,7 @@ export async function handler(event) {
   if (!supabaseUrl || !supabaseAnonKey) return json(500, { ok: false, error: "Server missing Supabase env vars." });
 
   const geminiApiKey = process.env.GEMINI_API_KEY;
-  const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+  const geminiModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
   if (!geminiApiKey) return json(500, { ok: false, error: "AI not configured. Missing GEMINI_API_KEY on server." });
 
   const auth = event.headers.authorization || event.headers.Authorization || "";
@@ -370,8 +370,28 @@ export async function handler(event) {
     return json(400, { ok: false, error: "Unknown action." });
   }
 
-  const gen = await geminiGenerateText({ apiKey: geminiApiKey, model: geminiModel, prompt });
-  if (!gen.ok) return json(502, { ok: false, error: gen.error });
+  const modelCandidates = process.env.GEMINI_MODEL
+    ? [geminiModel]
+    : [
+        geminiModel, // default
+        "gemini-2.0-flash-lite",
+        "gemini-2.5-flash",
+      ];
+
+  let gen = null;
+  for (const candidate of modelCandidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const attempt = await geminiGenerateText({ apiKey: geminiApiKey, model: candidate, prompt });
+    if (attempt.ok) {
+      gen = attempt;
+      break;
+    }
+    gen = attempt;
+    // Only try fallbacks when the default model is missing.
+    if (attempt.status !== 404) break;
+  }
+
+  if (!gen?.ok) return json(502, { ok: false, error: gen?.error || "AI request failed." });
   if (!gen.text) return json(502, { ok: false, error: "AI returned empty response." });
 
   return json(200, { ok: true, text: gen.text });
