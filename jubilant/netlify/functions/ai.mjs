@@ -144,7 +144,6 @@ export async function handler(event) {
 
   const roleRes = await supabase.from("profiles").select("role,email,full_name").eq("user_id", user.id).maybeSingle();
   const role = roleRes?.data?.role || "staff";
-  if (role !== "admin") return json(403, { ok: false, error: "AI is available to admins only." });
 
   const leadId = body.leadId ? String(body.leadId) : null;
 

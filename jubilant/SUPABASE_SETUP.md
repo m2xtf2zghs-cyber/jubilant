@@ -255,7 +255,7 @@ AI calls must run **server-side** (to keep your API key private). This repo incl
 
 - `jubilant/netlify/functions/ai.mjs`
 
-**Access control:** AI tools are **admin-only**. Only users with `public.profiles.role = 'admin'` will see AI buttons, and the Netlify function blocks non-admin requests.
+**Access control:** AI tools are available to any signed-in user. Your Supabase RLS policies still ensure staff can only access their own/assigned leads and mediators.
 
 ### Netlify (website + API)
 

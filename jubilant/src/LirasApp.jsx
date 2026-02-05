@@ -4383,7 +4383,7 @@ export default function LirasApp({ backend = null }) {
   }, [aiLanguage]);
 
   const ai = useMemo(() => {
-    if (!backendEnabled || !supabase || !isAdmin) return null;
+    if (!backendEnabled || !supabase) return null;
     return {
       tone: aiTone,
       language: aiLanguage,
@@ -4396,7 +4396,7 @@ export default function LirasApp({ backend = null }) {
           language: opts.language ?? aiLanguage,
         }),
     };
-  }, [backendEnabled, supabase, isAdmin, aiTone, aiLanguage]);
+  }, [backendEnabled, supabase, aiTone, aiLanguage]);
 
   useEffect(() => {
     if (backendEnabled) return;
