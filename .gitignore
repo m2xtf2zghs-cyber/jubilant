@@ -1,0 +1,9 @@
+# Local Netlify folder
+.netlify/
+
+# macOS
+.DS_Store
+
+# Local toolchains / caches
+.tools/
+.gradle/
