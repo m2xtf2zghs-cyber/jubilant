@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import LirasApp from "../LirasApp.jsx";
 import { supabase } from "./supabaseClient.js";
+import { BRAND } from "../brand/Brand.jsx";
 
 const LoadingScreen = ({ label = "Loading…" }) => (
-  <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-    <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-      <div className="text-lg font-bold text-slate-900">{label}</div>
-      <div className="text-sm text-slate-500 mt-1">Jubilant LIRAS</div>
+  <div className="min-h-screen flex items-center justify-center p-6">
+    <div className="w-full max-w-md surface p-6">
+      <div className="text-lg font-extrabold text-slate-900">{label}</div>
+      <div className="text-sm text-slate-500 mt-1">Jubilant LIRAS v4.06</div>
     </div>
   </div>
 );
@@ -31,10 +32,18 @@ const LoginScreen = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-        <div className="text-2xl font-extrabold text-slate-900">Jubilant Enterprises</div>
-        <div className="text-sm text-slate-500 mt-1">Sign in to access LIRAS v4.06</div>
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="w-full max-w-md surface p-7 shadow-elevated">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">{BRAND.name}</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-2">
+              Sign in to{" "}
+              <span className="bg-gradient-to-r from-indigo-600 to-blue-600 bg-clip-text text-transparent">LIRAS v4.06</span>
+            </div>
+            <div className="text-sm text-slate-500 mt-1">Invite-only access for staff accounts</div>
+          </div>
+        </div>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-3">
           <div>
@@ -44,7 +53,7 @@ const LoginScreen = ({ onLogin }) => {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 border rounded-lg"
+              className="w-full py-3"
               placeholder="name@company.com"
               autoComplete="email"
             />
@@ -56,18 +65,22 @@ const LoginScreen = ({ onLogin }) => {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full p-3 border rounded-lg"
+              className="w-full py-3"
               placeholder="••••••••"
               autoComplete="current-password"
             />
           </div>
 
-          {error && <div className="text-sm text-red-600 font-bold">{error}</div>}
+          {error && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 font-bold">{error}</div>
+          )}
 
           <button
             type="submit"
             disabled={busy}
-            className={`w-full py-3 rounded-lg font-bold text-white ${busy ? "bg-slate-400" : "bg-slate-900 hover:bg-black"}`}
+            className={`w-full py-3 rounded-xl font-bold text-white shadow-soft transition ${
+              busy ? "bg-slate-400" : "bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700"
+            }`}
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>

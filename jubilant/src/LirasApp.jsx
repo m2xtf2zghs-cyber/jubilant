@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "chart.js/auto";
 import { callAiAction } from "./ai/aiClient.js";
+import { deleteAttachmentBlob, getAttachmentBlob, putAttachmentBlob } from "./attachments/attachmentsStore.js";
+import { callAdminAction } from "./backend/adminClient.js";
+import { BRAND, BrandMark, ReportBrandHeader } from "./brand/Brand.jsx";
 import {
   Activity,
   AlertCircle,
@@ -214,6 +217,72 @@ const addMonths = (date, months) => {
   return d;
 };
 
+const toYmdLocal = (dateLike) => {
+  try {
+    const d = new Date(dateLike);
+    if (!Number.isFinite(d.getTime())) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  } catch {
+    return "";
+  }
+};
+
+const isOnYmdLocal = (dateLike, ymd) => {
+  if (!ymd) return false;
+  return toYmdLocal(dateLike) === ymd;
+};
+
+const endOfLocalDay = (ymd) => new Date(`${ymd}T23:59:59`);
+const startOfIstDay = (ymd) => new Date(`${ymd}T00:00:00+05:30`);
+const endOfIstDay = (ymd) => new Date(`${ymd}T23:59:59+05:30`);
+
+const toYmdInTimeZone = (dateLike, timeZone = BRAND.tz) => {
+  try {
+    const d = new Date(dateLike);
+    if (!Number.isFinite(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  } catch {
+    return "";
+  }
+};
+
+const toYmdIST = (dateLike) => toYmdInTimeZone(dateLike, BRAND.tz);
+const isOnYmdIST = (dateLike, ymd) => (ymd ? toYmdIST(dateLike) === ymd : false);
+
+const formatTimeIST = (dateLike) => {
+  try {
+    const d = new Date(dateLike);
+    if (!Number.isFinite(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: BRAND.tz,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d);
+  } catch {
+    return "";
+  }
+};
+
+const isTodayIST = (dateLike) => {
+  const todayYmd = toYmdIST(new Date());
+  return isOnYmdIST(dateLike, todayYmd);
+};
+
+const isTomorrowIST = (dateLike) => {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowYmd = toYmdIST(tomorrow);
+  return isOnYmdIST(dateLike, tomorrowYmd);
+};
+
 const calculateLeadScore = (lead) => {
   let score = 0;
   if (lead.isHighPotential) score += 30;
@@ -244,21 +313,36 @@ const calculateTAT = (lead) => {
 const SidebarItem = ({ icon: Icon, label, active, onClick, count, alert }) => (
   <button
     onClick={onClick}
-    className={`w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium transition-all duration-200 rounded-lg mb-1 group ${
-      active ? "bg-slate-800 text-white shadow-lg translate-x-1" : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
+    className={`relative w-full flex items-center justify-between px-4 py-2.5 text-sm font-semibold transition-all duration-200 rounded-xl mb-1 group ${
+      active
+        ? "bg-white/10 text-white shadow-sm ring-1 ring-white/10"
+        : "text-slate-300/80 hover:bg-white/5 hover:text-white"
     }`}
   >
+    {active && (
+      <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-6 bg-gradient-to-b from-indigo-400 to-blue-400 rounded-r-full" />
+    )}
     <div className="flex items-center gap-3">
       <Icon
         size={18}
-        className={`${alert ? "text-red-500 animate-pulse" : active ? "text-blue-400" : "text-slate-500 group-hover:text-slate-300"}`}
+        className={`${
+          alert
+            ? "text-red-400 animate-pulse"
+            : active
+              ? "text-indigo-300"
+              : "text-slate-400 group-hover:text-slate-200"
+        }`}
       />
       <span className={alert ? "text-red-400 font-bold" : ""}>{label}</span>
     </div>
     {count !== undefined && (
       <span
-        className={`text-xs px-2 py-0.5 rounded-full ${
-          alert ? "bg-red-500 text-white" : active ? "bg-slate-600" : "bg-slate-800 text-slate-500"
+        className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+          alert
+            ? "bg-red-500 text-white"
+            : active
+              ? "bg-white/15 text-white"
+              : "bg-white/10 text-slate-200/80"
         }`}
       >
         {count}
@@ -269,8 +353,8 @@ const SidebarItem = ({ icon: Icon, label, active, onClick, count, alert }) => (
 
 const StatCard = ({ title, value, color, icon: Icon, onClick }) => (
   <div
-    className={`bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-start justify-between hover:shadow-md transition-shadow ${
-      onClick ? "cursor-pointer hover:ring-2 hover:ring-blue-200" : ""
+    className={`surface p-5 flex items-start justify-between transition-all hover:shadow-elevated ${
+      onClick ? "cursor-pointer hover:ring-1 hover:ring-indigo-200" : ""
     }`}
     onClick={onClick}
   >
@@ -278,7 +362,7 @@ const StatCard = ({ title, value, color, icon: Icon, onClick }) => (
       <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
       <h3 className="text-2xl font-bold text-slate-800">{value}</h3>
     </div>
-    <div className={`p-3 rounded-lg ${color} text-white shadow-md`}>
+    <div className={`p-3 rounded-2xl ${color} text-white shadow-soft`}>
       <Icon size={20} />
     </div>
   </div>
@@ -287,14 +371,14 @@ const StatCard = ({ title, value, color, icon: Icon, onClick }) => (
 const Modal = ({ isOpen, onClose, title, children, large }) => {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-fade-in print:hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-md animate-fade-in print:hidden">
       <div
-        className={`bg-white rounded-2xl shadow-2xl w-full ${large ? "max-w-4xl h-[90vh]" : "max-w-lg max-h-[90vh]"} overflow-hidden flex flex-col animate-slide-up ring-1 ring-slate-900/5`}
+        className={`surface-solid shadow-elevated w-full ${large ? "max-w-5xl h-[90vh]" : "max-w-lg max-h-[90vh]"} overflow-hidden flex flex-col animate-slide-up`}
       >
-        <div className="flex justify-between items-center p-5 border-b bg-slate-50">
-          <h2 className="text-lg font-bold text-slate-800">{title}</h2>
-          <button onClick={onClose}>
-            <X size={20} className="text-slate-400 hover:text-slate-600" />
+        <div className="flex justify-between items-center p-5 border-b border-slate-200/60 bg-white/70 backdrop-blur">
+          <h2 className="text-lg font-extrabold text-slate-900">{title}</h2>
+          <button onClick={onClose} className="btn-secondary px-3 py-2">
+            <X size={18} className="text-slate-700" />
           </button>
         </div>
         <div className="p-6 overflow-y-auto flex-1">{children}</div>
@@ -407,7 +491,18 @@ const sanitizeLead = (raw) => {
     .filter(Boolean);
 
   const docs = l.documents && typeof l.documents === "object" ? l.documents : {};
-  const documents = { kyc: !!docs.kyc, itr: !!docs.itr, bank: !!docs.bank };
+  const tagsRaw = Array.isArray(docs.tags) ? docs.tags : [];
+  const tags = tagsRaw.map((t) => String(t || "").trim()).filter(Boolean);
+  const attachmentsRaw = Array.isArray(docs.attachments) ? docs.attachments : [];
+  const attachments = attachmentsRaw.filter((a) => a && typeof a === "object");
+  const documents = {
+    ...(docs || {}),
+    kyc: !!(typeof docs.kyc === "object" && docs.kyc !== null ? docs.kyc.status : docs.kyc),
+    itr: !!(typeof docs.itr === "object" && docs.itr !== null ? docs.itr.status : docs.itr),
+    bank: !!(typeof docs.bank === "object" && docs.bank !== null ? docs.bank.status : docs.bank),
+    tags,
+    attachments,
+  };
 
   return {
     id: String(l.id || Date.now() + Math.random()),
@@ -587,7 +682,18 @@ const FounderIntelligenceOverlay = ({ storageKey = "LIRAS_INTEL_V1" }) => {
 };
 
 // --- SETTINGS MODAL ---
-const SettingsModal = ({ isOpen, onClose, exportCSV, importCSV, handleBackup, handleRestore, backendEnabled }) => {
+const SettingsModal = ({
+  isOpen,
+  onClose,
+  exportCSV,
+  importCSV,
+  handleBackup,
+  handleRestore,
+  backendEnabled,
+  isAdmin,
+  supabase,
+  onUsersChanged,
+}) => {
   const handleResetLocal = () => {
     if (confirm("DANGER: This will delete ALL local data on this device. Are you sure?")) {
       if (confirm("Double Check: Have you downloaded a backup?")) {
@@ -597,14 +703,71 @@ const SettingsModal = ({ isOpen, onClose, exportCSV, importCSV, handleBackup, ha
     }
   };
 
+  const [userMode, setUserMode] = useState("create"); // create | invite
+  const [userEmail, setUserEmail] = useState("");
+  const [userFullName, setUserFullName] = useState("");
+  const [userRole, setUserRole] = useState("staff");
+  const [userPassword, setUserPassword] = useState("");
+  const [userBusy, setUserBusy] = useState(false);
+  const [userOk, setUserOk] = useState("");
+  const [userError, setUserError] = useState("");
+
+  const generatePassword = () => {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    const bytes = new Uint8Array(14);
+    try {
+      (globalThis.crypto || window.crypto).getRandomValues(bytes);
+    } catch {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    let out = "";
+    for (const b of bytes) out += alphabet[b % alphabet.length];
+    setUserPassword(out);
+  };
+
+  const submitUser = async () => {
+    setUserOk("");
+    setUserError("");
+    setUserBusy(true);
+    try {
+      const redirectTo = (() => {
+        try {
+          return /^https?:$/.test(window.location.protocol) ? window.location.origin : "";
+        } catch {
+          return "";
+        }
+      })();
+
+      const action = userMode === "invite" ? "invite_user" : "create_user";
+      const payload = {
+        email: userEmail,
+        fullName: userFullName,
+        role: userRole,
+        password: userMode === "invite" ? undefined : userPassword,
+        redirectTo,
+      };
+
+      await callAdminAction({ supabase, action, payload });
+      setUserOk(userMode === "invite" ? "Invite sent. Ask the user to check email and set a password." : "User created successfully.");
+      setUserEmail("");
+      setUserFullName("");
+      setUserPassword("");
+      onUsersChanged?.();
+    } catch (err) {
+      setUserError(err?.message || "Failed to create user");
+    } finally {
+      setUserBusy(false);
+    }
+  };
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Data Management & Settings">
       <div className="space-y-6">
-        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-          <h3 className="font-bold text-blue-900 mb-2 flex items-center gap-2">
-            <Database size={18} /> Backup & Restore (Recommended)
+        <div className="surface-solid p-4">
+          <h3 className="font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+            <Database size={18} className="text-indigo-600" /> Backup & Restore
           </h3>
-          <p className="text-xs text-blue-700 mb-4">
+          <p className="text-xs text-slate-600 mb-4">
             {backendEnabled
               ? "Export your data to a JSON backup. Restoring will import and add records into your account."
               : "Save your entire system state (leads, mediators, settings) to a JSON file."}
@@ -612,30 +775,30 @@ const SettingsModal = ({ isOpen, onClose, exportCSV, importCSV, handleBackup, ha
           <div className="flex gap-3">
             <button
               onClick={handleBackup}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-2"
+              className="flex-1 btn-primary py-2 text-xs"
             >
               <Download size={14} /> Download Backup
             </button>
-            <label className="flex-1 bg-white border border-blue-300 hover:bg-blue-50 text-blue-700 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-2 cursor-pointer">
+            <label className="flex-1 btn-secondary py-2 text-xs cursor-pointer">
               <UploadCloud size={14} /> Restore from File
               <input type="file" className="hidden" accept=".json" onChange={handleRestore} />
             </label>
           </div>
         </div>
 
-        <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-          <h3 className="font-bold text-emerald-900 mb-2 flex items-center gap-2">
-            <Sheet size={18} /> Excel / CSV Operations
+        <div className="surface-solid p-4">
+          <h3 className="font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+            <Sheet size={18} className="text-emerald-600" /> Excel / CSV
           </h3>
-          <p className="text-xs text-emerald-700 mb-4">Export list for analysis in Excel or bulk import leads from a CSV file.</p>
+          <p className="text-xs text-slate-600 mb-4">Export list for analysis in Excel or bulk import leads from a CSV file.</p>
           <div className="flex gap-3">
             <button
               onClick={exportCSV}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-2"
+              className="flex-1 py-2 rounded-xl font-bold text-xs text-white shadow-soft transition active:scale-[0.98] flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 focus:outline-none focus:ring-4 focus:ring-emerald-200"
             >
               <Download size={14} /> Export CSV
             </button>
-            <label className="flex-1 bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-700 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-2 cursor-pointer">
+            <label className="flex-1 btn-secondary py-2 text-xs cursor-pointer">
               <Upload size={14} /> Import CSV
               <input type="file" className="hidden" accept=".csv" onChange={importCSV} />
             </label>
@@ -656,6 +819,95 @@ const SettingsModal = ({ isOpen, onClose, exportCSV, importCSV, handleBackup, ha
             </button>
           )}
         </div>
+
+        {backendEnabled && isAdmin && (
+          <div className="surface-solid p-4">
+            <h3 className="font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+              <UserPlus size={18} className="text-indigo-600" /> Admin: Add Staff Account
+            </h3>
+            <p className="text-xs text-slate-600 mb-4">
+              Create users without exposing your Supabase service key to the browser. Requires Netlify env var{" "}
+              <span className="font-mono">SUPABASE_SERVICE_ROLE_KEY</span>.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-xl mb-4">
+              <button
+                type="button"
+                onClick={() => setUserMode("create")}
+                className={`py-2 rounded-lg text-xs font-extrabold transition ${userMode === "create" ? "bg-white shadow-soft text-slate-900" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                Create (Set Password)
+              </button>
+              <button
+                type="button"
+                onClick={() => setUserMode("invite")}
+                className={`py-2 rounded-lg text-xs font-extrabold transition ${userMode === "invite" ? "bg-white shadow-soft text-slate-900" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                Invite (Email Link)
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Email</label>
+                  <input value={userEmail} onChange={(e) => setUserEmail(e.target.value)} className="w-full py-3" placeholder="staff@company.com" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Full Name</label>
+                  <input value={userFullName} onChange={(e) => setUserFullName(e.target.value)} className="w-full py-3" placeholder="(optional)" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Role</label>
+                  <select value={userRole} onChange={(e) => setUserRole(e.target.value)} className="w-full py-3 text-sm">
+                    <option value="staff">Staff</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                {userMode === "create" ? (
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Temporary Password</label>
+                    <div className="flex gap-2">
+                      <input
+                        value={userPassword}
+                        onChange={(e) => setUserPassword(e.target.value)}
+                        className="flex-1 py-3"
+                        placeholder="Min 8 characters"
+                        type="text"
+                        autoComplete="new-password"
+                      />
+                      <button type="button" onClick={generatePassword} className="btn-secondary px-3 py-2 text-xs whitespace-nowrap">
+                        Generate
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">Share this password with the user. They can change it after login.</div>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-500 flex items-end">
+                    Supabase will email an invite link. Ensure your Supabase Auth “Site URL” includes your Netlify domain.
+                  </div>
+                )}
+              </div>
+
+              {userError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 font-bold">{userError}</div>}
+              {userOk && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 font-bold">{userOk}</div>}
+
+              <button
+                type="button"
+                disabled={userBusy}
+                onClick={submitUser}
+                className={`w-full py-3 rounded-xl font-bold text-white shadow-soft transition ${
+                  userBusy ? "bg-slate-400" : "bg-gradient-to-r from-slate-900 to-slate-800 hover:from-black hover:to-slate-900"
+                }`}
+              >
+                {userBusy ? "Working…" : userMode === "invite" ? "Send Invite" : "Create User"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -663,33 +915,35 @@ const SettingsModal = ({ isOpen, onClose, exportCSV, importCSV, handleBackup, ha
 
 // --- WIDGETS ---
 const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toYmdIST(new Date());
   const activeMediators = mediators.filter((m) => m.id !== "3"); // Exclude Direct/None
 
   return (
-    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm h-full flex flex-col">
-      <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 pb-2 border-b">
-        <Users className="text-blue-600" size={18} /> Daily Partner Connect
+    <div className="surface p-5 h-full flex flex-col">
+      <h3 className="font-extrabold text-slate-900 mb-4 flex items-center gap-2 pb-2 border-b border-slate-200/60">
+        <Users className="text-indigo-600" size={18} /> Daily Partner Connect
       </h3>
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
         {activeMediators.map((m) => {
-          const history = (m.followUpHistory || []).map((entry) =>
-            typeof entry === "string" ? { date: entry, time: "--", type: "legacy" } : entry
-          );
-          const doneEntry = history.find((h) => h.date === today);
+          const history = (m.followUpHistory || [])
+            .map((entry) => (typeof entry === "string" ? { date: entry, time: "--", type: "legacy" } : entry))
+            .filter((h) => h && typeof h === "object" && typeof h.date === "string");
+          const doneEntry = [...history]
+            .reverse()
+            .find((h) => (h?.ts ? toYmdIST(h.ts) === today : String(h.date || "") === today));
           const isDoneToday = !!doneEntry;
 
           return (
             <div
               key={m.id}
-              className={`flex justify-between items-center p-3 rounded-lg border transition-all ${
-                isDoneToday ? "bg-green-50 border-green-200" : "bg-slate-50 border-slate-100 hover:border-blue-200"
+              className={`flex justify-between items-center p-3 rounded-xl border transition-all ${
+                isDoneToday ? "bg-emerald-50 border-emerald-200/70" : "bg-white/60 border-slate-200/70 hover:border-indigo-200"
               }`}
             >
               <div className="flex items-center gap-3">
                 <div
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                    isDoneToday ? "bg-green-500 text-white shadow-sm" : "bg-white border-2 border-slate-300"
+                    isDoneToday ? "bg-emerald-600 text-white shadow-soft" : "bg-white/70 border-2 border-slate-200/70"
                   }`}
                 >
                   {isDoneToday &&
@@ -707,6 +961,7 @@ const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
                     <div className="text-[10px] text-green-600 font-medium">
                       {doneEntry.time} •{" "}
                       {doneEntry.type === "meeting" ? "Meeting" : doneEntry.type === "call" ? "Called" : "Msg Sent"}
+                      {doneEntry.type === "call" && doneEntry.outcome ? ` • ${String(doneEntry.outcome).replace(/_/g, " ")}` : ""}
                     </div>
                   ) : (
                     <div className="text-[10px] text-slate-500 font-medium">Total Connects: {history.length}</div>
@@ -720,7 +975,7 @@ const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
                       e.stopPropagation();
                       onFollowUp(m.id, "undo");
                     }}
-                    className="bg-white border border-slate-200 text-slate-400 hover:text-red-500 p-2 rounded-full transition-colors"
+                    className="bg-white/70 border border-slate-200/70 text-slate-500 hover:text-red-600 p-2 rounded-full transition-colors"
                     title="Undo / Uncheck"
                   >
                     <X size={16} />
@@ -730,10 +985,32 @@ const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onFollowUp(m.id, "call");
+                        if (!m.phone) {
+                          alert("No phone number for this mediator.");
+                          return;
+                        }
+                        const startedAt = new Date().toISOString();
+                        onFollowUp(m.id, "call", { ts: startedAt });
+                        try {
+                          localStorage.setItem(
+                            "liras_pending_call_v1",
+                            JSON.stringify({
+                              kind: "mediator",
+                              mediatorId: m.id,
+                              phone: m.phone,
+                              startedAt,
+                              ts: startedAt,
+                            })
+                          );
+                        } catch {
+                          // ignore
+                        }
+                        window.location.href = `tel:${String(m.phone).replace(/[^\d+]/g, "")}`;
                       }}
-                      className="bg-blue-100 hover:bg-blue-200 text-blue-700 p-2 rounded-full transition-colors"
-                      title="Log Call"
+                      className={`p-2 rounded-full transition-colors ${
+                        m.phone ? "bg-indigo-100 hover:bg-indigo-200 text-indigo-700" : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                      }`}
+                      title={m.phone ? "Call + auto-log" : "No phone number"}
                     >
                       <Phone size={16} />
                     </button>
@@ -746,7 +1023,7 @@ const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
                         e.stopPropagation();
                         onFollowUp(m.id, "whatsapp");
                       }}
-                      className="bg-green-100 hover:bg-green-200 text-green-700 p-2 rounded-full transition-colors"
+                      className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 p-2 rounded-full transition-colors"
                       title="Send WhatsApp"
                       rel="noreferrer"
                     >
@@ -816,13 +1093,13 @@ const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_tar
   const gap = target - stats.achieved;
 
   return (
-    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col h-full">
-      <div className="flex justify-between items-center mb-4 border-b pb-2">
-        <h3 className="font-bold text-slate-800 flex items-center gap-2">
-          <Target className="text-red-600" size={18} /> Monthly Sales Target
+    <div className="surface p-5 flex flex-col h-full">
+      <div className="flex justify-between items-center mb-4 border-b border-slate-200/60 pb-2">
+        <h3 className="font-extrabold text-slate-900 flex items-center gap-2">
+          <Target className="text-rose-600" size={18} /> Monthly Sales Target
         </h3>
-        <button onClick={() => setIsEditing(!isEditing)} className="text-slate-400 hover:text-blue-600">
-          <Edit2 size={14} />
+        <button onClick={() => setIsEditing(!isEditing)} className="btn-secondary px-3 py-2">
+          <Edit2 size={14} className="text-slate-700" />
         </button>
       </div>
 
@@ -832,7 +1109,7 @@ const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_tar
           <input
             type="number"
             defaultValue={target}
-            className="w-full p-2 border rounded font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full py-2 font-mono font-bold text-slate-900"
             autoFocus
             onKeyDown={(e) => e.key === "Enter" && handleSaveTarget(e.target.value)}
             onBlur={(e) => handleSaveTarget(e.target.value)}
@@ -844,7 +1121,7 @@ const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_tar
             <span className="text-sm text-slate-500 font-medium">Achieved</span>
             <span className="text-2xl font-bold text-slate-800">{formatCurrency(stats.achieved)}</span>
           </div>
-          <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+          <div className="w-full bg-slate-200/70 rounded-full h-3 overflow-hidden">
             <div
               className="bg-gradient-to-r from-blue-500 to-indigo-600 h-3 rounded-full transition-all duration-1000"
               style={{ width: `${percentage}%` }}
@@ -858,11 +1135,11 @@ const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_tar
       )}
 
       <div className="grid grid-cols-2 gap-3 mt-auto">
-        <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
-          <div className="text-[10px] font-bold text-blue-500 uppercase mb-1">Gap to Target</div>
+        <div className="bg-indigo-50/70 p-3 rounded-xl border border-indigo-200/60">
+          <div className="text-[10px] font-bold text-indigo-600 uppercase mb-1">Gap to Target</div>
           <div className="font-bold text-slate-700 text-lg">{gap > 0 ? formatCurrency(gap) : "Goal Hit!"}</div>
         </div>
-        <div className="bg-orange-50 p-3 rounded-lg border border-orange-100">
+        <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200/60">
           <div className="text-[10px] font-bold text-orange-500 uppercase mb-1">Active Pipeline</div>
           <div className="font-bold text-slate-700 text-lg">{formatCurrency(stats.pipeline)}</div>
         </div>
@@ -1269,12 +1546,15 @@ const CalendarView = ({ leads, onDateClick }) => {
 };
 
 const LoanBookView = ({ leads, mediators }) => {
-  const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState(() => {
+    const now = new Date();
+    return toYmdIST(new Date(now.getFullYear(), now.getMonth(), 1));
+  });
+  const [endDate, setEndDate] = useState(() => toYmdIST(new Date()));
 
   const closedLeads = leads.filter((l) => {
     if (l.status !== "Payment Done" || !l.loanDetails?.paymentDate) return false;
-    const pDate = l.loanDetails.paymentDate.slice(0, 10);
+    const pDate = toYmdIST(l.loanDetails.paymentDate);
     return pDate >= startDate && pDate <= endDate;
   });
 
@@ -1325,6 +1605,28 @@ const LoanBookView = ({ leads, mediators }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 animate-fade-in a4-page">
+        <ReportBrandHeader
+          title="Loan Book & Business Report"
+          subtitle={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <span className="text-slate-500 font-bold">Period:</span>
+              <span className="font-bold text-slate-900">
+                {new Date(startDate).toLocaleDateString("en-IN", { timeZone: BRAND.tz })}
+              </span>
+              <span className="text-slate-300">→</span>
+              <span className="font-bold text-slate-900">
+                {new Date(endDate).toLocaleDateString("en-IN", { timeZone: BRAND.tz })}
+              </span>
+            </span>
+          }
+          metaRight={
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Generated (IST)</div>
+              <div className="text-slate-900">{new Date().toLocaleString("en-IN", { timeZone: BRAND.tz })}</div>
+            </div>
+          }
+        />
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 no-break">
           <div className="bg-indigo-600 text-white p-6 rounded-xl shadow-lg">
             <p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">Total Principal Booked</p>
@@ -1512,7 +1814,9 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
         const mLeads = filteredLeads.filter((l) => l.mediatorId === mediator.id);
         const mClosed = mLeads.filter((l) => ["Payment Done", "Deal Closed"].includes(l.status));
 
-        const history = (mediator.followUpHistory || []).map((h) => (typeof h === "string" ? { date: h, type: "legacy" } : h));
+        const history = (mediator.followUpHistory || [])
+          .map((h) => (typeof h === "string" ? { date: h, type: "legacy" } : h))
+          .filter((h) => h && typeof h === "object" && typeof h.date === "string");
         const relevantHistory = selectedTimeframe === "all" ? history : history.filter((h) => new Date(h.date) >= timeframeStart);
 
         const meetingsCount = relevantHistory.filter((h) => h.type === "meeting").length;
@@ -1664,15 +1968,25 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white font-sans text-slate-900">
-      <div className="hidden print:block fixed top-0 left-0 right-0 bg-white border-b p-4 z-50">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Jubilant Enterprises</h1>
-            <p className="text-slate-600 text-sm">LIRAS System Professional Report</p>
-          </div>
-          <div className="text-right">
-            <div className="text-slate-500 text-sm">Generated: {new Date().toLocaleString()}</div>
-            <div className="text-slate-400 text-xs">{type.charAt(0).toUpperCase() + type.slice(1)} Performance Report</div>
+      <div className="hidden print:block fixed top-0 left-0 right-0 bg-white border-b border-slate-200 p-4 z-50">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <BrandMark size={44} />
+              <div className="min-w-0">
+                <div className="text-[11px] font-extrabold tracking-[0.24em] uppercase text-slate-500">{BRAND.name}</div>
+                <div className="text-xl font-extrabold text-slate-900 truncate">
+                  Professional {type.charAt(0).toUpperCase() + type.slice(1)} Performance Report
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  Timeframe: <span className="font-bold text-slate-900 capitalize">{selectedTimeframe}</span>
+                </div>
+              </div>
+            </div>
+            <div className="text-right text-xs text-slate-600 font-bold whitespace-nowrap">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Generated (IST)</div>
+              <div className="text-slate-900">{new Date().toLocaleString("en-IN", { timeZone: BRAND.tz })}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -2207,7 +2521,7 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
         <div className="text-center text-slate-500 text-sm py-6 border-t border-slate-200 print:break-inside-avoid">
           <p>Generated by LIRAS v4.06 Enterprise Intelligence System</p>
           <p className="mt-1 font-bold text-slate-700">CONFIDENTIAL BUSINESS DOCUMENT • INTENDED FOR PARTNERS ONLY</p>
-          <p className="text-xs text-slate-400">© {new Date().getFullYear()} Jubilant Enterprises.</p>
+          <p className="text-xs text-slate-400">© {new Date().getFullYear()} {BRAND.name}.</p>
         </div>
       </div>
     </div>
@@ -2215,100 +2529,201 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
 };
 
 const MidDayUpdateView = ({ mediator, leads, onBack }) => {
-  const activeLeads = leads
-    .filter((l) => {
-      if (l.mediatorId !== mediator.id) return false;
-      const isActionable = ["Meeting Scheduled", "Follow-Up Required", "Interest Rate Issue", "No Appointment", "Payment Done", "Statements Not Received", "Contact Details Not Received", "Not Eligible"].includes(
-        l.status
-      );
-      const lastNoteDate = l.notes?.length > 0 ? new Date(l.notes[l.notes.length - 1].date) : new Date(l.createdAt);
-      const updatedToday = isToday(lastNoteDate);
-      return isActionable || updatedToday;
-    })
-    .sort((a, b) => {
-      const priority = { "Meeting Scheduled": 1, "Payment Done": 2, "Interest Rate Issue": 3, "Not Eligible": 4 };
-      return (priority[a.status] || 99) - (priority[b.status] || 99);
-    });
+  const todayYmd = toYmdIST(new Date());
+  const now = new Date();
+
+  const activeLeads = useMemo(() => {
+    return (leads || [])
+      .filter((l) => {
+        if (!l || l.mediatorId !== mediator.id) return false;
+        const actionable = new Set([
+          "Meeting Scheduled",
+          "Follow-Up Required",
+          "Partner Follow-Up",
+          "Interest Rate Issue",
+          "No Appointment",
+          "Statements Not Received",
+          "Contact Details Not Received",
+          "Payment Done",
+          "Not Eligible",
+          "Lost to Competitor",
+        ]);
+        const lastNoteTs = l.notes?.length ? l.notes[l.notes.length - 1]?.date : null;
+        const updatedToday = lastNoteTs ? isOnYmdIST(lastNoteTs, todayYmd) : isOnYmdIST(l.createdAt, todayYmd);
+        return actionable.has(l.status) || updatedToday;
+      })
+      .sort((a, b) => {
+        const priority = {
+          "Meeting Scheduled": 1,
+          "Payment Done": 2,
+          "Follow-Up Required": 3,
+          "Partner Follow-Up": 4,
+          "Interest Rate Issue": 5,
+          "Statements Not Received": 6,
+          "Contact Details Not Received": 7,
+          "No Appointment": 8,
+          "Not Eligible": 20,
+          "Lost to Competitor": 21,
+        };
+        return (priority[a.status] || 99) - (priority[b.status] || 99);
+      });
+  }, [leads, mediator.id, todayYmd]);
+
+  const metrics = useMemo(() => {
+    const meetings = activeLeads.filter((l) => l.status === "Meeting Scheduled").length;
+    const overdueMeetings = activeLeads.filter((l) => l.status === "Meeting Scheduled" && l.nextFollowUp && new Date(l.nextFollowUp) < now).length;
+    const payments = activeLeads.filter((l) => l.status === "Payment Done" && l.loanDetails?.paymentDate && isOnYmdIST(l.loanDetails.paymentDate, todayYmd)).length;
+    const issues = activeLeads.filter((l) => ["Interest Rate Issue", "Statements Not Received", "Contact Details Not Received"].includes(l.status)).length;
+    const followups = activeLeads.filter((l) => ["Follow-Up Required", "Partner Follow-Up", "No Appointment"].includes(l.status)).length;
+    const value = activeLeads.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
+    return { meetings, overdueMeetings, payments, issues, followups, value };
+  }, [activeLeads, now, todayYmd]);
 
   return (
-    <div className="p-8 bg-slate-50 min-h-screen text-slate-900 font-sans">
-      <div className="print:hidden flex justify-between mb-8 bg-slate-900 text-white p-4 rounded-xl shadow-lg">
-        <button onClick={onBack} className="flex items-center gap-2 font-bold text-sm">
-          <ArrowLeft size={16} /> Back
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white/70 backdrop-blur border-b border-slate-200/60 sticky top-0 z-20 flex justify-between items-center shadow-soft">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
         </button>
         <button
           onClick={() => {
-            document.title = `Partner_Update_${mediator.name}`;
+            document.title = `Partner_Daily_Brief_${mediator.name}_${todayYmd}`;
             window.print();
           }}
-          className="bg-orange-600 hover:bg-orange-500 px-6 py-2 rounded-lg font-bold flex items-center gap-2 shadow-md transition-all"
+          className="btn-primary px-4 py-2"
         >
-          <Printer size={16} /> Print Briefing
+          <Printer size={16} /> Print
         </button>
       </div>
 
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white p-8 rounded-3xl shadow-xl mb-8 flex justify-between items-center no-break border-b-4 border-orange-500">
-        <div>
-          <div className="text-orange-200 font-bold uppercase tracking-widest text-xs mb-2">Jubilant Enterprises</div>
-          <h1 className="text-3xl font-extrabold tracking-tight">Daily Status Update</h1>
-          <p className="text-slate-400 font-medium mt-1">
-            Partner: <span className="text-white">{mediator.name}</span>
-          </p>
-        </div>
-        <div className="text-right">
-          <div className="text-5xl font-bold tracking-tighter">{activeLeads.length}</div>
-          <div className="text-xs uppercase font-bold text-slate-400 tracking-widest">Active Items</div>
-        </div>
-      </div>
-
-      <div className="space-y-6">
-        {activeLeads.map((l) => (
-          <div key={l.id} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden break-inside-avoid">
-            <div className={`absolute top-0 left-0 w-2 h-full ${l.status === "Payment Done" ? "bg-green-500" : "bg-blue-600"}`}></div>
-            <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="font-bold text-xl text-slate-900">{l.name}</h4>
-                  <span className="text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-500">{String(l.id).slice(-6)}</span>
-                </div>
-                <p className="text-sm text-slate-600 font-medium mt-1 flex items-center gap-2">
-                  <Briefcase size={14} /> {l.company} <span className="text-slate-300">|</span> <MapPin size={14} /> {l.location}
-                </p>
-              </div>
-              <div className="text-right">
-                <span className={`inline-block px-3 py-1 rounded-full font-bold uppercase text-xs tracking-wider ${STATUS_CONFIG[l.status]?.color}`}>
-                  {l.status}
+      <div className="max-w-6xl mx-auto p-6 print:p-8">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-7 print:shadow-none print:border-0">
+          <ReportBrandHeader
+            title="Partner Daily Briefing"
+            subtitle={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-bold text-slate-900">{mediator.name}</span>
+                <span className="text-slate-300">•</span>
+                <span className="inline-flex items-center gap-1 text-slate-700 font-bold">
+                  <Phone size={14} /> {mediator.phone || "—"}
                 </span>
-                <div className="text-xs text-slate-500 mt-2 font-medium">Last Action: {l.notes?.length ? formatDateTime(l.notes[l.notes.length - 1].date) : "N/A"}</div>
+              </span>
+            }
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Active Items</div>
+                <div className="text-slate-900">{activeLeads.length}</div>
               </div>
+            }
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Pipeline Value</div>
+              <div className="text-lg font-extrabold text-slate-900 mt-1">{formatCompactCurrency(metrics.value)}</div>
             </div>
-            <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-              <h5 className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2">
-                <Activity size={14} /> Latest Updates
-              </h5>
-              <div className="space-y-3">
-                {[...(l.notes || [])]
-                  .reverse()
-                  .slice(0, 2)
-                  .map((n, i) => (
-                    <div key={i} className="flex gap-3 items-start">
-                      <div className="mt-1 min-w-[4px] h-4 bg-slate-300 rounded-full"></div>
-                      <div>
-                        <div className="text-sm text-slate-800 font-medium leading-relaxed">{n.text.replace(/\[.*?\]/g, "").trim()}</div>
-                        <div className="text-xs text-slate-400 font-bold mt-0.5">{formatDateTime(n.date)}</div>
-                      </div>
-                    </div>
-                  ))}
-              </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Meetings</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{metrics.meetings}</div>
+              {metrics.overdueMeetings > 0 && <div className="text-[10px] text-rose-700 font-bold mt-1">Overdue: {metrics.overdueMeetings}</div>}
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Follow-ups</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{metrics.followups}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Issues</div>
+              <div className="text-2xl font-extrabold text-amber-700 mt-1">{metrics.issues}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Payments Today</div>
+              <div className="text-2xl font-extrabold text-emerald-700 mt-1">{metrics.payments}</div>
             </div>
           </div>
-        ))}
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2">
+                <ClipboardList size={18} className="text-indigo-600" /> Briefing Ledger
+              </div>
+              <div className="text-[11px] text-slate-500 font-bold">Sorted by priority • Latest note shown</div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-white border-b text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
+                  <tr>
+                    <th className="p-4">Client</th>
+                    <th className="p-4">Status</th>
+                    <th className="p-4">Next Action</th>
+                    <th className="p-4">Last Update</th>
+                    <th className="p-4">Latest Note</th>
+                    <th className="p-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {activeLeads.map((l) => {
+                    const lastNote = l.notes?.length ? l.notes[l.notes.length - 1] : null;
+                    const lastUpdate = lastNote?.date || l.createdAt;
+                    const nextAction = l.nextFollowUp ? formatDateTime(l.nextFollowUp) : "—";
+                    return (
+                      <tr key={l.id} className="hover:bg-slate-50 print:break-inside-avoid">
+                        <td className="p-4 align-top">
+                          <div className="font-extrabold text-slate-900">{l.name}</div>
+                          <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                            {l.company ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Briefcase size={12} /> {l.company}
+                              </span>
+                            ) : (
+                              <span>—</span>
+                            )}
+                            {l.location ? (
+                              <>
+                                <span className="text-slate-300">|</span>
+                                <span className="inline-flex items-center gap-1">
+                                  <MapPin size={12} /> {l.location}
+                                </span>
+                              </>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="p-4 align-top">
+                          <span className={`chip border ${STATUS_CONFIG[l.status]?.color?.replace("text", "text").replace("bg", "bg")}`}>{l.status}</span>
+                        </td>
+                        <td className="p-4 align-top text-xs text-slate-700 font-bold">{nextAction}</td>
+                        <td className="p-4 align-top text-xs text-slate-700 font-bold">{lastUpdate ? formatDateTime(lastUpdate) : "—"}</td>
+                        <td className="p-4 align-top text-xs text-slate-700 max-w-[420px]">
+                          {lastNote ? String(lastNote.text || "").replace(/\[.*?\]/g, "").trim() : <span className="text-slate-400 italic">No notes</span>}
+                        </td>
+                        <td className="p-4 align-top text-right font-mono font-extrabold text-slate-800">{formatCurrency(l.loanAmount)}</td>
+                      </tr>
+                    );
+                  })}
+                  {activeLeads.length === 0 && (
+                    <tr>
+                      <td colSpan="6" className="p-8 text-center text-slate-500 italic">
+                        No active items for this partner today.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Generated by {BRAND.product} • {BRAND.name}
+          </div>
+        </div>
       </div>
     </div>
   );
 };
 
-const MediatorPendingReportView = ({ mediator, leads, onBack, onUpdateLead }) => {
+const MediatorPendingReportViewLegacy = ({ mediator, leads, onBack, onUpdateLead }) => {
   const [updates, setUpdates] = useState({});
   const pendingLeads = leads
     .filter((l) => l.mediatorId === mediator.id && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status))
@@ -2497,7 +2912,218 @@ const MediatorPendingReportView = ({ mediator, leads, onBack, onUpdateLead }) =>
   );
 };
 
-const MediatorRejectionReportView = ({ mediator, leads, onBack }) => {
+const MediatorPendingReportView = ({ mediator, leads, onBack, onUpdateLead }) => {
+  const [updates, setUpdates] = useState({});
+  const todayYmd = toYmdIST(new Date());
+  const partnerActionStatuses = ["Partner Follow-Up", "Statements Not Received", "Contact Details Not Received", "Interest Rate Issue"];
+
+  const pendingLeads = useMemo(() => {
+    return (leads || [])
+      .filter((l) => l && l.mediatorId === mediator.id && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status))
+      .sort((a, b) => {
+        const aIsPartner = partnerActionStatuses.includes(a.status);
+        const bIsPartner = partnerActionStatuses.includes(b.status);
+        if (aIsPartner && !bIsPartner) return -1;
+        if (!aIsPartner && bIsPartner) return 1;
+        return new Date(a.createdAt) - new Date(b.createdAt);
+      });
+  }, [leads, mediator.id]);
+
+  const metrics = useMemo(() => {
+    const volume = pendingLeads.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
+    const critical = pendingLeads.filter((l) => Math.abs(getDaysDiff(l.createdAt)) > 15).length;
+    const partnerAction = pendingLeads.filter((l) => partnerActionStatuses.includes(l.status)).length;
+    return { volume, count: pendingLeads.length, critical, partnerAction, internal: Math.max(0, pendingLeads.length - partnerAction) };
+  }, [pendingLeads]);
+
+  const lastInstruction = (lead) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    const last =
+      [...notes].reverse().find((n) => String(n?.text || "").includes("[Action Required]") || String(n?.text || "").includes("[Carry Forward]")) ||
+      notes[notes.length - 1];
+    if (!last?.text) return { text: "Please provide status update.", ts: "" };
+    const text = String(last.text).replace(/^\s*\[[^\]]+\]\s*:?/i, "").trim();
+    return { text: text || String(last.text), ts: last.date || "" };
+  };
+
+  const handleSaveUpdate = (leadId) => {
+    const text = String(updates[leadId] || "").trim();
+    if (!text) return;
+    const lead = (leads || []).find((l) => l.id === leadId);
+    if (!lead) return;
+    onUpdateLead(leadId, { notes: [...(lead.notes || []), { text: `[Action Required]: ${text}`, date: new Date().toISOString() }] });
+    setUpdates((prev) => ({ ...prev, [leadId]: "" }));
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white/70 backdrop-blur border-b border-slate-200/60 sticky top-0 z-20 flex justify-between items-center shadow-soft">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `Partner_Pending_Actions_${mediator.name}_${todayYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-4 py-2"
+        >
+          <Printer size={16} /> Print
+        </button>
+      </div>
+
+      <div className="max-w-6xl mx-auto p-6 print:p-8">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-7 min-h-[297mm] print:shadow-none print:border-0">
+          <ReportBrandHeader
+            title="Partner Pending Action Report"
+            subtitle={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-bold text-slate-900">{mediator.name}</span>
+                <span className="text-slate-300">•</span>
+                <span className="inline-flex items-center gap-1 text-slate-700 font-bold">
+                  <Phone size={14} /> {mediator.phone || "—"}
+                </span>
+              </span>
+            }
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Audit Date (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Pending Cases</div>
+                <div className="text-slate-900">{metrics.count}</div>
+              </div>
+            }
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Pipeline Value</div>
+              <div className="text-lg font-extrabold text-slate-900 mt-1">{formatCompactCurrency(metrics.volume)}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Partner Action</div>
+              <div className="text-2xl font-extrabold text-rose-700 mt-1">{metrics.partnerAction}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Internal Follow-up</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{metrics.internal}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Stagnant &gt;15d</div>
+              <div className="text-2xl font-extrabold text-amber-700 mt-1">{metrics.critical}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Priority</div>
+              <div className="text-[11px] text-slate-700 font-bold mt-2">Partner → Issues → Others</div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2">
+                <AlertCircle size={18} className="text-rose-600" /> Pending Cases Ledger
+              </div>
+              <div className="text-[11px] text-slate-500 font-bold">Action inputs are hidden on print.</div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-white border-b text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
+                  <tr>
+                    <th className="p-4">Client</th>
+                    <th className="p-4">Status</th>
+                    <th className="p-4 text-center">Age</th>
+                    <th className="p-4">Latest Instruction</th>
+                    <th className="p-4 print:hidden">Update Partner</th>
+                    <th className="p-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {pendingLeads.map((l) => {
+                    const instruction = lastInstruction(l);
+                    const isPartnerAction = partnerActionStatuses.includes(l.status);
+                    return (
+                      <tr key={l.id} className="hover:bg-slate-50 print:break-inside-avoid">
+                        <td className="p-4 align-top">
+                          <div className="font-extrabold text-slate-900">{l.name}</div>
+                          <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                            {l.company ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Briefcase size={12} /> {l.company}
+                              </span>
+                            ) : (
+                              <span>—</span>
+                            )}
+                            {l.location ? (
+                              <>
+                                <span className="text-slate-300">|</span>
+                                <span className="inline-flex items-center gap-1">
+                                  <MapPin size={12} /> {l.location}
+                                </span>
+                              </>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="p-4 align-top">
+                          <div className="flex flex-col gap-2">
+                            <span className={`text-[10px] px-2 py-1 rounded font-extrabold uppercase ${STATUS_CONFIG[l.status]?.color || "bg-slate-100 text-slate-700"}`}>
+                              {l.status}
+                            </span>
+                            {isPartnerAction && (
+                              <span className="text-[10px] px-2 py-1 rounded font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-200">
+                                Partner Pending
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-4 align-top text-center">
+                          <div className="text-2xl font-extrabold text-slate-900">{Math.abs(getDaysDiff(l.createdAt))}</div>
+                          <div className="text-[10px] text-slate-500 font-bold uppercase">days</div>
+                        </td>
+                        <td className="p-4 align-top">
+                          <div className="text-xs text-slate-800 font-bold leading-relaxed">{instruction.text}</div>
+                          <div className="text-[10px] text-slate-400 font-bold mt-1">{instruction.ts ? `Sent: ${formatDateTime(instruction.ts)}` : ""}</div>
+                        </td>
+                        <td className="p-4 align-top print:hidden">
+                          <div className="flex gap-2">
+                            <input
+                              className="flex-1 py-2 text-xs"
+                              placeholder="Type instruction…"
+                              value={updates[l.id] || ""}
+                              onChange={(e) => setUpdates((p) => ({ ...(p || {}), [l.id]: e.target.value }))}
+                              onKeyDown={(e) => e.key === "Enter" && handleSaveUpdate(l.id)}
+                            />
+                            <button className="btn-primary px-3 py-2 text-xs" onClick={() => handleSaveUpdate(l.id)}>
+                              Update
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-4 align-top text-right font-mono font-extrabold text-slate-800">{formatCurrency(l.loanAmount)}</td>
+                      </tr>
+                    );
+                  })}
+                  {pendingLeads.length === 0 && (
+                    <tr>
+                      <td colSpan="6" className="p-8 text-center text-slate-500 italic">
+                        No pending cases for this partner.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Generated by {BRAND.product} • {BRAND.name}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MediatorRejectionReportViewLegacy = ({ mediator, leads, onBack }) => {
   const rejectedLeads = leads
     .filter((l) => l.mediatorId === mediator.id && ["Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -2523,7 +3149,7 @@ const MediatorRejectionReportView = ({ mediator, leads, onBack }) => {
         <div className="bg-slate-900 text-white p-8 border-l-8 border-red-600 flex justify-between items-start mb-10 no-break">
           <div>
             <h1 className="text-4xl font-extrabold tracking-tight mb-2">Submission Quality Report</h1>
-            <p className="text-slate-400 text-sm uppercase tracking-widest font-bold">Jubilant Enterprises | Partner Report</p>
+            <p className="text-slate-400 text-sm uppercase tracking-widest font-bold">{BRAND.name} | Partner Report</p>
           </div>
           <div className="text-right">
             <h2 className="text-xl font-bold">{mediator.name}</h2>
@@ -2607,6 +3233,284 @@ const MediatorRejectionReportView = ({ mediator, leads, onBack }) => {
   );
 };
 
+const MediatorRejectionReportView = ({ mediator, leads, onBack }) => {
+  const todayYmd = toYmdIST(new Date());
+  const chartRef = useRef(null);
+  const chartInstance = useRef(null);
+
+  const allLeadsForMediator = useMemo(() => (leads || []).filter((l) => l && l.mediatorId === mediator.id), [leads, mediator.id]);
+  const rejectedLeads = useMemo(
+    () =>
+      allLeadsForMediator
+        .filter((l) => ["Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+    [allLeadsForMediator]
+  );
+
+  const analytics = useMemo(() => {
+    const byStrategy = new Map();
+    const byReason = new Map();
+    let competitorLost = 0;
+    let policyRejected = 0;
+
+    const getReason = (l) => {
+      const r = l?.rejectionDetails || {};
+      if (r?.reason) return String(r.reason);
+      const note = (l?.notes || []).slice().reverse().find((n) => String(n?.text || "").includes("[REJECTION REASON]"));
+      if (note?.text) return String(note.text).replace("[REJECTION REASON]:", "").trim();
+      const structured = (l?.notes || []).slice().reverse().find((n) => String(n?.text || "").startsWith("[REJECTION]:"));
+      if (structured?.text) {
+        const m = String(structured.text).match(/Reason=([^|]+)/i);
+        if (m?.[1]) return String(m[1]).trim();
+      }
+      return "Unspecified";
+    };
+
+    const getStrategy = (l) => {
+      const r = l?.rejectionDetails || {};
+      if (r?.strategy) return String(r.strategy);
+      if (l?.status === "Lost to Competitor") return "Competitor";
+      return "Risk";
+    };
+
+    rejectedLeads.forEach((l) => {
+      const strategy = getStrategy(l);
+      const reason = getReason(l);
+
+      byStrategy.set(strategy, (byStrategy.get(strategy) || 0) + 1);
+      byReason.set(reason, (byReason.get(reason) || 0) + 1);
+
+      if (l.status === "Lost to Competitor") competitorLost += 1;
+      if (["Not Eligible", "Not Reliable"].includes(l.status)) policyRejected += 1;
+    });
+
+    const topReasons = [...byReason.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const total = allLeadsForMediator.length;
+    const rejected = rejectedLeads.length;
+    const rejectionRate = total ? Math.round((rejected / total) * 100) : 0;
+
+    return {
+      total,
+      rejected,
+      rejectionRate,
+      competitorLost,
+      policyRejected,
+      byStrategy,
+      topReasons,
+    };
+  }, [allLeadsForMediator.length, rejectedLeads]);
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (chartInstance.current) chartInstance.current.destroy();
+
+    const labels = [...analytics.byStrategy.keys()];
+    const values = labels.map((k) => analytics.byStrategy.get(k) || 0);
+    const ctx = chartRef.current.getContext("2d");
+    chartInstance.current = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [
+          {
+            data: values,
+            backgroundColor: ["#ef4444", "#f59e0b", "#3b82f6", "#10b981", "#8b5cf6", "#64748b"],
+            borderWidth: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: {
+            position: "right",
+            labels: { font: { family: "Inter", size: 11 }, boxWidth: 12 },
+          },
+        },
+        cutout: "70%",
+      },
+    });
+
+    return () => {
+      if (chartInstance.current) {
+        chartInstance.current.destroy();
+        chartInstance.current = null;
+      }
+    };
+  }, [analytics.byStrategy]);
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white/70 backdrop-blur border-b border-slate-200/60 sticky top-0 z-20 flex justify-between items-center shadow-soft">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `Partner_Rejection_Audit_${mediator.name}_${todayYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-4 py-2"
+        >
+          <Printer size={16} /> Print
+        </button>
+      </div>
+
+      <div className="max-w-6xl mx-auto p-6 print:p-8">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-7 min-h-[297mm] print:shadow-none print:border-0">
+          <ReportBrandHeader
+            title="Submission Quality • Rejection Audit"
+            subtitle={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-bold text-slate-900">{mediator.name}</span>
+                <span className="text-slate-300">•</span>
+                <span className="inline-flex items-center gap-1 text-slate-700 font-bold">
+                  <Phone size={14} /> {mediator.phone || "—"}
+                </span>
+              </span>
+            }
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Review Date (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Rejection Rate</div>
+                <div className="text-slate-900">{analytics.rejectionRate}%</div>
+              </div>
+            }
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Total Submissions</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{analytics.total}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Total Rejected</div>
+              <div className="text-2xl font-extrabold text-rose-700 mt-1">{analytics.rejected}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Policy Reject</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{analytics.policyRejected}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Lost to Competitor</div>
+              <div className="text-2xl font-extrabold text-amber-700 mt-1">{analytics.competitorLost}</div>
+            </div>
+            <div className="surface-solid p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Focus Area</div>
+              <div className="text-[11px] text-slate-700 font-bold mt-2">{analytics.topReasons[0]?.[0] || "—"}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <div className="lg:col-span-2 surface-solid p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div className="font-extrabold text-slate-900 flex items-center gap-2">
+                  <PieChart size={18} className="text-indigo-600" /> Strategy Mix
+                </div>
+                <div className="text-[11px] text-slate-500 font-bold">Counts by strategy</div>
+              </div>
+              <div className="h-48 relative">
+                <canvas ref={chartRef}></canvas>
+              </div>
+            </div>
+
+            <div className="surface-solid p-5">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2 mb-3">
+                <FileWarning size={18} className="text-amber-600" /> Top Rejection Reasons
+              </div>
+              <div className="space-y-2">
+                {analytics.topReasons.length === 0 ? (
+                  <div className="text-sm text-slate-500 italic">No reasons recorded yet.</div>
+                ) : (
+                  analytics.topReasons.map(([reason, count]) => (
+                    <div key={reason} className="flex items-center justify-between gap-3 border-b border-slate-200/60 pb-2">
+                      <div className="text-xs font-bold text-slate-700 truncate">{reason}</div>
+                      <div className="chip">{count}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2">
+                <ClipboardList size={18} className="text-rose-600" /> Rejections Ledger
+              </div>
+              <div className="text-[11px] text-slate-500 font-bold">Latest first • Includes competitor context when available</div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-white border-b text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
+                  <tr>
+                    <th className="p-4">Date</th>
+                    <th className="p-4">Client</th>
+                    <th className="p-4">Outcome</th>
+                    <th className="p-4">Reason</th>
+                    <th className="p-4">Competitor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rejectedLeads.map((l) => {
+                    const r = l.rejectionDetails || {};
+                    const strategy = r.strategy ? String(r.strategy) : l.status === "Lost to Competitor" ? "Competitor" : "Risk";
+                    const reason =
+                      r.reason ||
+                      (l.notes || [])
+                        .slice()
+                        .reverse()
+                        .find((n) => String(n?.text || "").includes("[REJECTION REASON]"))
+                        ?.text.replace("[REJECTION REASON]:", "")
+                        .trim() ||
+                      "Unspecified";
+                    const competitor = r.competitor ? String(r.competitor) : "";
+                    const outcomeClass =
+                      l.status === "Lost to Competitor"
+                        ? "bg-amber-50 text-amber-800 border-amber-200"
+                        : "bg-rose-50 text-rose-800 border-rose-200";
+
+                    return (
+                      <tr key={l.id} className="hover:bg-slate-50 print:break-inside-avoid">
+                        <td className="p-4 align-top font-mono text-xs text-slate-600">{formatDate(l.createdAt)}</td>
+                        <td className="p-4 align-top">
+                          <div className="font-extrabold text-slate-900">{l.name}</div>
+                          <div className="text-xs text-slate-500 mt-1">{l.company || l.location || "—"}</div>
+                        </td>
+                        <td className="p-4 align-top">
+                          <div className={`inline-flex items-center gap-2 px-2 py-1 rounded border text-[10px] font-extrabold uppercase ${outcomeClass}`}>
+                            {strategy}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-bold mt-2">{l.status}</div>
+                        </td>
+                        <td className="p-4 align-top text-xs text-slate-700 font-bold leading-relaxed max-w-[520px]">{reason}</td>
+                        <td className="p-4 align-top text-xs text-slate-700 font-bold">{competitor || <span className="text-slate-400">—</span>}</td>
+                      </tr>
+                    );
+                  })}
+                  {rejectedLeads.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="p-8 text-center text-slate-500 italic">
+                        No rejected leads for this partner.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Generated by {BRAND.product} • {BRAND.name}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const RejectReportView = ({ lead, onBack }) => {
   const rejectionData = lead.rejectionDetails || {};
   const latestReason =
@@ -2639,17 +3543,18 @@ const RejectReportView = ({ lead, onBack }) => {
       </div>
 
       <div className="bg-white w-full max-w-[210mm] min-h-[297mm] p-[20mm] shadow-2xl print:shadow-none">
-        <div className="border-b-2 border-slate-800 pb-6 mb-8 flex justify-between items-end">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900 uppercase">Rejection Notice</h1>
-            <p className="text-slate-500 text-sm mt-1">Application Status Report</p>
-          </div>
-          <div className="text-right">
-            <div className="text-slate-900 font-bold text-lg">Jubilant Enterprises</div>
-            <div className="text-slate-500 text-xs">Corporate Intelligence Unit</div>
-            <div className="text-slate-500 text-xs">{new Date().toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</div>
-          </div>
-        </div>
+        <ReportBrandHeader
+          title="Rejection Notice"
+          subtitle="Application Status Report"
+          metaRight={
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Date (IST)</div>
+              <div className="text-slate-900">
+                {new Date().toLocaleDateString("en-IN", { timeZone: BRAND.tz, year: "numeric", month: "long", day: "numeric" })}
+              </div>
+            </div>
+          }
+        />
 
         <div className="flex justify-between mb-12 text-sm font-sans">
           <div>
@@ -2689,7 +3594,7 @@ const RejectReportView = ({ lead, onBack }) => {
 
         <div className="mt-20 font-sans">
           <p className="text-slate-900 font-bold">Credit Underwriting Team</p>
-          <p className="text-slate-500 text-sm">Jubilant Enterprises</p>
+          <p className="text-slate-500 text-sm">{BRAND.name}</p>
           <div className="mt-8 border-t border-slate-200 pt-2 flex justify-between text-[10px] text-slate-400">
             <p>Generated via LIRAS System</p>
             <p>Confidential & Proprietary</p>
@@ -2792,27 +3697,30 @@ const EnhancedMediatorReport = ({ mediator, leads, onBack }) => {
       </div>
 
       <div className="max-w-5xl mx-auto p-8 bg-white shadow-2xl my-8 min-h-[297mm] print:shadow-none print:m-0 print:w-full">
-        <div className="flex justify-between items-end border-b-4 border-slate-900 pb-6 mb-8">
-          <div>
-            <div className="text-slate-500 font-bold uppercase tracking-[0.2em] text-xs mb-2">Exclusive Partner Review</div>
-            <h1 className="text-4xl font-extrabold text-slate-900">{mediator.name}</h1>
-            <div className="flex items-center gap-4 mt-2 text-sm font-medium text-slate-600">
-              <span className="flex items-center gap-1">
-                <Phone size={14} /> {mediator.phone}
+        <ReportBrandHeader
+          title="Partner Full Analysis"
+          subtitle={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <span className="font-bold text-slate-900">{mediator.name}</span>
+              <span className="text-slate-300">•</span>
+              <span className="inline-flex items-center gap-1 text-slate-700 font-bold">
+                <Phone size={14} /> {mediator.phone || "—"}
               </span>
-              <span className="flex items-center gap-1">
+              <span className="text-slate-300">•</span>
+              <span className="inline-flex items-center gap-1 text-slate-700 font-bold">
                 <UserCircle size={14} /> Partner ID: {mediator.id}
               </span>
+            </span>
+          }
+          metaRight={
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
+              <div className="text-slate-900">{toYmdIST(new Date())}</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Conversion</div>
+              <div className="text-slate-900">{metrics.conversion}%</div>
             </div>
-          </div>
-          <div className="text-right">
-            <div className="text-3xl font-bold text-indigo-600">
-              LIRAS<span className="text-slate-400">.ai</span>
-            </div>
-            <div className="text-xs text-slate-400 font-bold uppercase mt-1">Corporate Intelligence Unit</div>
-            <div className="text-sm font-bold text-slate-800 mt-2">{new Date().toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</div>
-          </div>
-        </div>
+          }
+        />
 
         <div className="grid grid-cols-4 gap-6 mb-10">
           <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 text-center">
@@ -2921,7 +3829,490 @@ const EnhancedMediatorReport = ({ mediator, leads, onBack }) => {
   );
 };
 
-const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, onRejectionReport, onEdit, onDelete, onPendingReport }) => {
+const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" }) => {
+  const [dateYmd, setDateYmd] = useState(() => toYmdIST(new Date()));
+  const [userFilter, setUserFilter] = useState("all"); // userId | "all"
+
+  const reportTitle = mode === "daily" ? "Daily Activity Report" : "End of Day Activity Report";
+
+  const allOwnerIds = useMemo(() => {
+    const set = new Set();
+    (leads || []).forEach((l) => l?.ownerId && set.add(String(l.ownerId)));
+    (mediators || []).forEach((m) => m?.ownerId && set.add(String(m.ownerId)));
+    return Array.from(set);
+  }, [leads, mediators]);
+
+  const usersForReport = useMemo(() => {
+    const base = Array.isArray(staffUsers) ? staffUsers : [];
+    const map = new Map();
+    base.forEach((u) => {
+      if (!u?.userId) return;
+      map.set(String(u.userId), {
+        userId: String(u.userId),
+        email: String(u.email || u.userId),
+        role: String(u.role || "staff"),
+        label: String(u.label || u.email || u.userId),
+      });
+    });
+    allOwnerIds.forEach((id) => {
+      if (!map.has(id)) {
+        map.set(id, { userId: id, email: id, role: "staff", label: id });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [staffUsers, allOwnerIds]);
+
+  const staffList = useMemo(() => {
+    const nonAdmin = usersForReport.filter((u) => u.role !== "admin");
+    return nonAdmin.length ? nonAdmin : usersForReport;
+  }, [usersForReport]);
+
+  const computeReportForUser = (user) => {
+    const uid = String(user.userId);
+    const leadsOwned = (leads || []).filter((l) => String(l?.ownerId || "") === uid);
+    const mediatorsOwned = (mediators || []).filter((m) => String(m?.ownerId || "") === uid && String(m?.id || "") !== "3");
+
+    const endDay = endOfIstDay(dateYmd);
+    const activeExclude = new Set(["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"]);
+
+    const newLeads = leadsOwned.filter((l) => isOnYmdIST(l.createdAt, dateYmd));
+    const payments = leadsOwned.filter((l) => l?.loanDetails?.paymentDate && isOnYmdIST(l.loanDetails.paymentDate, dateYmd));
+    const paymentVolume = payments.reduce((sum, l) => sum + (Number(l.loanDetails?.netDisbursed) || Number(l.loanAmount) || 0), 0);
+
+    const leadsTouched = new Set();
+    const events = [];
+
+    const noteKind = (text) => {
+      const raw = String(text || "").trim();
+      const m = raw.match(/^\s*\[([^\]]+)\]/);
+      const tag = (m?.[1] || "").trim();
+      const tagUpper = tag.toUpperCase();
+      if (tagUpper.startsWith("PAYMENT DONE")) return { kind: "payment", label: "Payment Done" };
+      if (tagUpper.startsWith("REJECTION")) return { kind: "rejection", label: "Rejection" };
+      if (tagUpper.startsWith("CHECK-IN")) return { kind: "checkin", label: "Check-in" };
+      if (tagUpper.startsWith("FOLLOW-UP")) return { kind: "followup", label: "Follow-up" };
+      if (tagUpper.startsWith("STAFF ASSIGNED")) return { kind: "assign", label: "Assigned" };
+      if (tagUpper.startsWith("TRIAGE")) return { kind: "triage", label: "Triage" };
+      if (tagUpper.startsWith("STATUS CHANGE")) return { kind: "status", label: "Status" };
+      if (tagUpper.startsWith("OUTCOME")) return { kind: "outcome", label: "Outcome" };
+      return { kind: "note", label: tag || "Note" };
+    };
+
+    const trimPrefix = (text) => String(text || "").replace(/^\s*\[[^\]]+\]\s*:?/i, "").trim();
+    const truncate = (s, n = 160) => {
+      const str = String(s || "");
+      return str.length > n ? `${str.slice(0, n - 1)}…` : str;
+    };
+    const formatBytes = (n) => {
+      const num = Number(n) || 0;
+      if (num < 1024) return `${num} B`;
+      if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+      if (num < 1024 * 1024 * 1024) return `${(num / (1024 * 1024)).toFixed(1)} MB`;
+      return `${(num / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    };
+
+    leadsOwned.forEach((l) => {
+      if (!l?.id) return;
+
+      if (isOnYmdIST(l.createdAt, dateYmd)) {
+        events.push({
+          ts: l.createdAt,
+          type: "new_lead",
+          label: "New Lead",
+          subject: l.name || "Lead",
+          detail: truncate(`${l.company || "—"} • ${formatCurrency(l.loanAmount)} • ${l.status || "New"}`),
+        });
+      }
+
+      const notes = Array.isArray(l.notes) ? l.notes : [];
+      notes.forEach((n) => {
+        if (!n?.date || !isOnYmdIST(n.date, dateYmd)) return;
+        leadsTouched.add(l.id);
+        const meta = noteKind(n.text);
+        events.push({
+          ts: n.date,
+          type: meta.kind,
+          label: meta.label,
+          subject: l.name || "Lead",
+          detail: truncate(trimPrefix(n.text) || n.text || ""),
+        });
+      });
+
+      const attachments = Array.isArray(l.documents?.attachments) ? l.documents.attachments : [];
+      attachments.forEach((a) => {
+        if (!a?.createdAt || !isOnYmdIST(a.createdAt, dateYmd)) return;
+        leadsTouched.add(l.id);
+        events.push({
+          ts: a.createdAt,
+          type: "attachment",
+          label: "Attachment",
+          subject: l.name || "Lead",
+          detail: truncate(`${String(a.kind || "file").toUpperCase()} • ${a.name || "file"} • ${formatBytes(a.size || 0)}`),
+        });
+      });
+
+      // If payment was recorded without a note, add an event.
+      if (l?.loanDetails?.paymentDate && isOnYmdIST(l.loanDetails.paymentDate, dateYmd)) {
+        const hasNote = notes.some((n) => isOnYmdIST(n?.date, dateYmd) && String(n?.text || "").toUpperCase().includes("PAYMENT DONE"));
+        if (!hasNote) {
+          events.push({
+            ts: l.loanDetails.paymentDate,
+            type: "payment",
+            label: "Payment Done",
+            subject: l.name || "Lead",
+            detail: truncate(`Net: ${formatCurrency(l.loanDetails?.netDisbursed || l.loanAmount)} • Terms: ${l.loanDetails?.tenure || "-"}m`),
+          });
+        }
+      }
+    });
+
+    const mediatorHistoryEvents = [];
+    mediatorsOwned.forEach((m) => {
+      const history = Array.isArray(m.followUpHistory) ? m.followUpHistory : [];
+      history
+        .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
+        .filter((h) => h && typeof h === "object" && typeof h.date === "string")
+        .forEach((h) => {
+          const ts = h.ts || (h.date ? `${h.date}T00:00:00` : "");
+          if (!ts || !isOnYmdIST(ts, dateYmd)) return;
+          const t = String(h.type || "legacy");
+          const label = t === "call" ? "Partner Call" : t === "whatsapp" ? "Partner WhatsApp" : t === "meeting" ? "Partner Meeting" : "Partner";
+          const outcome = h.outcome ? ` • ${String(h.outcome).replace(/_/g, " ")}` : "";
+          const notes = h.notes ? ` • ${String(h.notes).trim()}` : "";
+          mediatorHistoryEvents.push({
+            ts,
+            type: t,
+            label,
+            subject: m.name || "Mediator",
+            detail: truncate(`${m.phone || ""}${outcome}${notes}`.trim() || "—"),
+          });
+        });
+    });
+    mediatorHistoryEvents.forEach((e) => events.push(e));
+
+    const calls = mediatorHistoryEvents.filter((e) => e.type === "call").length;
+    const whatsapp = mediatorHistoryEvents.filter((e) => e.type === "whatsapp").length;
+    const partnerMeetings = mediatorHistoryEvents.filter((e) => e.type === "meeting").length;
+
+    const leadsUpdated = leadsTouched.size;
+    const checkins = events.filter((e) => e.type === "checkin").length;
+    const rejections = events.filter((e) => e.type === "rejection").length;
+    const attachmentsAdded = events.filter((e) => e.type === "attachment").length;
+
+    const pendingEod = leadsOwned.filter((l) => {
+      if (!l) return false;
+      if (activeExclude.has(l.status)) return false;
+      const notes = Array.isArray(l.notes) ? l.notes : [];
+      const last = notes.length ? notes[notes.length - 1] : null;
+      return !last?.date || !isOnYmdIST(last.date, dateYmd);
+    }).length;
+
+    const pendingMeetings = leadsOwned.filter((l) => {
+      if (!l || l.status !== "Meeting Scheduled" || !l.nextFollowUp) return false;
+      const when = new Date(l.nextFollowUp);
+      if (!Number.isFinite(when.getTime())) return false;
+      return when <= endDay;
+    }).length;
+
+    events.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+    return {
+      user,
+      newLeadsCount: newLeads.length,
+      leadsUpdated,
+      paymentsCount: payments.length,
+      paymentVolume,
+      calls,
+      whatsapp,
+      partnerMeetings,
+      checkins,
+      rejections,
+      attachmentsAdded,
+      pendingEod,
+      pendingMeetings,
+      events,
+    };
+  };
+
+  const reports = useMemo(() => staffList.map((u) => computeReportForUser(u)), [staffList, leads, mediators, dateYmd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const visibleReports = useMemo(() => {
+    if (userFilter === "all") return reports;
+    return reports.filter((r) => r.user.userId === userFilter);
+  }, [reports, userFilter]);
+
+  const totals = useMemo(() => {
+    return visibleReports.reduce(
+      (acc, r) => {
+        acc.newLeads += r.newLeadsCount;
+        acc.leadsUpdated += r.leadsUpdated;
+        acc.payments += r.paymentsCount;
+        acc.paymentVolume += r.paymentVolume;
+        acc.calls += r.calls;
+        acc.whatsapp += r.whatsapp;
+        acc.partnerMeetings += r.partnerMeetings;
+        acc.checkins += r.checkins;
+        acc.rejections += r.rejections;
+        acc.attachments += r.attachmentsAdded;
+        acc.pendingEod += r.pendingEod;
+        acc.pendingMeetings += r.pendingMeetings;
+        return acc;
+      },
+      {
+        newLeads: 0,
+        leadsUpdated: 0,
+        payments: 0,
+        paymentVolume: 0,
+        calls: 0,
+        whatsapp: 0,
+        partnerMeetings: 0,
+        checkins: 0,
+        rejections: 0,
+        attachments: 0,
+        pendingEod: 0,
+        pendingMeetings: 0,
+      }
+    );
+  }, [visibleReports]);
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-6 md:p-10">
+      <div className="print:hidden flex justify-between items-center gap-3 mb-6">
+        <button onClick={onBack} className="btn-secondary px-4 py-2">
+          <ArrowLeft size={16} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `${mode === "daily" ? "Daily_Activity" : "EOD_Activity"}_${dateYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-5 py-2"
+        >
+          <Printer size={16} /> Print PDF
+        </button>
+      </div>
+
+      <div className="surface-solid p-6 md:p-8 shadow-elevated no-break">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+          <div>
+            <div className="flex items-center gap-3">
+              <BrandMark size={40} />
+              <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">{BRAND.name}</div>
+            </div>
+            <div className="text-3xl font-extrabold text-slate-900 mt-2">{reportTitle}</div>
+            <div className="text-sm text-slate-600 mt-2">
+              Date: <span className="font-bold text-slate-900">{dateYmd}</span> • Generated:{" "}
+              <span className="font-medium">{new Date().toLocaleString("en-IN", { timeZone: BRAND.tz })}</span>
+            </div>
+          </div>
+
+          <div className="print:hidden grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-auto">
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Report Date</label>
+              <input value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} type="date" className="w-full py-3" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Staff</label>
+              <select value={userFilter} onChange={(e) => setUserFilter(e.target.value)} className="w-full py-3">
+                <option value="all">All staff</option>
+                {staffList.map((u) => (
+                  <option key={u.userId} value={u.userId}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div className="bg-indigo-50/70 p-4 rounded-xl border border-indigo-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">New Leads</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.newLeads}</div>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Leads Updated</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.leadsUpdated}</div>
+          </div>
+          <div className="bg-emerald-50/70 p-4 rounded-xl border border-emerald-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Payments</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.payments}</div>
+            <div className="text-[11px] text-emerald-700 mt-1">{formatCompactCurrency(totals.paymentVolume)}</div>
+          </div>
+          <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Partner Calls</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.calls}</div>
+          </div>
+          <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">WhatsApp</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.whatsapp}</div>
+          </div>
+          <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Partner Meetings</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.partnerMeetings}</div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-sky-50/70 p-4 rounded-xl border border-sky-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-sky-700">Check-ins</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.checkins}</div>
+          </div>
+          <div className="bg-rose-50/70 p-4 rounded-xl border border-rose-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Rejections</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.rejections}</div>
+          </div>
+          <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200/60">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Attachments</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.attachments}</div>
+          </div>
+          {mode === "eod" && (
+            <div className="bg-slate-900 text-white p-4 rounded-xl shadow-soft">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-300">Loose Ends (EOD)</div>
+              <div className="mt-2 text-xs text-slate-200 flex flex-col gap-1">
+                <span>
+                  Meetings pending update: <span className="font-extrabold">{totals.pendingMeetings}</span>
+                </span>
+                <span>
+                  EOD pending updates: <span className="font-extrabold">{totals.pendingEod}</span>
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-8 space-y-8">
+        {visibleReports.map((r) => (
+          <div key={r.user.userId} className="surface-solid p-6 md:p-8 no-break">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Staff</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-2">{r.user.label}</div>
+                <div className="text-sm text-slate-600 mt-1">{r.user.email}</div>
+              </div>
+              <div className="text-right">
+                <div className="chip bg-indigo-50 border-indigo-200 text-indigo-700">{r.user.role}</div>
+              </div>
+            </div>
+
+            <div className="mt-5 grid grid-cols-2 md:grid-cols-6 gap-3">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">New Leads</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.newLeadsCount}</div>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Leads Updated</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.leadsUpdated}</div>
+              </div>
+              <div className="bg-emerald-50/70 p-4 rounded-xl border border-emerald-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Payments</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.paymentsCount}</div>
+                <div className="text-[11px] text-emerald-700 mt-1">{formatCompactCurrency(r.paymentVolume)}</div>
+              </div>
+              <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Calls</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.calls}</div>
+              </div>
+              <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">WhatsApp</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.whatsapp}</div>
+              </div>
+              <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Meetings</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.partnerMeetings}</div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-sky-50/70 p-4 rounded-xl border border-sky-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-sky-700">Check-ins</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.checkins}</div>
+              </div>
+              <div className="bg-rose-50/70 p-4 rounded-xl border border-rose-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Rejections</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.rejections}</div>
+              </div>
+              <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Attachments</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1">{r.attachmentsAdded}</div>
+              </div>
+              {mode === "eod" && (
+                <div className="bg-slate-900 text-white p-4 rounded-xl shadow-soft">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-300">Loose Ends</div>
+                  <div className="mt-2 text-xs text-slate-200 flex flex-col gap-1">
+                    <span>
+                      Meetings pending update: <span className="font-extrabold">{r.pendingMeetings}</span>
+                    </span>
+                    <span>
+                      EOD pending updates: <span className="font-extrabold">{r.pendingEod}</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200/60 pb-2">
+                <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                  <History size={16} className="text-indigo-600" /> Activity Timeline
+                </div>
+                <div className="chip bg-white/60">{r.events.length}</div>
+              </div>
+
+              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200/70">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase font-bold text-slate-500">
+                    <tr>
+                      <th className="p-3 text-left w-[110px]">Time</th>
+                      <th className="p-3 text-left w-[140px]">Type</th>
+                      <th className="p-3 text-left w-[220px]">Subject</th>
+                      <th className="p-3 text-left">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {r.events.length === 0 ? (
+                      <tr>
+                        <td colSpan="4" className="p-6 text-center text-slate-400 italic">
+                          No activity recorded for this date.
+                        </td>
+                      </tr>
+                    ) : (
+                      r.events.slice(0, 220).map((e, idx) => (
+                        <tr key={`${e.ts}-${idx}`} className="hover:bg-slate-50">
+                          <td className="p-3 font-mono text-xs text-slate-500 whitespace-nowrap">{formatTimeIST(e.ts)}</td>
+                          <td className="p-3">
+                            <span className="chip">{e.label}</span>
+                          </td>
+                          <td className="p-3 font-bold text-slate-800">{e.subject}</td>
+                          <td className="p-3 text-slate-600">{e.detail}</td>
+                        </tr>
+                      ))
+                    )}
+                    {r.events.length > 220 && (
+                      <tr>
+                        <td colSpan="4" className="p-3 text-xs text-slate-500">
+                          Showing first 220 events (PDF-friendly). Refine to a single staff to print the full day.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-8 text-center text-xs text-slate-400 print:block hidden">
+        <p>Generated by LIRAS v4.06 Enterprise</p>
+        <p>Confidential • Internal Use</p>
+      </div>
+    </div>
+  );
+};
+
+const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, onRejectionReport, onEdit, onDelete, onPendingReport, onFollowUp }) => {
   const [showReportMenu, setShowReportMenu] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const mLeads = leads.filter((l) => l.mediatorId === mediator.id);
@@ -2987,6 +4378,37 @@ const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, on
           </div>
 
           <div className="flex gap-2 relative">
+            <button
+              onClick={() => {
+                if (!mediator.phone) {
+                  alert("No phone number for this mediator.");
+                  return;
+                }
+                const startedAt = new Date().toISOString();
+                onFollowUp?.(mediator.id, "call", { ts: startedAt });
+                try {
+                  localStorage.setItem(
+                    "liras_pending_call_v1",
+                    JSON.stringify({
+                      kind: "mediator",
+                      mediatorId: mediator.id,
+                      phone: mediator.phone,
+                      startedAt,
+                      ts: startedAt,
+                    })
+                  );
+                } catch {
+                  // ignore
+                }
+                window.location.href = `tel:${String(mediator.phone).replace(/[^\d+]/g, "")}`;
+              }}
+              className={`btn-secondary px-4 py-2 ${mediator.phone ? "" : "opacity-60 cursor-not-allowed"}`}
+              title={mediator.phone ? "Call + auto-log" : "No phone number"}
+              type="button"
+            >
+              <Phone size={16} className="text-slate-700" />
+              <span className="hidden sm:inline">Call</span>
+            </button>
             <button
               onClick={() => setShowReportMenu(!showReportMenu)}
               className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg hover:bg-slate-800 transition-all"
@@ -3142,7 +4564,6 @@ const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, on
 };
 
 // --- Lead/Report Components (from original app) ---
-// NOTE: To keep this runnable and AI-free, the logic below is kept intact but AI helpers/widgets were removed.
 
 const LeadCard = ({ lead, onClick, mediators }) => {
   const statusInfo = STATUS_CONFIG[lead.status] || STATUS_CONFIG.New;
@@ -3151,19 +4572,20 @@ const LeadCard = ({ lead, onClick, mediators }) => {
   const isOverdue = daysDiff < 0 && !["Deal Closed", "Payment Done", "Not Eligible", "Not Reliable"].includes(lead.status);
   const mediator = mediators.find((m) => m.id === lead.mediatorId);
   const isActive = !["Deal Closed", "Payment Done", "Not Eligible", "Not Reliable"].includes(lead.status);
+  const tags = Array.isArray(lead.documents?.tags) ? lead.documents.tags : [];
 
   return (
     <div
       onClick={() => onClick(lead)}
-      className={`bg-white p-4 rounded-xl border cursor-pointer flex flex-col relative overflow-hidden transition-all hover:shadow-md hover:border-blue-300 group ${
-        isOverdue ? "border-red-300 shadow-red-100" : "border-slate-200"
+      className={`surface p-4 cursor-pointer flex flex-col relative overflow-hidden transition-all hover:shadow-elevated hover:ring-1 hover:ring-indigo-200 group ${
+        isOverdue ? "border-red-200/80" : ""
       }`}
     >
-      {isOverdue && <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-500"></div>}
+      {isOverdue && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-red-500 to-rose-500"></div>}
       <div className="flex justify-between items-start mb-2">
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-bold text-slate-800 truncate group-hover:text-blue-700">{lead.name}</h3>
+            <h3 className="font-bold text-slate-900 truncate group-hover:text-indigo-700">{lead.name}</h3>
             {lead.isHighPotential && <Star size={12} className="text-yellow-500 fill-yellow-500" />}
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
@@ -3181,7 +4603,7 @@ const LeadCard = ({ lead, onClick, mediators }) => {
               {statusInfo.label}
             </span>
             {lead.status === "Payment Done" ? (
-              <span className="text-[10px] flex items-center gap-1 font-bold text-green-600">
+              <span className="text-[10px] flex items-center gap-1 font-bold text-emerald-700">
                 <DollarSign size={10} /> {formatCurrency(lead.loanDetails?.netDisbursed || lead.loanAmount)}
               </span>
             ) : (
@@ -3190,12 +4612,22 @@ const LeadCard = ({ lead, onClick, mediators }) => {
               </span>
             )}
           </div>
+          {tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {tags.slice(0, 3).map((t) => (
+                <span key={t} className="chip">
+                  {t}
+                </span>
+              ))}
+              {tags.length > 3 && <span className="chip">+{tags.length - 3}</span>}
+            </div>
+          )}
         </div>
         <div className="flex flex-col items-end gap-2 pl-2 border-l border-slate-100">
           <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm ${getScoreColor(score)}`}>
             {score}
           </div>
-          <ChevronRight size={16} className="text-slate-300 group-hover:text-blue-500 transition-colors" />
+          <ChevronRight size={16} className="text-slate-300 group-hover:text-indigo-500 transition-colors" />
         </div>
       </div>
       {isActive && (
@@ -3208,7 +4640,7 @@ const LeadCard = ({ lead, onClick, mediators }) => {
               e.stopPropagation();
               if (!lead.phone) alert("No phone number for this client");
             }}
-            className={`flex-1 bg-green-50 hover:bg-green-100 text-green-700 text-xs py-1.5 rounded flex items-center justify-center gap-1 transition-colors font-medium border border-green-200 ${
+            className={`flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs py-1.5 rounded-xl flex items-center justify-center gap-1 transition-colors font-medium border border-emerald-200 ${
               !lead.phone && "opacity-50 cursor-not-allowed"
             }`}
           >
@@ -3220,7 +4652,7 @@ const LeadCard = ({ lead, onClick, mediators }) => {
               target="_blank"
               rel="noreferrer"
               onClick={(e) => e.stopPropagation()}
-              className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs py-1.5 rounded flex items-center justify-center gap-1 transition-colors font-medium border border-blue-200"
+              className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs py-1.5 rounded-xl flex items-center justify-center gap-1 transition-colors font-medium border border-indigo-200"
             >
               <Users size={12} /> Ask Partner
             </a>
@@ -3300,8 +4732,11 @@ const NewLeadTriageCard = ({ lead, onUpdate, onPaymentDone }) => {
   };
 
   return (
-    <div className="bg-white border-l-4 border-indigo-500 rounded-r-xl shadow-md p-4 mb-4 animate-fade-in relative">
-      <div className="absolute top-2 right-2 bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded">ACTION REQUIRED</div>
+    <div className="surface border-l-4 border-indigo-500 p-5 mb-4 animate-fade-in relative overflow-hidden">
+      <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 via-blue-500 to-emerald-500 opacity-70" />
+      <div className="absolute top-3 right-3 bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full border border-indigo-200">
+        ACTION REQUIRED
+      </div>
       <div className="flex justify-between items-start mb-4 pr-16">
         <div>
           <h3 className="font-bold text-lg text-slate-800">{lead.name}</h3>
@@ -3315,49 +4750,49 @@ const NewLeadTriageCard = ({ lead, onUpdate, onPaymentDone }) => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <button
           onClick={() => handleAction("meeting")}
-          className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <Calendar size={14} /> Meeting
         </button>
         <button
           onClick={() => handleAction("internal_fu")}
-          className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <Clock size={14} /> Follow-Up
         </button>
         <button
           onClick={() => handleAction("partner_fu")}
-          className="p-2 bg-pink-50 hover:bg-pink-100 text-pink-700 border border-pink-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-pink-50 hover:bg-pink-100 text-pink-700 border border-pink-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <Users size={14} /> Partner FU
         </button>
         <button
           onClick={() => handleAction("assign_staff")}
-          className="p-2 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 border border-cyan-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 border border-cyan-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <UserPlus size={14} /> Assign Staff
         </button>
         <button
           onClick={() => handleAction("commercial")}
-          className="p-2 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <Briefcase size={14} /> Commercial
         </button>
         <button
           onClick={() => handleAction("interest")}
-          className="p-2 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <HelpCircle size={14} /> Rate Issue
         </button>
         <button
           onClick={() => handleAction("no_appt")}
-          className="p-2 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border border-yellow-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border border-yellow-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <Ban size={14} /> No Appt
         </button>
         <button
           onClick={() => handleAction("payment_done")}
-          className="p-2 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <DollarSign size={14} /> Payment Done
         </button>
@@ -3366,13 +4801,13 @@ const NewLeadTriageCard = ({ lead, onUpdate, onPaymentDone }) => {
       <div className="grid grid-cols-2 gap-2 mt-2">
         <button
           onClick={() => handleAction("lost")}
-          className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <XCircle size={14} /> Not Interested
         </button>
         <button
           onClick={() => handleAction("rejected")}
-          className="p-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+          className="p-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-colors"
         >
           <Ban size={14} /> Reject
         </button>
@@ -3413,42 +4848,42 @@ const LoanDetailsEditor = ({ lead, onUpdate }) => {
   }, [principal, interest, tenure, frequency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 animate-fade-in shadow-sm">
-      <div className="flex justify-between items-center mb-3 border-b border-emerald-200 pb-2">
-        <h4 className="font-bold text-emerald-800 flex items-center gap-2">
-          <Banknote size={18} /> Finance Details
+    <div className="surface p-4 animate-fade-in">
+      <div className="flex justify-between items-center mb-3 border-b border-slate-200/60 pb-2">
+        <h4 className="font-extrabold text-slate-900 flex items-center gap-2">
+          <Banknote size={18} className="text-emerald-600" /> Finance Details
         </h4>
-        <span className="text-[10px] uppercase font-bold text-emerald-600 bg-emerald-100 px-2 py-1 rounded">Auto-Saving</span>
+        <span className="chip bg-emerald-50 border-emerald-200 text-emerald-700">Auto-saving</span>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="text-xs font-bold text-emerald-700 uppercase block mb-1">Principal (₹)</label>
+          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Principal (₹)</label>
           <input
             type="number"
             value={principal}
             onChange={(e) => setPrincipal(Number(e.target.value))}
-            className="w-full p-2 border border-emerald-300 rounded font-bold text-slate-800 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+            className="w-full py-2 font-bold"
           />
         </div>
         <div>
-          <label className="text-xs font-bold text-emerald-700 uppercase block mb-1">Upfront Interest (₹)</label>
+          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Upfront Interest (₹)</label>
           <input
             type="number"
             value={interest}
             onChange={(e) => setInterest(Number(e.target.value))}
-            className="w-full p-2 border border-emerald-300 rounded font-bold text-red-600 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+            className="w-full py-2 font-bold text-red-600"
           />
         </div>
 
-        <div className="col-span-2 bg-white p-3 rounded border border-emerald-200 flex justify-between items-center shadow-inner">
+        <div className="col-span-2 bg-white/70 p-3 rounded-xl border border-slate-200/70 flex justify-between items-center shadow-sm">
           <span className="text-sm font-bold text-slate-500">Net Cash Disbursed:</span>
           <span className="text-xl font-extrabold text-emerald-700 font-mono">{formatCurrency(netDisbursed)}</span>
         </div>
 
         <div>
-          <label className="text-xs font-bold text-emerald-700 uppercase block mb-1">Tenure</label>
-          <select value={tenure} onChange={(e) => setTenure(Number(e.target.value))} className="w-full p-2 border border-emerald-300 rounded bg-white font-medium">
+          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Tenure</label>
+          <select value={tenure} onChange={(e) => setTenure(Number(e.target.value))} className="w-full py-2 font-medium">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
               <option key={m} value={m}>
                 {m} Months
@@ -3457,8 +4892,8 @@ const LoanDetailsEditor = ({ lead, onUpdate }) => {
           </select>
         </div>
         <div>
-          <label className="text-xs font-bold text-emerald-700 uppercase block mb-1">Frequency</label>
-          <select value={frequency} onChange={(e) => setFrequency(e.target.value)} className="w-full p-2 border border-emerald-300 rounded bg-white font-medium">
+          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Frequency</label>
+          <select value={frequency} onChange={(e) => setFrequency(e.target.value)} className="w-full py-2 font-medium">
             <option value="Daily">Daily</option>
             <option value="Weekly">Weekly</option>
             <option value="Bi-Weekly">Bi-Weekly</option>
@@ -3486,16 +4921,16 @@ const RejectionStrategyPanel = ({ onConfirm, onCancel, leadId = null, ai = null 
   };
 
   return (
-    <div className="bg-slate-50 p-5 rounded-xl border border-slate-300 animate-slide-up shadow-inner">
-      <div className="flex justify-between items-start mb-4 border-b border-slate-200 pb-3">
+    <div className="surface p-5 animate-slide-up">
+      <div className="flex justify-between items-start mb-4 border-b border-slate-200/60 pb-3">
         <div>
-          <h4 className="font-bold text-slate-800 flex items-center gap-2 text-lg">
+          <h4 className="font-extrabold text-slate-900 flex items-center gap-2 text-lg">
             <ShieldAlert size={20} className="text-red-600" /> Corporate Rejection Protocol
           </h4>
           <p className="text-xs text-slate-500 mt-1">Every lead is gold. Classify strictly to maintain partner trust.</p>
         </div>
-        <button onClick={onCancel} className="text-slate-400 hover:text-slate-600">
-          <X size={18} />
+        <button onClick={onCancel} className="btn-secondary px-3 py-2">
+          <X size={18} className="text-slate-700" />
         </button>
       </div>
 
@@ -3582,8 +5017,10 @@ const RejectionStrategyPanel = ({ onConfirm, onCancel, leadId = null, ai = null 
                       setAiBusy(false);
                     }
                   }}
-                  className={`px-3 py-2 rounded-lg text-xs font-extrabold flex items-center justify-center gap-2 ${
-                    aiBusy || !reason ? "bg-slate-200 text-slate-500" : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                  className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition ${
+                    aiBusy || !reason
+                      ? "bg-slate-200 text-slate-500"
+                      : "text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 shadow-soft"
                   }`}
                   title={!reason ? "Select a Root Cause first" : "Generate a 2–3 line rejection draft"}
                 >
@@ -3596,19 +5033,16 @@ const RejectionStrategyPanel = ({ onConfirm, onCancel, leadId = null, ai = null 
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Write explanation..."
-            className="w-full p-3 border-2 border-slate-200 rounded-lg text-sm bg-white h-24 focus:border-blue-500 focus:ring-0 outline-none resize-none mt-2"
+            className="w-full p-3 text-sm h-24 resize-none mt-2"
           />
-          {aiError && <div className="text-xs text-red-600 font-bold mt-2">{aiError}</div>}
+          {aiError && <div className="text-xs text-red-700 font-bold mt-2">{aiError}</div>}
         </div>
 
         <div className="flex gap-3 pt-2">
-          <button onClick={onCancel} className="flex-1 py-3 bg-white border-2 border-slate-200 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-50 transition-colors">
+          <button onClick={onCancel} className="flex-1 py-3 btn-secondary">
             Cancel
           </button>
-          <button
-            onClick={handleSubmit}
-            className="flex-1 py-3 bg-slate-900 hover:bg-black text-white rounded-lg font-bold text-sm shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2"
-          >
+          <button onClick={handleSubmit} className="flex-1 py-3 btn-danger">
             <Ban size={16} /> Confirm Rejection
           </button>
         </div>
@@ -3639,55 +5073,57 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
   };
 
   return (
-    <div className="bg-green-50 p-5 rounded-xl border border-green-300 animate-slide-up shadow-inner">
-      <div className="flex justify-between items-start mb-4 border-b border-green-200 pb-3">
+    <div className="surface p-5 animate-slide-up">
+      <div className="flex justify-between items-start mb-4 border-b border-slate-200/60 pb-3">
         <div>
-          <h4 className="font-bold text-green-900 flex items-center gap-2 text-lg">
-            <DollarSign size={20} className="text-green-600" /> Payment Disbursement
+          <h4 className="font-extrabold text-slate-900 flex items-center gap-2 text-lg">
+            <DollarSign size={20} className="text-emerald-600" /> Payment Disbursement
           </h4>
-          <p className="text-xs text-green-700 mt-1">Enter terms to calculate Corporate Interest Rate automatically.</p>
+          <p className="text-xs text-slate-500 mt-1">Enter terms to calculate Corporate Interest Rate automatically.</p>
         </div>
-        <button onClick={onCancel} className="text-green-600 hover:text-green-800">
-          <X size={18} />
+        <button onClick={onCancel} className="btn-secondary px-3 py-2">
+          <X size={18} className="text-slate-700" />
         </button>
       </div>
 
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="text-xs font-bold text-green-800 uppercase block mb-1">Given Amount (Principal)</label>
+            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Given Amount (Principal)</label>
             <input
               type="number"
               value={principal}
               onChange={(e) => setPrincipal(e.target.value)}
-              className="w-full p-2 border border-green-300 rounded-lg text-lg font-bold text-slate-800 bg-white focus:ring-2 focus:ring-green-500 outline-none"
+              className="w-full py-2 text-lg font-bold"
             />
           </div>
           <div>
-            <label className="text-xs font-bold text-green-800 uppercase block mb-1">Upfront Interest</label>
+            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Upfront Interest</label>
             <input
               type="number"
               value={interest}
               onChange={(e) => setInterest(Number(e.target.value))}
-              className="w-full p-2 border border-green-300 rounded-lg text-lg font-bold text-red-600 bg-white focus:ring-2 focus:ring-green-500 outline-none"
+              className="w-full py-2 text-lg font-bold text-red-600"
             />
           </div>
         </div>
 
         <div>
-          <label className="text-xs font-bold text-green-800 uppercase block mb-1">Duration (Months)</label>
+          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Duration (Months)</label>
           <input
             type="number"
             value={months}
             onChange={(e) => setMonths(e.target.value)}
-            className="w-full p-2 border border-green-300 rounded-lg text-lg font-bold text-slate-800 bg-white focus:ring-2 focus:ring-green-500 outline-none"
+            className="w-full py-2 text-lg font-bold"
           />
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-green-200 shadow-sm flex justify-between items-center">
+        <div className="surface-solid p-4 flex justify-between items-center">
           <div>
             <div className="text-xs text-slate-500 font-bold uppercase">Our Interest Rate</div>
-            <div className="text-3xl font-extrabold text-indigo-700">{rate}%</div>
+            <div className="text-3xl font-extrabold bg-gradient-to-r from-indigo-600 to-blue-600 bg-clip-text text-transparent">
+              {rate}%
+            </div>
           </div>
           <div className="text-right">
             <div className="text-xs text-slate-500 font-bold uppercase">Net Cash Out</div>
@@ -3697,7 +5133,7 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
 
         <button
           onClick={handleSubmit}
-          className="w-full py-3 bg-green-700 hover:bg-green-800 text-white rounded-lg font-bold text-sm shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2"
+          className="w-full py-3 rounded-xl font-bold text-sm text-white shadow-soft transition active:scale-[0.98] flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 focus:outline-none focus:ring-4 focus:ring-emerald-200"
         >
           <CheckCircle size={16} /> Confirm & Disburse
         </button>
@@ -3916,6 +5352,9 @@ const LeadActionModal = ({
   onDelete,
   mediators,
   onOpenRejectionLetter,
+  androidApp = false,
+  backendEnabled = false,
+  supabase = null,
   ai = null,
   initialMode = null,
   onConsumeInitialMode,
@@ -3925,6 +5364,158 @@ const LeadActionModal = ({
 }) => {
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+  const [attachmentBusy, setAttachmentBusy] = useState({});
+
+  const attachmentsInputGeneralRef = useRef(null);
+  const attachmentsInputKycRef = useRef(null);
+  const attachmentsInputItrRef = useRef(null);
+  const attachmentsInputBankRef = useRef(null);
+
+  const makeId = () => {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+  };
+
+  const formatBytes = (n) => {
+    const num = Number(n) || 0;
+    if (num < 1024) return `${num} B`;
+    if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+    if (num < 1024 * 1024 * 1024) return `${(num / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(num / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  };
+
+  const normalizeAttachments = (docs) => {
+    const arr = Array.isArray(docs?.attachments) ? docs.attachments : [];
+    return arr.filter((a) => a && typeof a === "object" && a.id);
+  };
+
+  const updateAttachments = (next) => {
+    onUpdate(lead.id, { documents: { ...(lead.documents || {}), attachments: next } });
+  };
+
+  const addAttachment = async (file, kind = "general") => {
+    if (!file) return;
+    const id = makeId();
+    const createdAt = new Date().toISOString();
+    const safeName = String(file.name || "file").replace(/[^\w.\-()+ ]/g, "_").slice(0, 120);
+    const ownerPrefix = backendEnabled ? String(lead.ownerId || "unknown") : "offline";
+    const path = `${ownerPrefix}/${lead.id}/${id}-${safeName}`;
+    const bucket = "liras-attachments";
+
+    const meta = {
+      id,
+      kind,
+      name: safeName,
+      mime: file.type || "application/octet-stream",
+      size: file.size || 0,
+      createdAt,
+      local: true,
+      bucket,
+      path,
+    };
+
+    try {
+      await putAttachmentBlob(id, file);
+    } catch (err) {
+      alert(err?.message || "Could not store attachment locally.");
+      return;
+    }
+
+    const docs = lead.documents || {};
+    const existing = normalizeAttachments(docs);
+    const next = [meta, ...existing];
+    const nextDocs = { ...docs, attachments: next };
+    // Auto-mark doc types as collected when attaching.
+    if (kind === "kyc") nextDocs.kyc = true;
+    if (kind === "itr") nextDocs.itr = true;
+    if (kind === "bank") nextDocs.bank = true;
+    onUpdate(lead.id, { documents: nextDocs });
+
+    // Auto-upload when backend is enabled and online.
+    if (backendEnabled && supabase && navigator.onLine) {
+      void uploadAttachment(meta);
+    }
+  };
+
+  const uploadAttachment = async (attachment) => {
+    if (!backendEnabled || !supabase) return;
+    if (!attachment?.id || !attachment?.path || !attachment?.bucket) return;
+    if (!attachment.local) return;
+
+    setAttachmentBusy((p) => ({ ...(p || {}), [attachment.id]: true }));
+    try {
+      const blob = await getAttachmentBlob(attachment.id);
+      if (!blob) throw new Error("Local attachment data not found.");
+
+      const { error } = await supabase.storage.from(attachment.bucket).upload(attachment.path, blob, {
+        contentType: attachment.mime || "application/octet-stream",
+        upsert: true,
+      });
+      if (error) throw error;
+
+      // Drop local blob after successful upload to reduce device storage.
+      await deleteAttachmentBlob(attachment.id);
+
+      const docs = lead.documents || {};
+      const existing = normalizeAttachments(docs);
+      const base = existing.some((a) => a.id === attachment.id) ? existing : [attachment, ...existing];
+      const next = base.map((a) => (a.id === attachment.id ? { ...a, local: false, uploadedAt: new Date().toISOString() } : a));
+      updateAttachments(next);
+    } catch (err) {
+      alert(err?.message || "Upload failed. Make sure the Supabase Storage bucket and policies are set.");
+    } finally {
+      setAttachmentBusy((p) => ({ ...(p || {}), [attachment.id]: false }));
+    }
+  };
+
+  const openAttachment = async (attachment) => {
+    try {
+      if (attachment.local) {
+        const blob = await getAttachmentBlob(attachment.id);
+        if (!blob) throw new Error("Local attachment not found.");
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        return;
+      }
+
+      if (!backendEnabled || !supabase) throw new Error("Cloud access is not available in offline mode.");
+      const { data, error } = await supabase.storage.from(attachment.bucket || "liras-attachments").createSignedUrl(attachment.path, 60 * 15);
+      if (error) throw error;
+      if (!data?.signedUrl) throw new Error("Could not create a download link.");
+      window.open(data.signedUrl, "_blank");
+    } catch (err) {
+      alert(err?.message || "Could not open attachment.");
+    }
+  };
+
+  const removeAttachment = async (attachment) => {
+    const ok = window.confirm(`Delete attachment "${attachment?.name || "file"}"?`);
+    if (!ok) return;
+
+    setAttachmentBusy((p) => ({ ...(p || {}), [attachment.id]: true }));
+    try {
+      if (attachment.local) {
+        await deleteAttachmentBlob(attachment.id);
+      } else if (backendEnabled && supabase && attachment.bucket && attachment.path) {
+        const { error } = await supabase.storage.from(attachment.bucket).remove([attachment.path]);
+        if (error) throw error;
+      }
+
+      const docs = lead.documents || {};
+      const existing = normalizeAttachments(docs);
+      const next = existing.filter((a) => a.id !== attachment.id);
+      updateAttachments(next);
+    } catch (err) {
+      alert(err?.message || "Delete failed.");
+    } finally {
+      setAttachmentBusy((p) => ({ ...(p || {}), [attachment.id]: false }));
+    }
+  };
 
   useEffect(() => {
     if (initialMode === "payment") {
@@ -3935,6 +5526,7 @@ const LeadActionModal = ({
   }, [initialMode, onConsumeInitialMode]);
 
   if (!lead) return null;
+  const attachments = normalizeAttachments(lead.documents || {});
 
   const handleOutcome = (type) => {
     const today = new Date().toISOString();
@@ -3971,7 +5563,7 @@ const LeadActionModal = ({
       if (type === "followup") {
         const updateText = prompt("What is the latest update/remark for this follow-up?");
         if (!updateText) return;
-        const date = prompt("Enter next Follow-Up Date (YYYY-MM-DD):", new Date(Date.now() + 86400000).toISOString().slice(0, 10));
+        const date = prompt("Enter next Follow-Up Date (YYYY-MM-DD):", toYmdIST(new Date(Date.now() + 86400000)));
         if (!date) return;
         onUpdate(lead.id, {
           status: "Follow-Up Required",
@@ -4042,6 +5634,123 @@ const LeadActionModal = ({
     setShowPaymentForm(false);
   };
 
+  const exportNextActionToIcs = () => {
+    if (!lead?.nextFollowUp) return;
+
+    const escapeIcs = (text) =>
+      String(text || "")
+        .replace(/\\\\/g, "\\\\\\\\")
+        .replace(/\\n/g, "\\\\n")
+        .replace(/,/g, "\\\\,")
+        .replace(/;/g, "\\\\;");
+
+    const toIcsUtc = (dateLike) => {
+      const d = new Date(dateLike);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+    };
+
+    const makeIcsEvent = ({ uid, title, start, end, description = "", location = "" }) => {
+      const safeUid = uid || `${Date.now()}@jubilant-liras`;
+      const dtStamp = toIcsUtc(new Date());
+      const dtStart = toIcsUtc(start);
+      const dtEnd = toIcsUtc(end);
+      return [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Jubilant LIRAS//Lead Calendar//EN",
+        "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT",
+        `UID:${escapeIcs(safeUid)}`,
+        `DTSTAMP:${dtStamp}`,
+        `DTSTART:${dtStart}`,
+        `DTEND:${dtEnd}`,
+        `SUMMARY:${escapeIcs(title)}`,
+        description ? `DESCRIPTION:${escapeIcs(description)}` : "",
+        location ? `LOCATION:${escapeIcs(location)}` : "",
+        "END:VEVENT",
+        "END:VCALENDAR",
+      ]
+        .filter(Boolean)
+        .join("\r\n");
+    };
+
+    const downloadTextFile = (filename, content, mime) => {
+      const blob = new Blob([content], { type: mime || "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    };
+
+    const start = new Date(lead.nextFollowUp);
+    const end = new Date(start.getTime() + 45 * 60 * 1000);
+    const title = lead.status === "Meeting Scheduled" ? `Meeting: ${lead.name}` : `Follow-up: ${lead.name}`;
+    const mediatorName = mediators?.find?.((m) => m.id === lead.mediatorId)?.name || "—";
+    const description = `Lead: ${lead.name}\nCompany: ${lead.company || "-"}\nPhone: ${lead.phone || "-"}\nMediator: ${mediatorName}\nStatus: ${lead.status || "-"}`;
+    const ics = makeIcsEvent({
+      uid: `${lead.id}@liras-lead`,
+      title,
+      start,
+      end,
+      description,
+      location: lead.location || "",
+    });
+    downloadTextFile(`LIRAS_${title.replace(/[^\w]+/g, "_")}.ics`, ics, "text/calendar;charset=utf-8");
+  };
+
+  const handleCheckIn = async () => {
+    if (isCheckingIn) return;
+    if (!confirm("Log a check-in for this lead now? (Optional GPS location)")) return;
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowLocal = now.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const base = `[CHECK-IN]: ${nowLocal}`;
+
+    const append = (text) => {
+      onUpdate(lead.id, {
+        notes: [...(lead.notes || []), { text, date: nowIso }],
+      });
+    };
+
+    if (!navigator?.geolocation) {
+      append(`${base} (GPS unavailable)`);
+      return;
+    }
+
+    setIsCheckingIn(true);
+    try {
+      await new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = pos?.coords?.latitude;
+            const lng = pos?.coords?.longitude;
+            const acc = pos?.coords?.accuracy;
+            if (typeof lat === "number" && typeof lng === "number") {
+              const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+              append(`${base} • lat=${lat.toFixed(6)} lng=${lng.toFixed(6)} • acc=${Math.round(Number(acc) || 0)}m • ${mapUrl}`);
+            } else {
+              append(`${base} (GPS captured, but coordinates unavailable)`);
+            }
+            resolve();
+          },
+          (err) => {
+            append(`${base} (GPS error: ${err?.message || "permission denied"})`);
+            resolve();
+          },
+          { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+        );
+      });
+    } finally {
+      setIsCheckingIn(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start gap-4 border-b pb-4">
@@ -4105,42 +5814,54 @@ const LeadActionModal = ({
           ) : lead.status === "Payment Done" ? (
             <LoanDetailsEditor lead={lead} onUpdate={(data) => onUpdate(lead.id, data)} />
           ) : (
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-              <h4 className="font-bold text-slate-700 mb-3 text-sm uppercase tracking-wide">Update Status & Outcome</h4>
+            <div className="surface p-4">
+              <h4 className="font-extrabold text-slate-900 mb-3 text-sm uppercase tracking-wide">Update Status & Outcome</h4>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={() => handleOutcome("payment")}
-                  className="p-3 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-green-200"
+                  className="p-3 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-emerald-200 active:scale-[0.98]"
                 >
                   <DollarSign size={20} /> Payment Done
                 </button>
                 <button
                   onClick={() => handleOutcome("reschedule")}
-                  className="p-3 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-purple-200"
+                  className="p-3 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-purple-200 active:scale-[0.98]"
                 >
                   <Calendar size={20} /> Reschedule
                 </button>
                 <button
                   onClick={() => handleOutcome("followup")}
-                  className="p-3 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 rounded-lg font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-indigo-200"
+                  className="p-3 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-indigo-200 active:scale-[0.98]"
                 >
                   <Clock size={20} /> Follow Up
                 </button>
+                {androidApp && (
+                  <button
+                    onClick={handleCheckIn}
+                    disabled={isCheckingIn}
+                    className={`p-3 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border active:scale-[0.98] ${
+                      isCheckingIn ? "bg-slate-100 text-slate-500 border-slate-200 cursor-wait" : "bg-sky-100 hover:bg-sky-200 text-sky-800 border-sky-200"
+                    }`}
+                    title="Log visit/check-in (optional GPS)"
+                  >
+                    <MapPin size={20} /> {isCheckingIn ? "Checking…" : "Check-in"}
+                  </button>
+                )}
                 <button
                   onClick={() => handleOutcome("assign_staff")}
-                  className="p-3 bg-cyan-100 hover:bg-cyan-200 text-cyan-800 rounded-lg font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-cyan-200"
+                  className="p-3 bg-cyan-100 hover:bg-cyan-200 text-cyan-800 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-cyan-200 active:scale-[0.98]"
                 >
                   <UserPlus size={20} /> Assign Staff
                 </button>
                 <button
                   onClick={() => handleOutcome("commercial")}
-                  className="p-3 bg-teal-100 hover:bg-teal-200 text-teal-800 rounded-lg font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-teal-200"
+                  className="p-3 bg-teal-100 hover:bg-teal-200 text-teal-800 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-teal-200 active:scale-[0.98]"
                 >
                   <Briefcase size={20} /> Commercial Client
                 </button>
                 <button
                   onClick={() => handleOutcome("reject")}
-                  className="p-3 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-red-200"
+                  className="p-3 bg-red-100 hover:bg-red-200 text-red-800 rounded-xl font-bold text-sm flex flex-col items-center gap-1 transition-colors border border-red-200 active:scale-[0.98]"
                 >
                   <Ban size={20} /> Reject Strategy
                 </button>
@@ -4159,7 +5880,7 @@ const LeadActionModal = ({
                     }
                     onUpdate(lead.id, { status: next });
                   }}
-                  className="w-full p-2 text-sm border rounded bg-white"
+                  className="w-full py-2 text-sm"
                 >
                   {Object.keys(STATUS_CONFIG).map((s) => (
                     <option key={s} value={s}>
@@ -4176,15 +5897,22 @@ const LeadActionModal = ({
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Next Action Date</label>
               <input
                 type="datetime-local"
-                className="w-full p-3 border rounded bg-white font-medium text-slate-700"
+                className="w-full py-3 font-medium text-slate-700"
                 value={lead.nextFollowUp ? new Date(lead.nextFollowUp).toISOString().slice(0, 16) : ""}
                 onChange={(e) => onUpdate(lead.id, { nextFollowUp: new Date(e.target.value).toISOString() })}
               />
+              {androidApp && lead.nextFollowUp && (
+                <div className="mt-2">
+                  <button type="button" className="btn-secondary w-full py-3 text-xs" onClick={exportNextActionToIcs}>
+                    <Calendar size={14} /> Add to Calendar (.ics)
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
           {!showRejectForm && !showPaymentForm && (
-            <div className="bg-white p-3 border rounded-lg">
+            <div className="surface-solid p-3">
               <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Documents Collected</label>
               <div className="flex gap-4 flex-wrap">
                 <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -4219,12 +5947,179 @@ const LeadActionModal = ({
           )}
 
           {!showRejectForm && !showPaymentForm && (
-            <div className="bg-white p-3 border rounded-lg">
+            <div className="surface-solid p-3">
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Tags</label>
+              <input
+                value={(Array.isArray(lead.documents?.tags) ? lead.documents.tags : []).join(", ")}
+                onChange={(e) => {
+                  const tags = String(e.target.value || "")
+                    .split(",")
+                    .map((t) => t.trim())
+                    .filter(Boolean)
+                    .slice(0, 16);
+                  onUpdate(lead.id, { documents: { ...(lead.documents || {}), tags } });
+                }}
+                className="w-full py-3"
+                placeholder="hot, docs, visit, high-value…"
+              />
+              {Array.isArray(lead.documents?.tags) && lead.documents.tags.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {lead.documents.tags.slice(0, 10).map((t) => (
+                    <span key={t} className="chip">
+                      {t}
+                    </span>
+                  ))}
+                  {lead.documents.tags.length > 10 && <span className="chip">+{lead.documents.tags.length - 10}</span>}
+                </div>
+              )}
+              <div className="text-[10px] text-slate-400 mt-2">Comma-separated. Example: hot, docs-pending, visit-needed</div>
+            </div>
+          )}
+
+          {!showRejectForm && !showPaymentForm && (
+            <div className="surface-solid p-3">
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Attachments</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary py-3 text-xs"
+                  onClick={() => attachmentsInputGeneralRef.current?.click()}
+                >
+                  <Upload size={14} /> Add File
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary py-3 text-xs"
+                  onClick={() => attachmentsInputKycRef.current?.click()}
+                >
+                  <FileText size={14} /> Add KYC
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary py-3 text-xs"
+                  onClick={() => attachmentsInputItrRef.current?.click()}
+                >
+                  <FileCheck size={14} /> Add ITR
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary py-3 text-xs"
+                  onClick={() => attachmentsInputBankRef.current?.click()}
+                >
+                  <Banknote size={14} /> Add Bank
+                </button>
+              </div>
+
+              <input
+                ref={attachmentsInputGeneralRef}
+                type="file"
+                className="hidden"
+                accept="image/*,application/pdf"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  void addAttachment(file, "general");
+                }}
+              />
+              <input
+                ref={attachmentsInputKycRef}
+                type="file"
+                className="hidden"
+                accept="image/*,application/pdf"
+                capture="environment"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  void addAttachment(file, "kyc");
+                }}
+              />
+              <input
+                ref={attachmentsInputItrRef}
+                type="file"
+                className="hidden"
+                accept="image/*,application/pdf"
+                capture="environment"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  void addAttachment(file, "itr");
+                }}
+              />
+              <input
+                ref={attachmentsInputBankRef}
+                type="file"
+                className="hidden"
+                accept="image/*,application/pdf"
+                capture="environment"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  void addAttachment(file, "bank");
+                }}
+              />
+
+              <div className="mt-3 space-y-2">
+                {attachments.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No attachments yet. Add KYC/ITR/Bank photos or PDFs.</div>
+                ) : (
+                  attachments.slice(0, 8).map((a) => (
+                    <div key={a.id} className="flex items-start justify-between gap-3 border border-slate-200/60 rounded-xl p-3 bg-white/70">
+                      <button type="button" onClick={() => void openAttachment(a)} className="text-left min-w-0">
+                        <div className="font-bold text-slate-900 truncate">{a.name || "Attachment"}</div>
+                        <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                          <span className="chip">{a.kind || "file"}</span>
+                          <span className="chip">{formatBytes(a.size)}</span>
+                          <span className={`chip ${a.local ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-emerald-50 border-emerald-200 text-emerald-700"}`}>
+                            {a.local ? "local" : "cloud"}
+                          </span>
+                        </div>
+                      </button>
+                      <div className="flex flex-col gap-2 shrink-0">
+                        <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => void openAttachment(a)}>
+                          <Download size={14} /> Open
+                        </button>
+                        {backendEnabled && a.local && (
+                          <button
+                            type="button"
+                            className="btn-primary px-3 py-2 text-xs"
+                            disabled={!!attachmentBusy?.[a.id]}
+                            onClick={() => void uploadAttachment(a)}
+                          >
+                            {attachmentBusy?.[a.id] ? "Uploading…" : (
+                              <>
+                                <UploadCloud size={14} /> Upload
+                              </>
+                            )}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn-danger px-3 py-2 text-xs"
+                          disabled={!!attachmentBusy?.[a.id]}
+                          onClick={() => void removeAttachment(a)}
+                        >
+                          <Trash2 size={14} /> Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {attachments.length > 8 && <div className="text-[10px] text-slate-400">Showing 8 of {attachments.length}.</div>}
+              </div>
+
+              <div className="text-[10px] text-slate-400 mt-3 leading-relaxed">
+                Uploading requires a Supabase Storage bucket named <span className="font-mono">liras-attachments</span> with policies. If upload fails, the file stays on this device.
+              </div>
+            </div>
+          )}
+
+          {!showRejectForm && !showPaymentForm && (
+            <div className="surface-solid p-3">
               <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Assigned Partner</label>
               <select
                 value={lead.mediatorId || "3"}
                 onChange={(e) => onUpdate(lead.id, { mediatorId: e.target.value })}
-                className="w-full p-2 text-sm border rounded bg-white"
+                className="w-full py-2 text-sm"
               >
                 {mediators.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -4236,12 +6131,12 @@ const LeadActionModal = ({
           )}
 
           {!showRejectForm && !showPaymentForm && canReassignOwner && (
-            <div className="bg-white p-3 border rounded-lg">
+            <div className="surface-solid p-3">
               <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Assigned To (Staff)</label>
               <select
                 value={lead.ownerId || ""}
                 onChange={(e) => onReassignOwner?.(lead.id, e.target.value)}
-                className="w-full p-2 text-sm border rounded bg-white"
+                className="w-full py-2 text-sm"
               >
                 {staffUsers.map((u) => (
                   <option key={u.userId} value={u.userId}>
@@ -4262,15 +6157,15 @@ const LeadActionModal = ({
           {!showRejectForm && !showPaymentForm && lead.status === "Not Eligible" && (
             <button
               onClick={() => onOpenRejectionLetter?.(lead)}
-              className="w-full p-3 bg-slate-900 hover:bg-black text-white rounded-lg font-bold flex items-center justify-center gap-2"
+              className="w-full py-3 btn-primary"
             >
               <Printer size={16} /> Print Rejection Letter
             </button>
           )}
         </div>
 
-        <div className="flex flex-col h-[400px] bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
-          <div className="p-3 border-b bg-white font-bold text-sm text-slate-600 flex justify-between items-center">
+        <div className="flex flex-col h-[400px] surface-solid overflow-hidden">
+          <div className="p-3 border-b border-slate-200/60 bg-white/70 backdrop-blur font-extrabold text-sm text-slate-700 flex justify-between items-center">
             <span>Activity Log</span>
             <span className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-400">{lead.notes?.length || 0} entries</span>
           </div>
@@ -4279,7 +6174,7 @@ const LeadActionModal = ({
               .slice()
               .reverse()
               .map((n, i) => (
-                <div key={i} className="bg-white p-3 rounded shadow-sm text-sm border border-slate-100">
+                <div key={i} className="bg-white/70 p-3 rounded-xl text-sm border border-slate-200/60 shadow-sm">
                   <div className="text-[10px] text-slate-400 font-bold mb-1 flex justify-between">
                     <span>{formatDateTime(n.date)}</span>
                   </div>
@@ -4289,7 +6184,7 @@ const LeadActionModal = ({
           </div>
           <div className="p-3 bg-white border-t flex gap-2">
             <input
-              className="flex-1 p-2 border rounded text-sm focus:outline-none focus:border-blue-500 transition-colors"
+              className="flex-1 py-2 text-sm"
               placeholder="Type note..."
               onKeyDown={(e) => {
                 if (e.key !== "Enter" || !e.currentTarget.value) return;
@@ -4305,7 +6200,7 @@ const LeadActionModal = ({
                 onUpdate(lead.id, { notes: [...(lead.notes || []), { text: input.value, date: new Date().toISOString() }] });
                 input.value = "";
               }}
-              className="bg-slate-800 hover:bg-slate-700 text-white p-2 rounded transition-colors"
+              className="btn-primary px-3 py-2"
             >
               <Send size={16} />
             </button>
@@ -4325,10 +6220,36 @@ export default function LirasApp({ backend = null }) {
   const isAdmin = backendEnabled && role === "admin";
   const currentUser = backendEnabled ? authUser?.email || "User" : "Admin";
   const onLogout = typeof backend?.onLogout === "function" ? backend.onLogout : null;
+  const androidApp = useMemo(() => {
+    try {
+      const cap = globalThis?.Capacitor;
+      return Boolean(cap?.isNativePlatform?.() && cap?.getPlatform?.() === "android");
+    } catch {
+      return false;
+    }
+  }, []);
+  const [AndroidCrm, setAndroidCrm] = useState(null);
+
+  useEffect(() => {
+    if (!androidApp) return;
+    let cancelled = false;
+    import("./android/AndroidCrm.jsx")
+      .then((mod) => {
+        if (cancelled) return;
+        setAndroidCrm(() => mod.default);
+      })
+      .catch(() => {
+        // Android-only optional chunk; ignore if it fails to load.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [androidApp]);
 
   const [isBootstrapping, setIsBootstrapping] = useState(backendEnabled);
   const [bootstrapError, setBootstrapError] = useState("");
   const [staffUsers, setStaffUsers] = useState([]);
+  const [staffReloadNonce, setStaffReloadNonce] = useState(0);
 
   const uuidv4 = () => {
     const bytes = new Uint8Array(16);
@@ -4364,6 +6285,16 @@ export default function LirasApp({ backend = null }) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dayLeads, setDayLeads] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const viewsKeyBase = useMemo(() => {
+    const suffix = backendEnabled ? String(authUser?.id || "user") : "offline";
+    return `liras_views_v1_${suffix}`;
+  }, [backendEnabled, authUser?.id]);
+  const [tagFilter, setTagFilter] = useState(() => safeLocalStorage.getItem(`${viewsKeyBase}_tag`) || "");
+  const [savedViews, setSavedViews] = useState(() => {
+    const stored = parseJson(safeLocalStorage.getItem(`${viewsKeyBase}_saved`), []);
+    return Array.isArray(stored) ? stored : [];
+  });
+  const [activeSavedViewId, setActiveSavedViewId] = useState(() => safeLocalStorage.getItem(`${viewsKeyBase}_active`) || "");
   const [editingMediator, setEditingMediator] = useState(null);
   const [addLeadType, setAddLeadType] = useState("new");
   const [reportType, setReportType] = useState(null);
@@ -4374,6 +6305,9 @@ export default function LirasApp({ backend = null }) {
   const [rejectionReportLead, setRejectionReportLead] = useState(null);
   const [aiTone, setAiTone] = useState(() => safeLocalStorage.getItem("liras_ai_tone") || "partner");
   const [aiLanguage, setAiLanguage] = useState(() => safeLocalStorage.getItem("liras_ai_language") || "English");
+  const [pendingCall, setPendingCall] = useState(() => parseJson(safeLocalStorage.getItem("liras_pending_call_v1"), null));
+  const [isCallOutcomeOpen, setIsCallOutcomeOpen] = useState(false);
+  const [callOutcomeForm, setCallOutcomeForm] = useState({ outcome: "connected", notes: "" });
 
   useEffect(() => {
     safeLocalStorage.setItem("liras_ai_tone", aiTone);
@@ -4381,6 +6315,59 @@ export default function LirasApp({ backend = null }) {
   useEffect(() => {
     safeLocalStorage.setItem("liras_ai_language", aiLanguage);
   }, [aiLanguage]);
+
+  useEffect(() => {
+    setTagFilter(safeLocalStorage.getItem(`${viewsKeyBase}_tag`) || "");
+    const stored = parseJson(safeLocalStorage.getItem(`${viewsKeyBase}_saved`), []);
+    setSavedViews(Array.isArray(stored) ? stored : []);
+    setActiveSavedViewId(safeLocalStorage.getItem(`${viewsKeyBase}_active`) || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewsKeyBase]);
+
+  useEffect(() => {
+    safeLocalStorage.setItem(`${viewsKeyBase}_tag`, tagFilter || "");
+  }, [viewsKeyBase, tagFilter]);
+
+  useEffect(() => {
+    safeLocalStorage.setItem(`${viewsKeyBase}_saved`, JSON.stringify(savedViews || []));
+  }, [viewsKeyBase, savedViews]);
+
+  useEffect(() => {
+    safeLocalStorage.setItem(`${viewsKeyBase}_active`, activeSavedViewId || "");
+  }, [viewsKeyBase, activeSavedViewId]);
+
+  // Android: prompt for call outcome after returning from the dialer (Play Store–safe; no call-log permission).
+  useEffect(() => {
+    if (!androidApp) return;
+
+    const maybePrompt = () => {
+      if (document.hidden) return;
+      const stored = parseJson(safeLocalStorage.getItem("liras_pending_call_v1"), null);
+      if (!stored || typeof stored !== "object") return;
+      if (stored.completed) return;
+      const startedAt = stored.startedAt || stored.ts;
+      const startedMs = startedAt ? new Date(startedAt).getTime() : 0;
+      if (!Number.isFinite(startedMs) || startedMs <= 0) return;
+      // Avoid popping immediately when the dialer didn't actually take focus.
+      if (Date.now() - startedMs < 4000) return;
+      // Ignore stale entries (e.g., user never came back).
+      if (Date.now() - startedMs > 2 * 60 * 60 * 1000) {
+        safeLocalStorage.removeItem("liras_pending_call_v1");
+        setPendingCall(null);
+        return;
+      }
+      setPendingCall(stored);
+      setCallOutcomeForm({ outcome: "connected", notes: "" });
+      setIsCallOutcomeOpen(true);
+    };
+
+    document.addEventListener("visibilitychange", maybePrompt);
+    window.addEventListener("focus", maybePrompt);
+    return () => {
+      document.removeEventListener("visibilitychange", maybePrompt);
+      window.removeEventListener("focus", maybePrompt);
+    };
+  }, [androidApp]);
 
   const ai = useMemo(() => {
     if (!backendEnabled || !supabase) return null;
@@ -4559,12 +6546,12 @@ export default function LirasApp({ backend = null }) {
     return () => {
       cancelled = true;
     };
-  }, [backendEnabled, isAdmin, supabase, authUser?.id]);
+  }, [backendEnabled, isAdmin, supabase, authUser?.id, staffReloadNonce]);
 
   const stats = useMemo(
     () => ({
       total: leads.length,
-      today: leads.filter((l) => isToday(l.nextFollowUp)).length,
+      today: leads.filter((l) => isTodayIST(l.nextFollowUp)).length,
       overdue: leads.filter((l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)).length,
       watch: leads.filter((l) => l.isHighPotential).length,
       renewal: leads.filter((l) => l.status === "Payment Done" && getDaysDiff(l.nextFollowUp) <= 30).length,
@@ -4581,6 +6568,18 @@ export default function LirasApp({ backend = null }) {
         l.company?.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [leads, searchQuery]);
+
+  const allTags = useMemo(() => {
+    const set = new Set();
+    (leads || []).forEach((l) => {
+      const tags = Array.isArray(l.documents?.tags) ? l.documents.tags : [];
+      tags.forEach((t) => {
+        const s = String(t || "").trim();
+        if (s) set.add(s);
+      });
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [leads]);
 
   const activeMediatorForProfile = useMemo(() => mediators.find((m) => m.id === activeView), [mediators, activeView]);
 
@@ -4637,6 +6636,18 @@ export default function LirasApp({ backend = null }) {
   };
 
   const addLead = (data) => {
+    const normalizePhone = (v) => String(v || "").replace(/[^\d+]/g, "").replace(/^\+/, "");
+    const incomingPhone = normalizePhone(data?.phone);
+    if (incomingPhone) {
+      const existing = leads.find((l) => normalizePhone(l.phone) === incomingPhone);
+      if (existing) {
+        const ok = window.confirm(
+          `A lead with this phone already exists:\n\n${existing.name}${existing.company ? " (" + existing.company + ")" : ""}\n\nCreate another lead anyway?`
+        );
+        if (!ok) return;
+      }
+    }
+
     const newLead = {
       id: backendEnabled ? uuidv4() : Date.now().toString(),
       ...data,
@@ -4645,7 +6656,14 @@ export default function LirasApp({ backend = null }) {
       nextFollowUp: data.nextFollowUp || new Date(Date.now() + 86400000).toISOString(),
       notes: [{ text: `Lead created by ${currentUser}`, date: new Date().toISOString() }, ...(data.notes || [])],
       loanAmount: Number(data.loanAmount) || 0,
-      documents: { kyc: false, itr: false, bank: false },
+      documents: {
+        kyc: false,
+        itr: false,
+        bank: false,
+        tags: [],
+        attachments: [],
+        ...(data.documents && typeof data.documents === "object" ? data.documents : {}),
+      },
       loanDetails:
         data.loanDetails ||
         (data.status === "Payment Done"
@@ -4681,36 +6699,95 @@ export default function LirasApp({ backend = null }) {
     }
   };
 
-  const handleMediatorFollowUp = (mediatorId, actionType = "whatsapp") => {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const time = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+  const handleMediatorFollowUp = (mediatorId, actionType = "whatsapp", meta = null) => {
+    const now = meta?.ts ? new Date(meta.ts) : new Date();
+    const nowIso = now.toISOString();
+    const today = toYmdIST(now);
+    const time = formatTimeIST(now);
     let updatedMediator = null;
     setMediators((prev) =>
       prev.map((m) => {
         if (m.id === mediatorId) {
           let history = m.followUpHistory || [];
-          history = history.map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h));
-          const existingIndex = history.findIndex((h) => h.date === today);
+          history = history
+            .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
+            .filter((h) => h && typeof h === "object" && typeof h.date === "string");
           if (actionType === "undo") {
-            if (existingIndex !== -1) {
-              updatedMediator = { ...m, followUpHistory: history.filter((h) => h.date !== today) };
-              return updatedMediator;
-            }
+            const next = history.filter((h) => (h?.ts ? toYmdIST(h.ts) !== today : String(h.date || "") !== today));
+            if (next.length === history.length) return m; // nothing to undo
+            updatedMediator = { ...m, followUpHistory: next };
+            return updatedMediator;
           } else {
-            if (existingIndex !== -1) {
-              const newHistory = [...history];
-              newHistory[existingIndex] = { date: today, time, type: actionType };
-              updatedMediator = { ...m, followUpHistory: newHistory };
-              return updatedMediator;
-            }
-            updatedMediator = { ...m, followUpHistory: [...history, { date: today, time, type: actionType }] };
+            // Append (do not overwrite) so we can track multiple interactions per day.
+            updatedMediator = { ...m, followUpHistory: [...history, { date: today, time, type: actionType, ts: nowIso }] };
             return updatedMediator;
           }
         }
         return m;
       })
     );
+
+    if (backendEnabled && updatedMediator && updatedMediator.id !== "3") {
+      void (async () => {
+        const { error } = await supabase.from("mediators").update(uiMediatorToDbUpdate(updatedMediator)).eq("id", updatedMediator.id);
+        if (error) alert(`Backend update failed: ${error.message}`);
+      })();
+    }
+  };
+
+  const dismissPendingCall = () => {
+    try {
+      safeLocalStorage.removeItem("liras_pending_call_v1");
+    } catch {
+      // ignore
+    }
+    setPendingCall(null);
+    setIsCallOutcomeOpen(false);
+  };
+
+  const savePendingCallOutcome = () => {
+    const pending = pendingCall && typeof pendingCall === "object" ? pendingCall : null;
+    const mediatorId = pending?.mediatorId ? String(pending.mediatorId) : "";
+    if (!mediatorId) {
+      dismissPendingCall();
+      return;
+    }
+
+    const ts = pending?.ts || pending?.startedAt || null;
+    const endedAt = new Date();
+    const endedAtIso = endedAt.toISOString();
+    const endedDate = toYmdIST(endedAt);
+    const endedTime = formatTimeIST(endedAt);
+    const outcome = String(callOutcomeForm.outcome || "connected");
+    const notes = String(callOutcomeForm.notes || "").trim();
+
+    let updatedMediator = null;
+    setMediators((prev) =>
+      prev.map((m) => {
+        if (m.id !== mediatorId) return m;
+        const history = (Array.isArray(m.followUpHistory) ? m.followUpHistory : [])
+          .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
+          .filter((h) => h && typeof h === "object" && typeof h.date === "string");
+
+        let updated = false;
+        const nextHistory = history.map((h) => {
+          if (ts && h.ts === ts && h.type === "call") {
+            updated = true;
+            return { ...h, outcome, notes, endedAt: endedAtIso };
+          }
+          return h;
+        });
+
+        if (!updated) {
+          nextHistory.push({ date: endedDate, time: endedTime, type: "call", ts: ts || endedAtIso, outcome, notes, endedAt: endedAtIso });
+        }
+
+        updatedMediator = { ...m, followUpHistory: nextHistory };
+        return updatedMediator;
+      })
+    );
+
+    dismissPendingCall();
 
     if (backendEnabled && updatedMediator && updatedMediator.id !== "3") {
       void (async () => {
@@ -5167,6 +7244,14 @@ export default function LirasApp({ backend = null }) {
   if (rejectionReportLead) {
     return <RejectReportView lead={rejectionReportLead} onBack={() => setRejectionReportLead(null)} />;
   }
+  if (reportType === "eod") {
+    return <EodActivityReport leads={leads} mediators={mediators} staffUsers={staffUsers} onBack={() => setReportType(null)} />;
+  }
+  if (reportType === "daily_activity") {
+    return (
+      <EodActivityReport mode="daily" leads={leads} mediators={mediators} staffUsers={staffUsers} onBack={() => setReportType(null)} />
+    );
+  }
   if (reportType && ["daily", "monthly", "quarterly"].includes(reportType)) {
     return <EnhancedProfessionalReport type={reportType} leads={leads} mediators={mediators} ai={ai} onBack={() => setReportType(null)} />;
   }
@@ -5199,20 +7284,29 @@ export default function LirasApp({ backend = null }) {
   }
 
   let displayLeads = filteredLeads;
-  if (activeView === "today") displayLeads = filteredLeads.filter((l) => isToday(l.nextFollowUp));
+  if (activeView === "today") displayLeads = filteredLeads.filter((l) => isTodayIST(l.nextFollowUp));
   else if (activeView === "overdue")
     displayLeads = filteredLeads.filter(
       (l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)
     );
   else if (activeView === "watchlist") displayLeads = filteredLeads.filter((l) => l.isHighPotential);
   else if (activeView === "renewal_watch") displayLeads = filteredLeads.filter((l) => l.status === "Payment Done" && getDaysDiff(l.nextFollowUp) <= 30);
+  if (activeView === "all" && tagFilter) {
+    displayLeads = displayLeads.filter((l) => (Array.isArray(l.documents?.tags) ? l.documents.tags : []).includes(tagFilter));
+  }
 
   const newLeads = leads.filter((l) => l.status === "New");
-  const pendingReviews = leads.filter((l) => l.status === "Meeting Scheduled" && new Date(l.nextFollowUp) < new Date() && !isToday(l.nextFollowUp));
-  const dailyPending = leads.filter((l) => !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status) && (!l.notes.length || !isToday(l.notes[l.notes.length - 1].date)));
+  // Meetings whose scheduled time has already passed (including earlier today).
+  const pendingReviews = leads.filter((l) => l.status === "Meeting Scheduled" && l.nextFollowUp && new Date(l.nextFollowUp) <= new Date());
+  const dailyPending = leads.filter(
+    (l) =>
+      !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status) &&
+      (!l.notes.length || !isTodayIST(l.notes[l.notes.length - 1].date))
+  );
+  const clearanceCount = pendingReviews.length + dailyPending.length;
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full safe-bottom">
       <FounderIntelligenceOverlay />
 
       {isSidebarOpen && (
@@ -5220,21 +7314,27 @@ export default function LirasApp({ backend = null }) {
           type="button"
           aria-label="Close sidebar"
           onClick={() => setIsSidebarOpen(false)}
-          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-10 md:hidden print:hidden"
+          className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-10 md:hidden print:hidden"
         />
       )}
 
       <div
-        className={`fixed md:relative inset-y-0 left-0 w-64 bg-slate-900 text-slate-300 transform ${
+        className={`fixed md:relative inset-y-0 left-0 w-64 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-200 transform ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
-        } md:translate-x-0 transition-transform z-20 flex flex-col shadow-2xl print:hidden`}
+        } md:translate-x-0 transition-transform z-20 flex flex-col shadow-2xl border-r border-white/10 print:hidden`}
       >
         <div className="p-6 border-b border-slate-800 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight">
-              Jubilant <span className="text-indigo-500">Enterprises</span>
+              {BRAND.name.split(" ")[0]} <span className="text-indigo-500">{BRAND.name.split(" ").slice(1).join(" ")}</span>
             </h1>
-            <p className="text-xs text-slate-500 mt-1">LIRAS System v4.06 (AI-free)</p>
+            <div className="mt-2 flex items-center gap-2">
+              <span className="chip bg-white/10 border-white/10 text-slate-200/80">LIRAS v4.06</span>
+              <span className={`chip bg-white/10 border-white/10 ${backendEnabled ? "text-emerald-200/90" : "text-slate-200/80"}`}>
+                {backendEnabled ? "Cloud" : "Offline"}
+              </span>
+              {isAdmin && <span className="chip bg-white/10 border-white/10 text-indigo-200/90">Admin</span>}
+            </div>
           </div>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white p-2 -m-2 rounded-lg">
             <X size={18} />
@@ -5248,6 +7348,17 @@ export default function LirasApp({ backend = null }) {
             active={activeView === "dashboard"}
             onClick={() => {
               setActiveView("dashboard");
+              setIsSidebarOpen(false);
+            }}
+          />
+          <SidebarItem
+            icon={AlertTriangle}
+            label="Clearance Center"
+            active={activeView === "clearance"}
+            count={clearanceCount ? clearanceCount : undefined}
+            alert={clearanceCount > 0}
+            onClick={() => {
+              setActiveView("clearance");
               setIsSidebarOpen(false);
             }}
           />
@@ -5308,7 +7419,60 @@ export default function LirasApp({ backend = null }) {
             }}
           />
 
+          {androidApp && (
+            <>
+              <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">Android CRM</div>
+              <SidebarItem
+                icon={Timer}
+                label="My Day"
+                active={activeView === "android_myday"}
+                onClick={() => {
+                  setActiveView("android_myday");
+                  setIsSidebarOpen(false);
+                }}
+              />
+              <SidebarItem
+                icon={Users}
+                label="Partners"
+                active={activeView === "android_partners"}
+                onClick={() => {
+                  setActiveView("android_partners");
+                  setIsSidebarOpen(false);
+                }}
+              />
+              <SidebarItem
+                icon={ClipboardList}
+                label="Tasks"
+                active={activeView === "android_tasks"}
+                onClick={() => {
+                  setActiveView("android_tasks");
+                  setIsSidebarOpen(false);
+                }}
+              />
+            </>
+          )}
+
           <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">Reports & Tools</div>
+          {backendEnabled && isAdmin && (
+            <>
+              <SidebarItem
+                icon={History}
+                label="Daily Activity Report"
+                onClick={() => {
+                  setReportType("daily_activity");
+                  setIsSidebarOpen(false);
+                }}
+              />
+              <SidebarItem
+                icon={History}
+                label="EOD Activity Report"
+                onClick={() => {
+                  setReportType("eod");
+                  setIsSidebarOpen(false);
+                }}
+              />
+            </>
+          )}
           <SidebarItem
             icon={FileBarChart}
             label="Monthly Performance"
@@ -5336,15 +7500,15 @@ export default function LirasApp({ backend = null }) {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 relative">
-        <header className="bg-white border-b h-16 flex items-center justify-between px-6 shadow-sm z-10 print:hidden">
-          <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-slate-600">
-            <Menu />
+      <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+        <header className="safe-top bg-white/70 backdrop-blur border-b border-slate-200/60 h-16 flex items-center justify-between px-6 shadow-soft z-10 print:hidden">
+          <button onClick={() => setIsSidebarOpen(true)} className="md:hidden btn-secondary px-3 py-2">
+            <Menu className="text-slate-700" />
           </button>
           <div className="flex-1 max-w-xl mx-4 relative hidden md:block">
             <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
-              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
+              className="w-full pl-10 pr-4 py-2.5 text-sm bg-white/70"
               placeholder="Global Search (Client, Company, Phone)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -5352,37 +7516,33 @@ export default function LirasApp({ backend = null }) {
           </div>
           <div className="flex items-center gap-2">
             {backendEnabled && (
-              <div className="hidden lg:flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
-                <UserCircle size={18} className="text-slate-500" />
-                <span className="text-sm font-bold text-slate-700 max-w-[240px] truncate">{currentUser}</span>
-                {isAdmin && (
-                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
-                    ADMIN
-                  </span>
-                )}
+              <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/70 backdrop-blur shadow-sm">
+                <UserCircle size={18} className="text-slate-600" />
+                <span className="text-sm font-bold text-slate-800 max-w-[240px] truncate">{currentUser}</span>
+                {isAdmin && <span className="chip bg-indigo-50 border-indigo-200 text-indigo-700">Admin</span>}
               </div>
             )}
             {backendEnabled && onLogout && (
               <button
                 onClick={onLogout}
-                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-lg font-bold shadow-sm flex items-center gap-2"
+                className="btn-secondary px-3 py-2"
                 title="Log out"
               >
-                <LogOut size={18} />
+                <LogOut size={18} className="text-slate-700" />
                 <span className="hidden md:inline">Logout</span>
               </button>
             )}
             {activeView === "mediators" && (
               <button
                 onClick={() => setIsAddMediatorModalOpen(true)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold shadow-lg flex items-center gap-2"
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 shadow-soft hover:from-emerald-700 hover:to-teal-700 active:scale-[0.98] transition focus:outline-none focus:ring-4 focus:ring-emerald-200"
               >
                 <UserPlus size={18} /> Add Mediator
               </button>
             )}
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold shadow-lg flex items-center gap-2"
+              className="btn-primary"
             >
               <Plus size={18} /> Add Lead
             </button>
@@ -5390,6 +7550,130 @@ export default function LirasApp({ backend = null }) {
         </header>
 
         <main className="flex-1 overflow-hidden relative">
+          {androidApp && (activeView === "android_myday" || activeView === "android_tasks" || activeView === "android_partners") && (
+            <div className="h-full overflow-y-auto">
+              {AndroidCrm ? (
+                <AndroidCrm
+                  route={activeView === "android_tasks" ? "tasks" : activeView === "android_partners" ? "partners" : "myday"}
+                  leads={leads}
+                  mediators={mediators}
+                  onFollowUp={handleMediatorFollowUp}
+                  onOpenLead={(l) => setActiveLead(l)}
+                  onNavigate={(next) => setActiveView(String(next || "android_myday"))}
+                />
+              ) : (
+                <div className="p-6">
+                  <div className="surface p-6">
+                    <div className="text-lg font-extrabold text-slate-900">Loading CRM…</div>
+                    <div className="text-sm text-slate-500 mt-1">Preparing Android-only tools</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeView === "clearance" && (
+            <div className="p-6 space-y-6 overflow-y-auto h-full pb-20 animate-fade-in">
+              <div className="surface p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Operations</div>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-2">Clearance Center</div>
+                    <div className="text-sm text-slate-600 mt-1">
+                      Close loose ends: meetings that already happened, plus leads that need an update today.
+                    </div>
+                  </div>
+                  <div className="hidden md:flex gap-2">
+                    <div className="surface-solid px-4 py-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Past Meetings</div>
+                      <div className="text-2xl font-extrabold text-slate-900 mt-1">{pendingReviews.length}</div>
+                    </div>
+                    <div className="surface-solid px-4 py-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">EOD Pending</div>
+                      <div className="text-2xl font-extrabold text-slate-900 mt-1">{dailyPending.length}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="surface p-5">
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-200/60 pb-3">
+                    <div>
+                      <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                        <AlertTriangle size={18} className="text-red-600" /> Meetings: Action Required
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1">Scheduled meeting time has passed — update status or reschedule.</div>
+                    </div>
+                    <div className="chip bg-white/60">{pendingReviews.length}</div>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {pendingReviews.length === 0 ? (
+                      <div className="text-sm text-slate-500 italic">No past meetings pending.</div>
+                    ) : (
+                      pendingReviews.slice(0, 12).map((l) => (
+                        <div key={l.id} className="surface-solid p-4 flex items-center justify-between gap-3">
+                          <button type="button" onClick={() => setActiveLead(l)} className="text-left min-w-0">
+                            <div className="font-extrabold text-slate-900 truncate">{l.name}</div>
+                            <div className="text-xs text-slate-500 mt-1 truncate">{l.company || l.location || "—"}</div>
+                            <div className="text-[11px] text-slate-500 mt-2">Meeting: {formatDateTime(l.nextFollowUp)}</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveLead(l)}
+                            className="btn-primary px-3 py-2 text-xs shrink-0"
+                          >
+                            Update
+                          </button>
+                        </div>
+                      ))
+                    )}
+                    {pendingReviews.length > 12 && (
+                      <div className="text-xs text-slate-500">Showing 12 of {pendingReviews.length}. Use search to find others.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="surface p-5">
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-200/60 pb-3">
+                    <div>
+                      <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                        <Clock size={18} className="text-orange-600" /> End of Day Pending Updates
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1">Active leads that haven’t received an update today.</div>
+                    </div>
+                    <div className="chip bg-white/60">{dailyPending.length}</div>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {dailyPending.length === 0 ? (
+                      <div className="text-sm text-slate-500 italic">All good — nothing pending.</div>
+                    ) : (
+                      dailyPending.slice(0, 12).map((l) => (
+                        <div key={l.id} className="surface-solid p-4 flex items-center justify-between gap-3">
+                          <button type="button" onClick={() => setActiveLead(l)} className="text-left min-w-0">
+                            <div className="font-extrabold text-slate-900 truncate">{l.name}</div>
+                            <div className="text-xs text-slate-500 mt-1 truncate">{l.company || l.location || "—"}</div>
+                            <div className="text-[11px] text-slate-500 mt-2">Next: {formatDateTime(l.nextFollowUp)}</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveLead(l)}
+                            className="btn-primary px-3 py-2 text-xs shrink-0"
+                          >
+                            Update
+                          </button>
+                        </div>
+                      ))
+                    )}
+                    {dailyPending.length > 12 && (
+                      <div className="text-xs text-slate-500">Showing 12 of {dailyPending.length}. Use search to find others.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeView === "dashboard" && (
             <div className="p-6 space-y-6 overflow-y-auto h-full pb-20 animate-fade-in">
               {newLeads.length > 0 && (
@@ -5420,17 +7704,17 @@ export default function LirasApp({ backend = null }) {
                       <AlertTriangle size={24} />
                     </div>
                     <div>
-                      <h3 className="font-bold text-red-900 text-lg">Action Required: Past Meetings</h3>
+                      <h3 className="font-bold text-red-900 text-lg">Action Required: Meetings</h3>
                       <p className="text-sm text-red-700">
                         You have <strong>{pendingReviews.length}</strong> meetings pending a status update.
                       </p>
                     </div>
                   </div>
                   <button
-                    onClick={() => setActiveLead(pendingReviews[0])}
+                    onClick={() => setActiveView("clearance")}
                     className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-transform active:scale-95 whitespace-nowrap"
                   >
-                    Review Now
+                    Open Clearance Center
                   </button>
                 </div>
               )}
@@ -5448,11 +7732,11 @@ export default function LirasApp({ backend = null }) {
                     </div>
                     <button
                       onClick={() => {
-                        setDayLeads(dailyPending);
+                        setActiveView("clearance");
                       }}
                       className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors"
                     >
-                      Review Pending List
+                      Open Clearance Center
                     </button>
                   </div>
                 </div>
@@ -5530,11 +7814,11 @@ export default function LirasApp({ backend = null }) {
                     <Calendar className="text-purple-600" size={18} /> Upcoming Meetings
                   </h3>
                   <div className="space-y-3">
-                    {leads.filter((l) => l.status === "Meeting Scheduled" && (isToday(l.nextFollowUp) || isTomorrow(l.nextFollowUp))).length === 0 ? (
+                    {leads.filter((l) => l.status === "Meeting Scheduled" && (isTodayIST(l.nextFollowUp) || isTomorrowIST(l.nextFollowUp))).length === 0 ? (
                       <div className="p-6 text-center text-slate-400 italic text-sm">No meetings scheduled.</div>
                     ) : (
                       leads
-                        .filter((l) => l.status === "Meeting Scheduled" && (isToday(l.nextFollowUp) || isTomorrow(l.nextFollowUp)))
+                        .filter((l) => l.status === "Meeting Scheduled" && (isTodayIST(l.nextFollowUp) || isTomorrowIST(l.nextFollowUp)))
                         .map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} />)
                     )}
                   </div>
@@ -5554,6 +7838,75 @@ export default function LirasApp({ backend = null }) {
 
           {["all", "today", "overdue", "watchlist", "renewal_watch"].includes(activeView) && (
             <div className="p-6 overflow-y-auto h-full animate-fade-in space-y-2">
+              {activeView === "all" && (
+                <div className="surface p-4">
+                  <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+                    <div className="flex-1">
+                      <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Saved Views</div>
+                      <div className="mt-2 flex flex-col sm:flex-row gap-2">
+                        <select
+                          value={activeSavedViewId}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            setActiveSavedViewId(id);
+                            const view = (savedViews || []).find((v) => v.id === id);
+                            setTagFilter(view?.tag || "");
+                          }}
+                          className="flex-1 py-3"
+                        >
+                          <option value="">— Default —</option>
+                          {(savedViews || []).map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="btn-secondary py-3"
+                          onClick={() => {
+                            const name = prompt("Save view name:", tagFilter ? `Tag: ${tagFilter}` : "All leads");
+                            if (!name) return;
+                            const id = String(Date.now());
+                            const view = { id, name: String(name).trim().slice(0, 40), tag: tagFilter || "" };
+                            setSavedViews((prev) => [view, ...(Array.isArray(prev) ? prev : [])]);
+                            setActiveSavedViewId(id);
+                          }}
+                        >
+                          Save View
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary py-3"
+                          onClick={() => {
+                            setActiveSavedViewId("");
+                            setTagFilter("");
+                          }}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-2">Views currently save your tag filter (more filters can be added later).</div>
+                    </div>
+
+                    <div className="w-full lg:w-[320px]">
+                      <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Tag Filter</div>
+                      <select
+                        value={tagFilter}
+                        onChange={(e) => setTagFilter(e.target.value)}
+                        className="w-full py-3 mt-2"
+                      >
+                        <option value="">All tags</option>
+                        {allTags.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
               {displayLeads.map((l) => (
                 <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} />
               ))}
@@ -5654,6 +8007,7 @@ export default function LirasApp({ backend = null }) {
               onUpdateReport={setMidDayUpdateId}
               onRejectionReport={setMediatorRejectionReportId}
               onPendingReport={setMediatorPendingReportId}
+              onFollowUp={handleMediatorFollowUp}
               onEdit={setEditingMediator}
               onDelete={(id) => {
                 if (deleteMediator(id)) setActiveView("mediators");
@@ -5661,6 +8015,54 @@ export default function LirasApp({ backend = null }) {
             />
           )}
         </main>
+
+        {androidApp && (
+          <nav className="print:hidden safe-bottom bg-white/70 backdrop-blur border-t border-slate-200/60 shadow-soft">
+            {(() => {
+              const myDayActive =
+                activeView === "android_myday" || activeView === "android_tasks" || activeView === "android_partners";
+              const items = [
+                { key: "dashboard", label: "Home", icon: TrendingUp, active: activeView === "dashboard" },
+                { key: "clearance", label: "Clear", icon: AlertTriangle, active: activeView === "clearance" },
+                { key: "all", label: "Leads", icon: FileText, active: activeView === "all" },
+                { key: "mediators", label: "Partners", icon: Users, active: activeView === "mediators" || Boolean(activeMediatorForProfile) },
+                { key: "android_myday", label: "My Day", icon: Timer, active: myDayActive },
+              ];
+              return (
+                <div className="grid grid-cols-5 gap-1 px-2 py-2">
+                  {items.map((it) => {
+                    const Icon = it.icon;
+                    const isActive = Boolean(it.active);
+                    const badge =
+                      it.key === "clearance" && clearanceCount > 0 ? clearanceCount : it.key === "clearance" ? 0 : null;
+                    return (
+                      <button
+                        key={it.key}
+                        type="button"
+                        onClick={() => {
+                          setActiveView(it.key);
+                          setIsSidebarOpen(false);
+                        }}
+                        className={`relative flex flex-col items-center justify-center gap-1 rounded-2xl py-2 transition ${
+                          isActive ? "bg-indigo-50 ring-1 ring-indigo-200 text-indigo-800" : "text-slate-600 hover:bg-white/70"
+                        }`}
+                        aria-label={it.label}
+                      >
+                        <Icon size={18} className={isActive ? "text-indigo-700" : "text-slate-600"} />
+                        <span className={`text-[10px] font-extrabold ${isActive ? "text-indigo-800" : "text-slate-600"}`}>{it.label}</span>
+                        {typeof badge === "number" && badge > 0 && (
+                          <span className="absolute top-1 right-3 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center shadow">
+                            {badge > 99 ? "99+" : badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </nav>
+        )}
       </div>
 
       <Modal
@@ -5730,56 +8132,64 @@ export default function LirasApp({ backend = null }) {
           }}
           className="space-y-4"
         >
-          <div className="grid grid-cols-2 gap-4 bg-slate-100 p-1.5 rounded-lg">
-            <label className="flex items-center justify-center gap-2 cursor-pointer p-2 rounded-md transition-all">
+          <div className="grid grid-cols-2 gap-2 surface-solid p-1.5">
+            <label
+              className={`flex items-center justify-center gap-2 cursor-pointer p-2 rounded-xl transition-all ${
+                addLeadType === "new" ? "bg-white shadow-soft border border-slate-200/70" : "hover:bg-white/40"
+              }`}
+            >
               <input type="radio" name="type" value="new" checked={addLeadType === "new"} onChange={() => setAddLeadType("new")} />
               <span className="font-bold text-sm text-slate-600">New Client</span>
             </label>
-            <label className="flex items-center justify-center gap-2 cursor-pointer p-2 rounded-md transition-all">
+            <label
+              className={`flex items-center justify-center gap-2 cursor-pointer p-2 rounded-xl transition-all ${
+                addLeadType === "renewal" ? "bg-white shadow-soft border border-slate-200/70" : "hover:bg-white/40"
+              }`}
+            >
               <input type="radio" name="type" value="renewal" checked={addLeadType === "renewal"} onChange={() => setAddLeadType("renewal")} />
               <span className="font-bold text-sm text-slate-600">Renewal / Existing</span>
             </label>
           </div>
 
-          <input name="name" required placeholder="Client Name" className="w-full p-3 border rounded-lg" />
-          <input name="company" placeholder="Company Name" className="w-full p-3 border rounded-lg" />
+          <input name="name" required placeholder="Client Name" className="w-full py-3" />
+          <input name="company" placeholder="Company Name" className="w-full py-3" />
           <div className="grid grid-cols-2 gap-4">
-            <input name="phone" placeholder="Phone" className="w-full p-3 border rounded-lg" />
-            <input name="location" placeholder="City/Area" className="w-full p-3 border rounded-lg" />
+            <input name="phone" placeholder="Phone" className="w-full py-3" />
+            <input name="location" placeholder="City/Area" className="w-full py-3" />
           </div>
 
           {addLeadType === "new" ? (
-            <input name="loanAmount" type="number" placeholder="Required Loan Amount (₹)" className="w-full p-3 border rounded-lg" />
+            <input name="loanAmount" type="number" placeholder="Required Loan Amount (₹)" className="w-full py-3" />
           ) : (
-            <div className="animate-fade-in space-y-3 p-4 bg-green-50 border border-green-200 rounded-lg shadow-inner">
-              <h4 className="text-sm font-bold text-green-800 flex items-center gap-2 border-b border-green-200 pb-2">
-                <Banknote size={16} /> Record Closed Deal (Legacy/Renewal)
+            <div className="animate-fade-in space-y-3 p-4 bg-emerald-50/70 border border-emerald-200/70 rounded-2xl shadow-sm">
+              <h4 className="text-sm font-extrabold text-slate-900 flex items-center gap-2 border-b border-emerald-200/60 pb-2">
+                <Banknote size={16} className="text-emerald-600" /> Record Closed Deal (Legacy/Renewal)
               </h4>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-bold text-green-700 uppercase block mb-1">Given Amount (₹)</label>
-                  <input name="principal" type="number" className="w-full p-2 border border-green-300 rounded bg-white text-sm font-bold" required />
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Given Amount (₹)</label>
+                  <input name="principal" type="number" className="w-full py-2 text-sm font-bold" required />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-green-700 uppercase block mb-1">Interest (₹)</label>
-                  <input name="interest" type="number" className="w-full p-2 border border-green-300 rounded bg-white text-sm font-bold text-red-600" defaultValue="0" />
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Interest (₹)</label>
+                  <input name="interest" type="number" className="w-full py-2 text-sm font-bold text-red-600" defaultValue="0" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-bold text-green-700 uppercase block mb-1">Tenure (Months)</label>
-                  <input name="tenure" type="number" defaultValue="12" className="w-full p-2 border border-green-300 rounded bg-white text-sm font-bold" />
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Tenure (Months)</label>
+                  <input name="tenure" type="number" defaultValue="12" className="w-full py-2 text-sm font-bold" />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-green-700 uppercase block mb-1">Payment Date</label>
-                  <input name="paymentDate" type="date" className="w-full p-2 border border-green-300 rounded bg-white text-sm font-bold" />
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Payment Date</label>
+                  <input name="paymentDate" type="date" className="w-full py-2 text-sm font-bold" />
                 </div>
               </div>
-              <div className="text-[10px] text-green-600 italic mt-1">System automatically sets follow-up at 50% of term.</div>
+              <div className="text-[10px] text-emerald-700 italic mt-1">System automatically sets follow-up at 50% of term.</div>
             </div>
           )}
 
-          <textarea name="notes" placeholder="Additional Notes..." className="w-full p-3 border rounded-lg h-20 resize-none text-sm"></textarea>
+          <textarea name="notes" placeholder="Additional Notes..." className="w-full p-3 h-20 resize-none text-sm"></textarea>
 
           <div className="flex items-center gap-2">
             <input id="isHighPotential" name="isHighPotential" type="checkbox" className="accent-indigo-600 w-4 h-4" />
@@ -5788,7 +8198,7 @@ export default function LirasApp({ backend = null }) {
             </label>
           </div>
 
-          <select name="mediatorId" className="w-full p-3 border rounded-lg bg-white">
+          <select name="mediatorId" className="w-full py-3 bg-white">
             {(backendEnabled && isAdmin && authUser?.id ? mediators.filter((m) => m.id === "3" || !m.ownerId || m.ownerId === authUser.id) : mediators).map(
               (m) => (
               <option key={m.id} value={m.id}>
@@ -5798,7 +8208,7 @@ export default function LirasApp({ backend = null }) {
             )}
           </select>
 
-          <button className="w-full bg-slate-900 hover:bg-slate-800 text-white p-3 rounded-lg font-bold shadow-lg transition-colors">Save Entry</button>
+          <button className="w-full py-3 btn-primary">Save Entry</button>
         </form>
       </Modal>
 
@@ -5806,6 +8216,9 @@ export default function LirasApp({ backend = null }) {
         {activeLead && (
           <LeadActionModal
             lead={activeLead}
+            androidApp={androidApp}
+            backendEnabled={backendEnabled}
+            supabase={supabase}
             ai={ai}
             mediators={
               backendEnabled && isAdmin && activeLead.ownerId
@@ -5830,11 +8243,72 @@ export default function LirasApp({ backend = null }) {
         )}
       </Modal>
 
+      <Modal isOpen={isCallOutcomeOpen} onClose={dismissPendingCall} title="Call Outcome">
+        {(() => {
+          const pending = pendingCall && typeof pendingCall === "object" ? pendingCall : null;
+          const mediator = pending?.mediatorId ? mediators.find((m) => m.id === pending.mediatorId) : null;
+          return (
+            <div className="space-y-4">
+              <div className="surface-solid p-4">
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Auto-log</div>
+                <div className="text-lg font-extrabold text-slate-900 mt-1">
+                  {mediator?.name || "Mediator Call"}
+                </div>
+                <div className="text-sm text-slate-600 mt-1">
+                  Phone: <span className="font-mono">{pending?.phone || mediator?.phone || "—"}</span>
+                </div>
+                {pending?.startedAt && (
+                  <div className="text-xs text-slate-500 mt-2">
+                    Started: {new Date(pending.startedAt).toLocaleString("en-IN")}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Outcome</label>
+                <select
+                  value={callOutcomeForm.outcome}
+                  onChange={(e) => setCallOutcomeForm((p) => ({ ...p, outcome: e.target.value }))}
+                  className="w-full py-3"
+                >
+                  <option value="connected">Connected</option>
+                  <option value="no_answer">No Answer</option>
+                  <option value="busy">Busy</option>
+                  <option value="switched_off">Switched Off</option>
+                  <option value="wrong_number">Wrong Number</option>
+                  <option value="meeting_scheduled">Meeting Scheduled</option>
+                  <option value="call_back">Call Back Later</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Notes (optional)</label>
+                <textarea
+                  value={callOutcomeForm.notes}
+                  onChange={(e) => setCallOutcomeForm((p) => ({ ...p, notes: e.target.value }))}
+                  className="w-full p-3 h-24 resize-none text-sm"
+                  placeholder="Quick notes… next step…"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button type="button" className="flex-1 btn-secondary py-3" onClick={dismissPendingCall}>
+                  Skip
+                </button>
+                <button type="button" className="flex-1 btn-primary py-3" onClick={savePendingCallOutcome}>
+                  Save Log
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
       <Modal isOpen={isEmiOpen} onClose={() => setIsEmiOpen(false)} title="Interest Rate Calculator">
         <div className="space-y-4">
-          <div className="bg-indigo-50 p-6 rounded-xl text-center border border-indigo-100">
+          <div className="surface-solid p-6 text-center">
             <div className="text-sm text-indigo-600 font-bold uppercase tracking-wider mb-1">Our Interest Rate</div>
-            <div className="text-4xl font-extrabold text-indigo-900" id="rateDisplay">
+            <div className="text-4xl font-extrabold bg-gradient-to-r from-indigo-600 to-blue-600 bg-clip-text text-transparent" id="rateDisplay">
               0.00%
             </div>
           </div>
@@ -5883,7 +8357,7 @@ export default function LirasApp({ backend = null }) {
             <div className="space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-500">Frequency</label>
-                <select name="frequency" defaultValue="monthly" className="w-full p-2 border rounded font-mono bg-white">
+                <select name="frequency" defaultValue="monthly" className="w-full py-2 font-mono">
                   <option value="monthly">Monthly</option>
                   <option value="weekly">Weekly</option>
                   <option value="biweekly">Bi-Weekly</option>
@@ -5892,15 +8366,15 @@ export default function LirasApp({ backend = null }) {
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500">Given Amount (Principal)</label>
-                <input name="given" type="number" defaultValue="100000" className="w-full p-2 border rounded font-mono" />
+                <input name="given" type="number" defaultValue="100000" className="w-full py-2 font-mono" />
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500">Total Interest Amount</label>
-                <input name="interest" type="number" defaultValue="10000" className="w-full p-2 border rounded font-mono" />
+                <input name="interest" type="number" defaultValue="10000" className="w-full py-2 font-mono" />
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500">Duration (Months)</label>
-                <input name="months" type="number" defaultValue="12" className="w-full p-2 border rounded font-mono" />
+                <input name="months" type="number" defaultValue="12" className="w-full py-2 font-mono" />
               </div>
             </div>
           </form>
@@ -5916,7 +8390,7 @@ export default function LirasApp({ backend = null }) {
                 setDayLeads(null);
                 setActiveLead(l);
               }}
-              className="p-3 border rounded-lg hover:bg-slate-50 cursor-pointer flex justify-between items-center"
+              className="surface-solid p-3 hover:shadow-elevated cursor-pointer flex justify-between items-center"
             >
               <div>
                 <div className="font-bold text-slate-800">{l.name}</div>
@@ -5937,9 +8411,9 @@ export default function LirasApp({ backend = null }) {
           }}
           className="space-y-4"
         >
-          <input name="name" required placeholder="Mediator Name" className="w-full p-3 border rounded-lg" />
-          <input name="phone" placeholder="Phone Number" className="w-full p-3 border rounded-lg" />
-          <button className="w-full bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-lg font-bold shadow-lg transition-colors">
+          <input name="name" required placeholder="Mediator Name" className="w-full py-3" />
+          <input name="phone" placeholder="Phone Number" className="w-full py-3" />
+          <button className="w-full py-3 rounded-xl font-bold text-white shadow-soft transition active:scale-[0.98] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 focus:outline-none focus:ring-4 focus:ring-emerald-200">
             Save Mediator
           </button>
         </form>
@@ -5957,13 +8431,13 @@ export default function LirasApp({ backend = null }) {
           >
             <div>
               <label className="text-xs font-bold text-slate-500">Name</label>
-              <input name="name" defaultValue={editingMediator.name} required className="w-full p-3 border rounded-lg" />
+              <input name="name" defaultValue={editingMediator.name} required className="w-full py-3" />
             </div>
             <div>
               <label className="text-xs font-bold text-slate-500">Phone</label>
-              <input name="phone" defaultValue={editingMediator.phone} className="w-full p-3 border rounded-lg" />
+              <input name="phone" defaultValue={editingMediator.phone} className="w-full py-3" />
             </div>
-            <button className="w-full bg-blue-600 text-white p-3 rounded-lg font-bold shadow-lg">Save Changes</button>
+            <button className="w-full py-3 btn-primary">Save Changes</button>
           </form>
         )}
       </Modal>
@@ -5976,6 +8450,9 @@ export default function LirasApp({ backend = null }) {
         handleBackup={handleBackup}
         handleRestore={handleRestore}
         backendEnabled={backendEnabled}
+        isAdmin={isAdmin}
+        supabase={supabase}
+        onUsersChanged={() => setStaffReloadNonce((n) => n + 1)}
       />
     </div>
   );

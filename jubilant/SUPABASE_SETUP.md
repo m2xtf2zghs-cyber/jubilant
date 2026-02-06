@@ -21,6 +21,14 @@ In Supabase Dashboard → **Authentication**:
 
 Create users in **Auth → Users** (Add/Invite users).
 
+Optional (recommended): in-app user creation/invites
+
+If you want to create/invite staff users from inside the app (admin-only), set a **server-only** env var on Netlify:
+
+- `SUPABASE_SERVICE_ROLE_KEY` (Supabase project settings → API → `service_role` key)
+
+This is used only by the Netlify Function `/.netlify/functions/admin-users` and must **never** be exposed in `VITE_*` client env vars.
+
 ## 3) Create tables + RLS policies
 
 Open Supabase Dashboard → **SQL Editor** and run the SQL below.
@@ -235,6 +243,7 @@ In Netlify site settings → Environment variables:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (optional, only needed for in-app admin “Add Staff Account”)
 
 Redeploy.
 
@@ -275,3 +284,60 @@ Add to `jubilant/.env`:
 - `VITE_AI_BASE_URL="https://YOUR_NETLIFY_SITE.netlify.app"`
 
 Then rebuild + sync (`npm run build && npm run cap:sync`) and regenerate your APK/AAB.
+
+## 7) (Optional) Enable secure file attachments (KYC/ITR/Bank)
+
+Leads can store attachment *metadata* in the `documents` JSON field. Actual files should be stored in **Supabase Storage**.
+
+### Create a private bucket
+
+Supabase Dashboard → **Storage** → **New bucket**
+
+- Name: `liras-attachments`
+- Public: **OFF** (recommended)
+
+### Add Storage policies (owner-folder + admin access)
+
+In SQL Editor, run:
+
+```sql
+-- Read: staff can read their own folder; admin can read all
+drop policy if exists "attachments: read own or admin" on storage.objects;
+create policy "attachments: read own or admin" on storage.objects
+for select
+using (
+  bucket_id = 'liras-attachments'
+  and (
+    (storage.foldername(name))[1] = auth.uid()::text
+    or public.is_admin()
+  )
+);
+
+-- Write: staff can upload only to their own folder; admin can upload anywhere
+drop policy if exists "attachments: write own or admin" on storage.objects;
+create policy "attachments: write own or admin" on storage.objects
+for insert
+with check (
+  bucket_id = 'liras-attachments'
+  and (
+    (storage.foldername(name))[1] = auth.uid()::text
+    or public.is_admin()
+  )
+);
+
+-- Delete: staff can delete from their own folder; admin can delete all
+drop policy if exists "attachments: delete own or admin" on storage.objects;
+create policy "attachments: delete own or admin" on storage.objects
+for delete
+using (
+  bucket_id = 'liras-attachments'
+  and (
+    (storage.foldername(name))[1] = auth.uid()::text
+    or public.is_admin()
+  )
+);
+```
+
+Notes:
+- The app stores files under: `<owner_id>/<lead_id>/<file_id>-<filename>`
+- If upload fails, the attachment stays **local on the device** (IndexedDB) and can be uploaded later.
