@@ -257,6 +257,13 @@ const toYmdInTimeZone = (dateLike, timeZone = BRAND.tz) => {
 const toYmdIST = (dateLike) => toYmdInTimeZone(dateLike, BRAND.tz);
 const isOnYmdIST = (dateLike, ymd) => (ymd ? toYmdIST(dateLike) === ymd : false);
 
+const toYmIST = (dateLike) => {
+  const ymd = toYmdIST(dateLike);
+  return ymd ? ymd.slice(0, 7) : "";
+};
+
+const isOnYmIST = (dateLike, ym) => (ym ? toYmIST(dateLike) === ym : false);
+
 const formatTimeIST = (dateLike) => {
   try {
     const d = new Date(dateLike);
@@ -406,6 +413,14 @@ const safeLocalStorage = {
   setItem(key, value) {
     try {
       localStorage.setItem(key, value);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  removeItem(key) {
+    try {
+      localStorage.removeItem(key);
       return true;
     } catch {
       return false;
@@ -1052,6 +1067,7 @@ const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
 };
 
 const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_target" }) => {
+  const currentYm = toYmIST(new Date());
   const [target, setTarget] = useState(() => parseInt(safeLocalStorage.getItem(targetStorageKey)) || 5000000);
   const [isEditing, setIsEditing] = useState(false);
 
@@ -1075,7 +1091,7 @@ const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_tar
 
     leads.forEach((l) => {
       const amt = parseInt(l.loanAmount) || 0;
-      if (l.status === "Payment Done" && isThisMonth(l.loanDetails?.paymentDate || l.createdAt)) {
+      if (l.status === "Payment Done" && isOnYmIST(l.loanDetails?.paymentDate || l.createdAt, currentYm)) {
         achieved += amt;
       } else if (!["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)) {
         if (["Statements Not Received", "Contact Details Not Received", "Interest Rate Issue"].includes(l.status)) {
@@ -1087,7 +1103,7 @@ const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_tar
     });
 
     return { achieved, pipeline, stuck };
-  }, [leads]);
+  }, [leads, currentYm]);
 
   const percentage = Math.min(100, Math.round((stats.achieved / target) * 100));
   const gap = target - stats.achieved;
@@ -1728,6 +1744,16 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
   const [aiLanguage, setAiLanguage] = useState(ai?.language || "English");
 
   const monthlyTarget = parseInt(safeLocalStorage.getItem(targetStorageKey)) || 5000000;
+  const currentYm = toYmIST(new Date());
+  const achievedThisMonth = useMemo(() => {
+    let achieved = 0;
+    leads.forEach((l) => {
+      if (l.status !== "Payment Done") return;
+      const amt = parseInt(l.loanAmount) || 0;
+      if (isOnYmIST(l.loanDetails?.paymentDate || l.createdAt, currentYm)) achieved += amt;
+    });
+    return achieved;
+  }, [leads, currentYm]);
 
   const reportData = useMemo(() => {
     const now = new Date();
@@ -2140,12 +2166,12 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
             </div>
             <div className="flex-1">
               <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Achieved Volume</div>
-              <div className="text-2xl font-extrabold text-emerald-600">{formatCompactCurrency(reportData.closedVolume)}</div>
+              <div className="text-2xl font-extrabold text-emerald-600">{formatCompactCurrency(achievedThisMonth)}</div>
             </div>
             <div className="flex-1">
               <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Pending to Goal</div>
-              <div className={`text-2xl font-extrabold ${monthlyTarget - reportData.closedVolume > 0 ? "text-orange-600" : "text-green-600"}`}>
-                {monthlyTarget - reportData.closedVolume > 0 ? formatCompactCurrency(monthlyTarget - reportData.closedVolume) : "Goal Reached!"}
+              <div className={`text-2xl font-extrabold ${monthlyTarget - achievedThisMonth > 0 ? "text-orange-600" : "text-green-600"}`}>
+                {monthlyTarget - achievedThisMonth > 0 ? formatCompactCurrency(monthlyTarget - achievedThisMonth) : "Goal Reached!"}
               </div>
             </div>
           </div>
