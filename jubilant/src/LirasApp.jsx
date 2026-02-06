@@ -6756,12 +6756,24 @@ export default function LirasApp({ backend = null }) {
     );
   }
 
+  const normalizeBootstrapError = (message) => {
+    const msg = String(message || "").trim();
+    if (!msg) return msg;
+    if (/stack depth limit exceeded/i.test(msg)) {
+      return [
+        "Supabase database policy recursion detected (stack depth limit exceeded).",
+        "Fix: update your Supabase RLS helper function `public.is_admin()` to be SECURITY DEFINER (see SUPABASE_SETUP.md), then retry.",
+      ].join(" ");
+    }
+    return msg;
+  };
+
   if (backendEnabled && bootstrapError) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
         <div className="w-full max-w-md bg-white border border-red-200 rounded-2xl p-6 shadow-sm">
           <div className="text-lg font-bold text-red-700">Couldn’t load data</div>
-          <div className="text-sm text-slate-600 mt-2">{bootstrapError}</div>
+          <div className="text-sm text-slate-600 mt-2">{normalizeBootstrapError(bootstrapError)}</div>
           <div className="mt-5 flex gap-2">
             <button onClick={() => window.location.reload()} className="flex-1 bg-slate-900 hover:bg-black text-white py-2 rounded-lg font-bold">
               Retry

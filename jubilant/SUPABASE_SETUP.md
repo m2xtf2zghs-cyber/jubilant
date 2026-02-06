@@ -72,12 +72,17 @@ create or replace function public.is_admin()
 returns boolean
 language sql
 stable
+security definer
+set search_path = public
 as $$
   select exists (
     select 1 from public.profiles p
     where p.user_id = auth.uid() and p.role = 'admin'
   );
 $$;
+
+-- Ensure logged-in users can execute the helper in RLS policies
+grant execute on function public.is_admin() to authenticated;
 
 -- Mediators (private per staff via owner_id)
 create table if not exists public.mediators (
