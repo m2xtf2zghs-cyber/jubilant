@@ -3829,6 +3829,201 @@ const EnhancedMediatorReport = ({ mediator, leads, onBack }) => {
   );
 };
 
+const ClearancePrintReport = ({ leads, mediators, onBack }) => {
+  const now = new Date();
+  const todayYmd = toYmdIST(now);
+
+  const pendingReviews = useMemo(() => {
+    return (leads || []).filter((l) => l?.status === "Meeting Scheduled" && l?.nextFollowUp && new Date(l.nextFollowUp) <= now);
+  }, [leads, now]);
+
+  const dailyPending = useMemo(() => {
+    return (leads || []).filter(
+      (l) =>
+        l &&
+        !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status) &&
+        (!l.notes?.length || !isTodayIST(l.notes[l.notes.length - 1].date))
+    );
+  }, [leads]);
+
+  const fmtIst = (d) => (d ? new Date(d).toLocaleString("en-IN", { timeZone: BRAND.tz, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+
+  const resolveMediatorName = (lead) => {
+    const id = lead?.mediatorId;
+    if (!id) return "—";
+    return mediators?.find?.((m) => m.id === id)?.name || "—";
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-6 md:p-10">
+      <div className="print:hidden flex justify-between items-center gap-3 mb-6">
+        <button onClick={onBack} className="btn-secondary px-4 py-2">
+          <ArrowLeft size={16} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `Clearance_Report_${todayYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-5 py-2"
+        >
+          <Printer size={16} /> Print PDF
+        </button>
+      </div>
+
+      <div className="surface-solid p-7 md:p-9 shadow-elevated min-h-[297mm] print:shadow-none print:border-0">
+        <ReportBrandHeader
+          title="Clearance Report"
+          subtitle="Meetings completed + End-of-day pending updates (IST)"
+          metaRight={
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Date (IST)</div>
+              <div className="text-slate-900">{todayYmd}</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Generated</div>
+              <div className="text-slate-900">{new Date().toLocaleString("en-IN", { timeZone: BRAND.tz })}</div>
+            </div>
+          }
+        />
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+          <div className="surface-solid p-4">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Past Meetings</div>
+            <div className="text-3xl font-extrabold text-slate-900 mt-1">{pendingReviews.length}</div>
+          </div>
+          <div className="surface-solid p-4">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">EOD Pending</div>
+            <div className="text-3xl font-extrabold text-slate-900 mt-1">{dailyPending.length}</div>
+          </div>
+          <div className="surface-solid p-4">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Total Open Items</div>
+            <div className="text-3xl font-extrabold text-indigo-700 mt-1">{pendingReviews.length + dailyPending.length}</div>
+          </div>
+          <div className="surface-solid p-4">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Priority</div>
+            <div className="text-[11px] text-slate-700 font-bold mt-2">Meetings → EOD updates</div>
+          </div>
+        </div>
+
+        <div className="space-y-8">
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <AlertTriangle size={16} className="text-rose-600" /> Meetings: Action Required
+              </div>
+              <div className="chip">{pendingReviews.length}</div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
+                  <tr>
+                    <th className="p-4">Client</th>
+                    <th className="p-4">Partner</th>
+                    <th className="p-4">Scheduled</th>
+                    <th className="p-4">Status</th>
+                    <th className="p-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {pendingReviews.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" className="p-6 text-center text-slate-500 italic">
+                        No past meetings pending.
+                      </td>
+                    </tr>
+                  ) : (
+                    pendingReviews
+                      .slice()
+                      .sort((a, b) => new Date(a.nextFollowUp).getTime() - new Date(b.nextFollowUp).getTime())
+                      .map((l) => (
+                        <tr key={l.id} className="hover:bg-slate-50 print:break-inside-avoid">
+                          <td className="p-4">
+                            <div className="font-extrabold text-slate-900">{l.name}</div>
+                            <div className="text-xs text-slate-500 mt-1">{l.company || l.location || "—"}</div>
+                          </td>
+                          <td className="p-4 text-slate-700 font-bold">{resolveMediatorName(l)}</td>
+                          <td className="p-4 font-mono text-xs text-slate-600 whitespace-nowrap">{fmtIst(l.nextFollowUp)}</td>
+                          <td className="p-4">
+                            <span className={`text-[10px] px-2 py-1 rounded font-extrabold uppercase ${STATUS_CONFIG[l.status]?.color || "bg-slate-100 text-slate-700"}`}>
+                              {l.status}
+                            </span>
+                          </td>
+                          <td className="p-4 text-right font-mono font-extrabold text-slate-800">{formatCompactCurrency(l.loanAmount)}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <Clock size={16} className="text-orange-600" /> End of Day Pending Updates
+              </div>
+              <div className="chip">{dailyPending.length}</div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
+                  <tr>
+                    <th className="p-4">Client</th>
+                    <th className="p-4">Status</th>
+                    <th className="p-4">Next Action</th>
+                    <th className="p-4">Last Update</th>
+                    <th className="p-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dailyPending.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" className="p-6 text-center text-slate-500 italic">
+                        All good — no pending updates for today.
+                      </td>
+                    </tr>
+                  ) : (
+                    dailyPending
+                      .slice()
+                      .sort((a, b) => new Date(a.nextFollowUp).getTime() - new Date(b.nextFollowUp).getTime())
+                      .map((l) => {
+                        const last = l.notes?.length ? l.notes[l.notes.length - 1] : null;
+                        return (
+                          <tr key={l.id} className="hover:bg-slate-50 print:break-inside-avoid">
+                            <td className="p-4">
+                              <div className="font-extrabold text-slate-900">{l.name}</div>
+                              <div className="text-xs text-slate-500 mt-1">{l.company || l.location || "—"}</div>
+                            </td>
+                            <td className="p-4">
+                              <span className={`text-[10px] px-2 py-1 rounded font-extrabold uppercase ${STATUS_CONFIG[l.status]?.color || "bg-slate-100 text-slate-700"}`}>
+                                {l.status}
+                              </span>
+                            </td>
+                            <td className="p-4 font-mono text-xs text-slate-600 whitespace-nowrap">{fmtIst(l.nextFollowUp)}</td>
+                            <td className="p-4 text-xs text-slate-600">
+                              <div className="font-mono whitespace-nowrap">{last?.date ? fmtIst(last.date) : "—"}</div>
+                              {last?.text ? <div className="mt-1 text-[11px] text-slate-500 truncate max-w-[360px]">{String(last.text).replace(/\s+/g, " ").trim()}</div> : null}
+                            </td>
+                            <td className="p-4 text-right font-mono font-extrabold text-slate-800">{formatCompactCurrency(l.loanAmount)}</td>
+                          </tr>
+                        );
+                      })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-10 text-center text-[11px] text-slate-400 print:mt-12">
+          Confidential • {BRAND.name} • {BRAND.product}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" }) => {
   const [dateYmd, setDateYmd] = useState(() => toYmdIST(new Date()));
   const [userFilter, setUserFilter] = useState("all"); // userId | "all"
@@ -3887,6 +4082,8 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       const m = raw.match(/^\s*\[([^\]]+)\]/);
       const tag = (m?.[1] || "").trim();
       const tagUpper = tag.toUpperCase();
+      if (tagUpper.startsWith("CALL")) return { kind: "call", label: "Call" };
+      if (tagUpper.startsWith("WHATSAPP")) return { kind: "whatsapp", label: "WhatsApp" };
       if (tagUpper.startsWith("PAYMENT DONE")) return { kind: "payment", label: "Payment Done" };
       if (tagUpper.startsWith("REJECTION")) return { kind: "rejection", label: "Rejection" };
       if (tagUpper.startsWith("CHECK-IN")) return { kind: "checkin", label: "Check-in" };
@@ -3990,9 +4187,9 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
     });
     mediatorHistoryEvents.forEach((e) => events.push(e));
 
-    const calls = mediatorHistoryEvents.filter((e) => e.type === "call").length;
-    const whatsapp = mediatorHistoryEvents.filter((e) => e.type === "whatsapp").length;
-    const partnerMeetings = mediatorHistoryEvents.filter((e) => e.type === "meeting").length;
+    const calls = events.filter((e) => e.type === "call").length;
+    const whatsapp = events.filter((e) => e.type === "whatsapp").length;
+    const partnerMeetings = events.filter((e) => e.type === "meeting").length;
 
     const leadsUpdated = leadsTouched.size;
     const checkins = events.filter((e) => e.type === "checkin").length;
@@ -4140,7 +4337,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
             <div className="text-[11px] text-emerald-700 mt-1">{formatCompactCurrency(totals.paymentVolume)}</div>
           </div>
           <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Partner Calls</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Calls</div>
             <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.calls}</div>
           </div>
           <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
@@ -4148,7 +4345,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
             <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.whatsapp}</div>
           </div>
           <div className="bg-white/80 p-4 rounded-xl border border-slate-200/60">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Partner Meetings</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Meetings</div>
             <div className="text-2xl font-extrabold text-slate-900 mt-1">{totals.partnerMeetings}</div>
           </div>
         </div>
@@ -4565,7 +4762,7 @@ const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, on
 
 // --- Lead/Report Components (from original app) ---
 
-const LeadCard = ({ lead, onClick, mediators }) => {
+const LeadCard = ({ lead, onClick, mediators, onUpdateLead }) => {
   const statusInfo = STATUS_CONFIG[lead.status] || STATUS_CONFIG.New;
   const score = calculateLeadScore(lead);
   const daysDiff = getDaysDiff(lead.nextFollowUp);
@@ -4573,6 +4770,13 @@ const LeadCard = ({ lead, onClick, mediators }) => {
   const mediator = mediators.find((m) => m.id === lead.mediatorId);
   const isActive = !["Deal Closed", "Payment Done", "Not Eligible", "Not Reliable"].includes(lead.status);
   const tags = Array.isArray(lead.documents?.tags) ? lead.documents.tags : [];
+
+  const logNote = (text) => {
+    if (!lead?.id) return;
+    if (typeof onUpdateLead !== "function") return;
+    const nowIso = new Date().toISOString();
+    onUpdateLead(lead.id, { notes: [...(lead.notes || []), { text, date: nowIso }] });
+  };
 
   return (
     <div
@@ -4639,6 +4843,7 @@ const LeadCard = ({ lead, onClick, mediators }) => {
             onClick={(e) => {
               e.stopPropagation();
               if (!lead.phone) alert("No phone number for this client");
+              if (lead.phone) logNote("[WHATSAPP]: Opened client chat");
             }}
             className={`flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs py-1.5 rounded-xl flex items-center justify-center gap-1 transition-colors font-medium border border-emerald-200 ${
               !lead.phone && "opacity-50 cursor-not-allowed"
@@ -4651,7 +4856,10 @@ const LeadCard = ({ lead, onClick, mediators }) => {
               href={`https://wa.me/${mediator.phone}?text=${encodeURIComponent(`Hello ${mediator.name}, regarding your client ${lead.name}: Is there any update on the requirement today?`)}`}
               target="_blank"
               rel="noreferrer"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                logNote(`[WHATSAPP]: Opened partner chat (${mediator.name})`);
+              }}
               className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs py-1.5 rounded-xl flex items-center justify-center gap-1 transition-colors font-medium border border-indigo-200"
             >
               <Users size={12} /> Ask Partner
@@ -5762,10 +5970,46 @@ const LeadActionModal = ({
               onChange={(e) => onUpdate(lead.id, { name: e.target.value })}
               placeholder="Client Name"
             />
+            <button
+              type="button"
+              onClick={() => {
+                if (!lead.phone) return;
+                const startedAt = new Date().toISOString();
+                onUpdate(lead.id, { notes: [...(lead.notes || []), { text: "[CALL]: Dialed client", date: startedAt }] });
+                if (androidApp) {
+                  try {
+                    safeLocalStorage.setItem(
+                      "liras_pending_call_v1",
+                      JSON.stringify({
+                        kind: "lead",
+                        leadId: lead.id,
+                        phone: lead.phone,
+                        startedAt,
+                        ts: startedAt,
+                      })
+                    );
+                  } catch {
+                    // ignore
+                  }
+                }
+                window.location.href = `tel:${String(lead.phone).replace(/[^\d+]/g, "")}`;
+              }}
+              className={`text-indigo-600 hover:text-indigo-700 transition-colors bg-indigo-50 p-2 rounded-full ${
+                !lead.phone ? "opacity-50 pointer-events-none" : ""
+              }`}
+              title={lead.phone ? (androidApp ? "Call (auto-log)" : "Call") : "No phone number"}
+            >
+              <Phone size={20} />
+            </button>
             <a
               href={lead.phone ? `https://wa.me/${lead.phone}` : "#"}
               target="_blank"
               rel="noreferrer"
+              onClick={() => {
+                if (!lead.phone) return;
+                const nowIso = new Date().toISOString();
+                onUpdate(lead.id, { notes: [...(lead.notes || []), { text: "[WHATSAPP]: Opened client chat", date: nowIso }] });
+              }}
               className={`text-green-500 hover:text-green-600 transition-colors bg-green-50 p-2 rounded-full ${!lead.phone ? "opacity-50 pointer-events-none" : ""}`}
             >
               <MessageCircle size={20} />
@@ -6747,11 +6991,7 @@ export default function LirasApp({ backend = null }) {
 
   const savePendingCallOutcome = () => {
     const pending = pendingCall && typeof pendingCall === "object" ? pendingCall : null;
-    const mediatorId = pending?.mediatorId ? String(pending.mediatorId) : "";
-    if (!mediatorId) {
-      dismissPendingCall();
-      return;
-    }
+    const kind = String(pending?.kind || (pending?.leadId ? "lead" : pending?.mediatorId ? "mediator" : "")).toLowerCase();
 
     const ts = pending?.ts || pending?.startedAt || null;
     const endedAt = new Date();
@@ -6760,6 +7000,30 @@ export default function LirasApp({ backend = null }) {
     const endedTime = formatTimeIST(endedAt);
     const outcome = String(callOutcomeForm.outcome || "connected");
     const notes = String(callOutcomeForm.notes || "").trim();
+
+    if (kind === "lead") {
+      const leadId = pending?.leadId ? String(pending.leadId) : "";
+      if (!leadId) {
+        dismissPendingCall();
+        return;
+      }
+      const outcomeLabel = outcome.replace(/_/g, " ");
+      const extra = notes ? ` • ${notes}` : "";
+      const phone = pending?.phone ? ` • ${String(pending.phone).replace(/[^\d+]/g, "")}` : "";
+      const text = `[CALL]: Outcome=${outcomeLabel}${phone}${extra}`;
+      const lead = leads.find((l) => l.id === leadId);
+      if (lead) {
+        updateLead(leadId, { notes: [...(lead.notes || []), { text, date: endedAtIso }] });
+      }
+      dismissPendingCall();
+      return;
+    }
+
+    const mediatorId = pending?.mediatorId ? String(pending.mediatorId) : "";
+    if (!mediatorId) {
+      dismissPendingCall();
+      return;
+    }
 
     let updatedMediator = null;
     setMediators((prev) =>
@@ -7252,6 +7516,9 @@ export default function LirasApp({ backend = null }) {
       <EodActivityReport mode="daily" leads={leads} mediators={mediators} staffUsers={staffUsers} onBack={() => setReportType(null)} />
     );
   }
+  if (reportType === "clearance_pdf") {
+    return <ClearancePrintReport leads={leads} mediators={mediators} onBack={() => setReportType(null)} />;
+  }
   if (reportType && ["daily", "monthly", "quarterly"].includes(reportType)) {
     return <EnhancedProfessionalReport type={reportType} leads={leads} mediators={mediators} ai={ai} onBack={() => setReportType(null)} />;
   }
@@ -7324,16 +7591,22 @@ export default function LirasApp({ backend = null }) {
         } md:translate-x-0 transition-transform z-20 flex flex-col shadow-2xl border-r border-white/10 print:hidden`}
       >
         <div className="p-6 border-b border-slate-800 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold text-white tracking-tight">
-              {BRAND.name.split(" ")[0]} <span className="text-indigo-500">{BRAND.name.split(" ").slice(1).join(" ")}</span>
-            </h1>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="chip bg-white/10 border-white/10 text-slate-200/80">LIRAS v4.06</span>
-              <span className={`chip bg-white/10 border-white/10 ${backendEnabled ? "text-emerald-200/90" : "text-slate-200/80"}`}>
-                {backendEnabled ? "Cloud" : "Offline"}
-              </span>
-              {isAdmin && <span className="chip bg-white/10 border-white/10 text-indigo-200/90">Admin</span>}
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="shrink-0 mt-0.5">
+              <BrandMark size={34} className="opacity-95" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold text-white tracking-tight truncate">
+                {BRAND.name.split(" ")[0]}{" "}
+                <span className="text-indigo-400">{BRAND.name.split(" ").slice(1).join(" ")}</span>
+              </h1>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="chip bg-white/10 border-white/10 text-slate-200/80">{BRAND.product}</span>
+                <span className={`chip bg-white/10 border-white/10 ${backendEnabled ? "text-emerald-200/90" : "text-slate-200/80"}`}>
+                  {backendEnabled ? "Cloud" : "Offline"}
+                </span>
+                {isAdmin && <span className="chip bg-white/10 border-white/10 text-indigo-200/90">Admin</span>}
+              </div>
             </div>
           </div>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white p-2 -m-2 rounded-lg">
@@ -7582,15 +7855,34 @@ export default function LirasApp({ backend = null }) {
                     <div className="text-sm text-slate-600 mt-1">
                       Close loose ends: meetings that already happened, plus leads that need an update today.
                     </div>
-                  </div>
-                  <div className="hidden md:flex gap-2">
-                    <div className="surface-solid px-4 py-3">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Past Meetings</div>
-                      <div className="text-2xl font-extrabold text-slate-900 mt-1">{pendingReviews.length}</div>
+                    <div className="text-xs text-slate-500 mt-2">
+                      Date (IST): <span className="font-bold text-slate-900">{toYmdIST(new Date())}</span>
                     </div>
-                    <div className="surface-solid px-4 py-3">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">EOD Pending</div>
-                      <div className="text-2xl font-extrabold text-slate-900 mt-1">{dailyPending.length}</div>
+                  </div>
+                  <div className="flex flex-col items-end gap-3">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        className="btn-secondary px-3 py-2 text-sm"
+                        onClick={() => setReportType("clearance_pdf")}
+                      >
+                        <Printer size={16} /> Print Clearance PDF
+                      </button>
+                      {backendEnabled && isAdmin && (
+                        <button type="button" className="btn-secondary px-3 py-2 text-sm" onClick={() => setReportType("daily_activity")}>
+                          <History size={16} /> Daily Activity
+                        </button>
+                      )}
+                    </div>
+                    <div className="hidden md:flex gap-2">
+                      <div className="surface-solid px-4 py-3">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Past Meetings</div>
+                        <div className="text-2xl font-extrabold text-slate-900 mt-1">{pendingReviews.length}</div>
+                      </div>
+                      <div className="surface-solid px-4 py-3">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">EOD Pending</div>
+                        <div className="text-2xl font-extrabold text-slate-900 mt-1">{dailyPending.length}</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -7819,7 +8111,7 @@ export default function LirasApp({ backend = null }) {
                     ) : (
                       leads
                         .filter((l) => l.status === "Meeting Scheduled" && (isTodayIST(l.nextFollowUp) || isTomorrowIST(l.nextFollowUp)))
-                        .map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} />)
+                        .map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} onUpdateLead={updateLead} />)
                     )}
                   </div>
                 </div>
@@ -7827,7 +8119,7 @@ export default function LirasApp({ backend = null }) {
                   <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 pb-2 border-b">
                     <Clock className="text-slate-500" size={18} /> Recent Activity
                   </h3>
-                  <div className="space-y-3">{leads.slice(0, 5).map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} />)}</div>
+                  <div className="space-y-3">{leads.slice(0, 5).map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} onUpdateLead={updateLead} />)}</div>
                 </div>
               </div>
             </div>
@@ -7908,7 +8200,7 @@ export default function LirasApp({ backend = null }) {
                 </div>
               )}
               {displayLeads.map((l) => (
-                <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} />
+                <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} onUpdateLead={updateLead} />
               ))}
             </div>
           )}
@@ -8246,16 +8538,20 @@ export default function LirasApp({ backend = null }) {
       <Modal isOpen={isCallOutcomeOpen} onClose={dismissPendingCall} title="Call Outcome">
         {(() => {
           const pending = pendingCall && typeof pendingCall === "object" ? pendingCall : null;
-          const mediator = pending?.mediatorId ? mediators.find((m) => m.id === pending.mediatorId) : null;
+          const kind = String(pending?.kind || (pending?.leadId ? "lead" : pending?.mediatorId ? "mediator" : "")).toLowerCase();
+          const mediator = kind !== "lead" && pending?.mediatorId ? mediators.find((m) => m.id === pending.mediatorId) : null;
+          const leadForCall = kind === "lead" && pending?.leadId ? leads.find((l) => l.id === pending.leadId) : null;
+          const title = kind === "lead" ? leadForCall?.name || "Client Call" : mediator?.name || "Mediator Call";
+          const phone = pending?.phone || leadForCall?.phone || mediator?.phone || "—";
           return (
             <div className="space-y-4">
               <div className="surface-solid p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Auto-log</div>
                 <div className="text-lg font-extrabold text-slate-900 mt-1">
-                  {mediator?.name || "Mediator Call"}
+                  {title}
                 </div>
                 <div className="text-sm text-slate-600 mt-1">
-                  Phone: <span className="font-mono">{pending?.phone || mediator?.phone || "—"}</span>
+                  Phone: <span className="font-mono">{phone}</span>
                 </div>
                 {pending?.startedAt && (
                   <div className="text-xs text-slate-500 mt-2">

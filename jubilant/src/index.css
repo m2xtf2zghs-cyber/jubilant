@@ -22,6 +22,7 @@ body {
     --bg-bottom: 241 245 249; /* slate-100 */
     --brand: 79 70 229; /* indigo-600 */
     --brand-2: 37 99 235; /* blue-600 */
+    --gold: 202 162 74; /* #caa24a */
     --success: 16 185 129; /* emerald-500 */
     --danger: 239 68 68; /* red-500 */
   }
@@ -30,6 +31,7 @@ body {
     color: rgb(15 23 42);
     background:
       radial-gradient(1100px circle at 90% -10%, rgba(var(--brand), 0.14), transparent 55%),
+      radial-gradient(900px circle at 45% 0%, rgba(var(--gold), 0.10), transparent 58%),
       radial-gradient(900px circle at -10% 110%, rgba(var(--success), 0.10), transparent 55%),
       linear-gradient(to bottom, rgb(var(--bg-top)), rgb(var(--bg-bottom)));
     overflow-x: hidden;
@@ -65,10 +67,12 @@ body {
 @layer components {
   .surface {
     @apply bg-white/80 backdrop-blur-xl border border-slate-200/70 rounded-2xl shadow-soft;
+    @apply ring-1 ring-black/5;
   }
 
   .surface-solid {
     @apply bg-white border border-slate-200/70 rounded-2xl shadow-soft;
+    @apply ring-1 ring-black/5;
   }
 
   .btn-primary {
