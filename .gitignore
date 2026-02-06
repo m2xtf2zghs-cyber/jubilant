@@ -7,3 +7,6 @@
 # Local toolchains / caches
 .tools/
 .gradle/
+.local/
+.gradle-user-home/
+.npm-cache/

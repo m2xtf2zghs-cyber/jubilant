@@ -2,15 +2,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import "./index.css";
+import { Capacitor } from "@capacitor/core";
 
-// Android-only styling hook (no Capacitor import; uses global injected by native runtime)
-try {
-  const cap = globalThis?.Capacitor;
-  if (cap?.isNativePlatform?.() && cap?.getPlatform?.() === "android") {
-    document.documentElement.dataset.platform = "android";
-  }
-} catch {
-  // ignore
+// Android-only styling hook (native app only)
+if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+  document.documentElement.dataset.platform = "android";
 }
 
 class ErrorBoundary extends React.Component {

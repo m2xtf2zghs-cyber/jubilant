@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import Chart from "chart.js/auto";
 import { callAiAction } from "./ai/aiClient.js";
 import { deleteAttachmentBlob, getAttachmentBlob, putAttachmentBlob } from "./attachments/attachmentsStore.js";
 import { callAdminAction } from "./backend/adminClient.js";
 import { BRAND, BrandMark, ReportBrandHeader } from "./brand/Brand.jsx";
+import AndroidCrm from "./android/AndroidCrm.jsx";
 import {
   Activity,
   AlertCircle,
@@ -566,6 +568,34 @@ const SettingsModal = ({
   supabase,
   onUsersChanged,
 }) => {
+  const about = useMemo(() => {
+    const platform = (() => {
+      try {
+        return document.documentElement?.dataset?.platform === "android" ? "Android App" : "Web";
+      } catch {
+        return "Web";
+      }
+    })();
+
+    const origin = (() => {
+      try {
+        return window.location.origin || "";
+      } catch {
+        return "";
+      }
+    })();
+
+    const buildTimeLabel = (() => {
+      try {
+        return new Date(__BUILD_TIME__).toLocaleString("en-IN", { timeZone: BRAND.tz });
+      } catch {
+        return String(__BUILD_TIME__);
+      }
+    })();
+
+    return { platform, origin, buildTimeLabel, gitSha: String(__GIT_SHA__ || "") };
+  }, []);
+
   const handleResetLocal = () => {
     if (confirm("DANGER: This will delete ALL local data on this device. Are you sure?")) {
       if (confirm("Double Check: Have you downloaded a backup?")) {
@@ -780,6 +810,30 @@ const SettingsModal = ({
             </div>
           </div>
         )}
+
+        <div className="surface-solid p-4">
+          <h3 className="font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+            <HelpCircle size={18} className="text-slate-700" /> About This Build
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-700">
+            <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Platform</div>
+              <div className="mt-1 font-extrabold text-slate-900">{about.platform}</div>
+              <div className="mt-2 text-[10px] uppercase tracking-wider text-slate-500 font-bold">Mode</div>
+              <div className="mt-1 font-extrabold text-slate-900">{backendEnabled ? "Cloud" : "Offline"}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Build Time (IST)</div>
+              <div className="mt-1 font-extrabold text-slate-900">{about.buildTimeLabel}</div>
+              <div className="mt-2 text-[10px] uppercase tracking-wider text-slate-500 font-bold">Git SHA</div>
+              <div className="mt-1 font-mono font-bold text-slate-800">{about.gitSha || "—"}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white/70 p-3 md:col-span-2">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">URL</div>
+              <div className="mt-1 font-mono font-bold text-slate-800 break-all">{about.origin || "—"}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </Modal>
   );
@@ -6348,30 +6402,8 @@ export default function LirasApp({ backend = null }) {
   const currentUser = backendEnabled ? authUser?.email || "User" : "Admin";
   const onLogout = typeof backend?.onLogout === "function" ? backend.onLogout : null;
   const androidApp = useMemo(() => {
-    try {
-      const cap = globalThis?.Capacitor;
-      return Boolean(cap?.isNativePlatform?.() && cap?.getPlatform?.() === "android");
-    } catch {
-      return false;
-    }
+    return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
   }, []);
-  const [AndroidCrm, setAndroidCrm] = useState(null);
-
-  useEffect(() => {
-    if (!androidApp) return;
-    let cancelled = false;
-    import("./android/AndroidCrm.jsx")
-      .then((mod) => {
-        if (cancelled) return;
-        setAndroidCrm(() => mod.default);
-      })
-      .catch(() => {
-        // Android-only optional chunk; ignore if it fails to load.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [androidApp]);
 
   const [isBootstrapping, setIsBootstrapping] = useState(backendEnabled);
   const [bootstrapError, setBootstrapError] = useState("");
@@ -7706,23 +7738,14 @@ export default function LirasApp({ backend = null }) {
         <main className="flex-1 overflow-hidden relative">
           {androidApp && (activeView === "android_myday" || activeView === "android_tasks" || activeView === "android_partners") && (
             <div className="h-full overflow-y-auto">
-              {AndroidCrm ? (
-                <AndroidCrm
-                  route={activeView === "android_tasks" ? "tasks" : activeView === "android_partners" ? "partners" : "myday"}
-                  leads={leads}
-                  mediators={mediators}
-                  onFollowUp={handleMediatorFollowUp}
-                  onOpenLead={(l) => setActiveLead(l)}
-                  onNavigate={(next) => setActiveView(String(next || "android_myday"))}
-                />
-              ) : (
-                <div className="p-6">
-                  <div className="surface p-6">
-                    <div className="text-lg font-extrabold text-slate-900">Loading CRM…</div>
-                    <div className="text-sm text-slate-500 mt-1">Preparing Android-only tools</div>
-                  </div>
-                </div>
-              )}
+              <AndroidCrm
+                route={activeView === "android_tasks" ? "tasks" : activeView === "android_partners" ? "partners" : "myday"}
+                leads={leads}
+                mediators={mediators}
+                onFollowUp={handleMediatorFollowUp}
+                onOpenLead={(l) => setActiveLead(l)}
+                onNavigate={(next) => setActiveView(String(next || "android_myday"))}
+              />
             </div>
           )}
 
