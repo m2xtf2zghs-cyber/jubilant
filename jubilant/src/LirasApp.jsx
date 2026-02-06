@@ -77,7 +77,6 @@ import {
   X,
   XCircle,
   Zap,
-  Brain,
   Layers,
 } from "lucide-react";
 
@@ -552,148 +551,6 @@ const sanitizeMediator = (raw) => {
     createdBy: m.createdBy || undefined,
     createdAt: m.createdAt || undefined,
   };
-};
-
-// --- Founder Intelligence Overlay ---
-const FounderIntelligenceOverlay = ({ storageKey = "LIRAS_INTEL_V1" }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [state, setState] = useState(() => parseJson(safeLocalStorage.getItem(storageKey) || '{"rejections":[]}', { rejections: [] }));
-
-  useEffect(() => {
-    setState(parseJson(safeLocalStorage.getItem(storageKey) || '{"rejections":[]}', { rejections: [] }));
-  }, [storageKey]);
-
-  useEffect(() => {
-    safeLocalStorage.setItem(storageKey, JSON.stringify(state));
-  }, [state, storageKey]);
-
-  const timingCfg = { Chennai: { early: 20, opt: 75 }, Bangalore: { early: 15, opt: 60 }, Coimbatore: { early: 10, opt: 45 } };
-
-  const getTiming = (r) => {
-    const c = timingCfg[r.city] || { early: 15, opt: 60 };
-    const d = Math.floor((Date.now() - r.fundedAt) / 86400000);
-    if (d < c.early) return "TOO EARLY";
-    if (d <= c.opt) return "OPTIMAL";
-    return "TOO LATE";
-  };
-
-  const getScore = (r) => {
-    const d = Math.min(Math.floor((Date.now() - r.fundedAt) / 86400000), 90);
-    let s = (d / 90) * 40 + 20 + (r.conf / 5) * 15;
-    return Math.round(s);
-  };
-
-  const handleAdd = () => {
-    const cname = document.getElementById("intel_cname").value;
-    const city = document.getElementById("intel_city").value;
-    const mediator = document.getElementById("intel_mediator").value;
-    const competitor = document.getElementById("intel_competitor").value;
-
-    if (!cname) return alert("Client name required");
-
-    const newEntry = {
-      client: cname,
-      city: city,
-      mediator: mediator,
-      competitor: competitor,
-      fundedAt: Date.now() - 30 * 86400000,
-      conf: 4,
-    };
-
-    setState((prev) => ({ ...prev, rejections: [...prev.rejections, newEntry] }));
-
-    document.getElementById("intel_cname").value = "";
-    document.getElementById("intel_city").value = "";
-    document.getElementById("intel_mediator").value = "";
-  };
-
-  return (
-    <div className="fixed-overlay z-[9999]">
-      {!isOpen && (
-        <button
-          onClick={() => setIsOpen(true)}
-          className="fixed bottom-5 right-5 bg-slate-900 text-white px-4 py-2 rounded-full shadow-2xl hover:bg-black transition-all flex items-center gap-2 text-sm font-bold border border-slate-700"
-        >
-          <Brain size={16} /> Founder Intel
-        </button>
-      )}
-
-      {isOpen && (
-        <div className="fixed inset-10 md:inset-x-20 md:inset-y-20 bg-white rounded-2xl shadow-2xl p-6 border border-slate-200 overflow-hidden flex flex-col animate-slide-up">
-          <div className="flex justify-between items-start mb-4">
-            <div>
-              <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                <Brain className="text-purple-600" /> Founder Intelligence
-              </h2>
-              <p className="text-sm text-slate-500">Tracks rejected clients, survival probability, and competitor timing.</p>
-            </div>
-            <button onClick={() => setIsOpen(false)} className="p-2 hover:bg-slate-100 rounded-full">
-              <X size={20} />
-            </button>
-          </div>
-
-          <div className="flex flex-wrap gap-2 mb-6 p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <input id="intel_cname" placeholder="Client Name" className="flex-1 min-w-[150px] p-2 border rounded text-sm" />
-            <input id="intel_city" placeholder="City" className="flex-1 min-w-[100px] p-2 border rounded text-sm" />
-            <input id="intel_mediator" placeholder="Mediator" className="flex-1 min-w-[100px] p-2 border rounded text-sm" />
-            <select id="intel_competitor" className="p-2 border rounded text-sm">
-              <option>Private Lender</option>
-              <option>NBFC</option>
-              <option>Bank</option>
-              <option>Pricing Beat Us</option>
-              <option>Faster Disbursal</option>
-              <option>Unknown</option>
-            </select>
-            <button onClick={handleAdd} className="bg-slate-900 text-white px-4 py-2 rounded text-sm font-bold hover:bg-slate-800">
-              Add Rejection
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-100 text-xs uppercase text-slate-500 font-bold sticky top-0">
-                <tr>
-                  <th className="p-3">Client</th>
-                  <th className="p-3">City</th>
-                  <th className="p-3">Mediator</th>
-                  <th className="p-3">Days Since</th>
-                  <th className="p-3">Timing Analysis</th>
-                  <th className="p-3">Win Score</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {state.rejections.map((r, i) => (
-                  <tr key={i} className="hover:bg-slate-50">
-                    <td className="p-3 font-medium">{r.client}</td>
-                    <td className="p-3">{r.city}</td>
-                    <td className="p-3 text-slate-600">{r.mediator}</td>
-                    <td className="p-3 font-mono">{Math.floor((Date.now() - r.fundedAt) / 86400000)}</td>
-                    <td className="p-3">
-                      <span
-                        className={`text-[10px] px-2 py-1 rounded font-bold ${
-                          getTiming(r) === "OPTIMAL" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {getTiming(r)}
-                      </span>
-                    </td>
-                    <td className="p-3 font-bold">{getScore(r)}</td>
-                  </tr>
-                ))}
-                {state.rejections.length === 0 && (
-                  <tr>
-                    <td colSpan="6" className="p-8 text-center text-slate-400 italic">
-                      No intelligence data recorded yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 };
 
 // --- SETTINGS MODAL ---
@@ -7600,8 +7457,6 @@ export default function LirasApp({ backend = null }) {
 
   return (
     <div className="flex h-full safe-bottom">
-      <FounderIntelligenceOverlay />
-
       {isSidebarOpen && (
         <button
           type="button"
