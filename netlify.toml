@@ -7,6 +7,8 @@
 [build.environment]
   # Use a major version so Netlify selects an available Node 20.x build image.
   NODE_VERSION = "20"
+  # Ensure build tooling (Vite/Tailwind) installs even if NODE_ENV=production.
+  NPM_FLAGS = "--include=dev"
 
 [functions]
   node_bundler = "esbuild"
