@@ -1,14 +1,15 @@
 [build]
   base = "jubilant"
-  command = "npm run build"
+  # Run a fully deterministic install + build so deploy logs show the real failure.
+  command = "node -v && npm -v && npm_config_production=false npm ci --no-audit --no-fund && npm run build"
   publish = "dist"
   functions = "netlify/functions"
 
 [build.environment]
   # Use a major version so Netlify selects an available Node 20.x build image.
   NODE_VERSION = "20"
-  # Ensure build tooling (Vite/Tailwind) installs even if NODE_ENV=production.
-  NPM_FLAGS = "--include=dev"
+  # Skip Netlify's automatic dependency install; we do it in the build command above.
+  NETLIFY_SKIP_INSTALL = "true"
 
 [functions]
   node_bundler = "esbuild"
