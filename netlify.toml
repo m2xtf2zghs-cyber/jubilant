@@ -5,7 +5,8 @@
   functions = "netlify/functions"
 
 [build.environment]
-  NODE_VERSION = "20.12.2"
+  # Use a major version so Netlify selects an available Node 20.x build image.
+  NODE_VERSION = "20"
 
 [functions]
   node_bundler = "esbuild"
