@@ -7,8 +7,8 @@ __pycache__/
 *.pyc
 
 # Capacitor native projects
-android/
-ios/
+/android/
+/ios/
 
 # Logs
 npm-debug.log*
