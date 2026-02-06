@@ -5505,6 +5505,7 @@ const LeadActionModal = ({
   onConsumeInitialMode,
   canReassignOwner = false,
   staffUsers = [],
+  staffUsersError = "",
   onReassignOwner,
 }) => {
   const [showRejectForm, setShowRejectForm] = useState(false);
@@ -6314,20 +6315,42 @@ const LeadActionModal = ({
           {!showRejectForm && !showPaymentForm && canReassignOwner && (
             <div className="surface-solid p-3">
               <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Assigned To (Staff)</label>
-              <select
-                value={lead.ownerId || ""}
-                onChange={(e) => onReassignOwner?.(lead.id, e.target.value)}
-                className="w-full py-2 text-sm"
-              >
-                {staffUsers.map((u) => (
-                  <option key={u.userId} value={u.userId}>
-                    {u.label}
-                  </option>
-                ))}
-              </select>
-              <div className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                Reassigning moves the lead to that staff. The assigned partner will be copied if needed.
-              </div>
+              {(() => {
+                const options = Array.isArray(staffUsers) ? [...staffUsers] : [];
+                const currentOwnerId = lead.ownerId ? String(lead.ownerId) : "";
+                if (currentOwnerId && !options.some((u) => String(u.userId) === currentOwnerId)) {
+                  options.unshift({ userId: currentOwnerId, label: "Current owner (syncing…)" });
+                }
+
+                return (
+                  <select
+                    value={lead.ownerId || ""}
+                    onChange={(e) => onReassignOwner?.(lead.id, e.target.value)}
+                    className="w-full py-2 text-sm"
+                  >
+                    <option value="" disabled>
+                      — Select staff —
+                    </option>
+                    {options.map((u) => (
+                      <option key={u.userId} value={u.userId}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                );
+              })()}
+              <div className="text-[10px] text-slate-400 mt-2 leading-relaxed">Reassigning moves the lead to that staff. The assigned partner will be copied if needed.</div>
+              {staffUsersError ? (
+                <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-[10px] text-red-700 font-bold">
+                  Could not load staff list: {staffUsersError}
+                </div>
+              ) : staffUsers.length === 0 ? (
+                <div className="mt-2 rounded-lg border border-slate-200 bg-white/70 p-2 text-[10px] text-slate-600 font-bold">
+                  No staff accounts found yet. Create them from <span className="font-semibold">Data &amp; Settings → Admin: Manage Users</span>, then reopen this lead.
+                </div>
+              ) : (
+                <div className="mt-2 text-[10px] text-slate-400">Note: the staff device may need a refresh/logout-login to see newly assigned leads.</div>
+              )}
             </div>
           )}
 
@@ -6408,6 +6431,7 @@ export default function LirasApp({ backend = null }) {
   const [isBootstrapping, setIsBootstrapping] = useState(backendEnabled);
   const [bootstrapError, setBootstrapError] = useState("");
   const [staffUsers, setStaffUsers] = useState([]);
+  const [staffUsersError, setStaffUsersError] = useState("");
   const [staffReloadNonce, setStaffReloadNonce] = useState(0);
 
   const uuidv4 = () => {
@@ -6684,9 +6708,14 @@ export default function LirasApp({ backend = null }) {
     let cancelled = false;
 
     const loadStaff = async () => {
+      setStaffUsersError("");
       const { data, error } = await supabase.from("profiles").select("user_id,email,full_name,role").order("email", { ascending: true });
       if (cancelled) return;
-      if (error) return;
+      if (error) {
+        setStaffUsers([]);
+        setStaffUsersError(error.message || "Failed to load staff list");
+        return;
+      }
 
       const users = (data || [])
         .filter((p) => p.user_id && p.email)
@@ -6743,6 +6772,11 @@ export default function LirasApp({ backend = null }) {
   const activeMediatorForProfile = useMemo(() => mediators.find((m) => m.id === activeView), [mediators, activeView]);
 
   const leadSaveTimers = useRef(new Map());
+  const leadsRef = useRef(leads);
+
+  useEffect(() => {
+    leadsRef.current = leads;
+  }, [leads]);
 
   // Note: keep all hooks above any conditional returns to avoid React hook order errors.
   if (backendEnabled && isBootstrapping) {
@@ -6789,21 +6823,23 @@ export default function LirasApp({ backend = null }) {
     );
   }
 
-  const scheduleLeadPersist = (lead) => {
+  const scheduleLeadPersist = (leadId) => {
     if (!backendEnabled) return;
     const timers = leadSaveTimers.current;
-    const existing = timers.get(lead.id);
+    const existing = timers.get(leadId);
     if (existing) clearTimeout(existing);
 
     const timer = setTimeout(() => {
-      timers.delete(lead.id);
+      timers.delete(leadId);
+      const lead = (leadsRef.current || []).find((l) => l.id === leadId);
+      if (!lead) return;
       void (async () => {
-        const { error } = await supabase.from("leads").update(uiLeadToDbUpdate(lead)).eq("id", lead.id);
+        const { error } = await supabase.from("leads").update(uiLeadToDbUpdate(lead)).eq("id", leadId);
         if (error) console.error("Lead update failed", error);
       })();
     }, 600);
 
-    timers.set(lead.id, timer);
+    timers.set(leadId, timer);
   };
 
   const addLead = (data) => {
@@ -6859,14 +6895,13 @@ export default function LirasApp({ backend = null }) {
     }
   };
 
-  const updateLead = (id, updates) => {
-    const existing = leads.find((l) => l.id === id);
-    const nextLead = existing ? { ...existing, ...updates } : null;
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...updates } : l)));
-    if (activeLead && activeLead.id === id) setActiveLead((prev) => ({ ...prev, ...updates }));
+  const updateLead = (id, updates, opts = {}) => {
+    const skipBackend = !!opts.skipBackend;
+    setLeads((prev) => (prev || []).map((l) => (l.id === id ? { ...l, ...updates } : l)));
+    setActiveLead((prev) => (prev && prev.id === id ? { ...prev, ...updates } : prev));
 
-    if (backendEnabled && nextLead) {
-      scheduleLeadPersist(nextLead);
+    if (!skipBackend && backendEnabled) {
+      scheduleLeadPersist(id);
     }
   };
 
@@ -7063,10 +7098,12 @@ export default function LirasApp({ backend = null }) {
 
   const reassignLeadOwner = async (leadId, newOwnerId) => {
     if (!backendEnabled || !isAdmin) return;
-    if (!newOwnerId) return;
+    const targetOwnerId = String(newOwnerId || "").trim();
+    if (!targetOwnerId) return;
 
     const lead = leads.find((l) => l.id === leadId);
     if (!lead) return;
+    const prevLead = lead;
 
     let nextMediatorId = lead.mediatorId || "3";
 
@@ -7080,7 +7117,7 @@ export default function LirasApp({ backend = null }) {
         const existing = await supabase
           .from("mediators")
           .select("*")
-          .eq("owner_id", newOwnerId)
+          .eq("owner_id", targetOwnerId)
           .eq("name", currentMediator.name)
           .eq("phone", phone)
           .limit(1)
@@ -7096,7 +7133,7 @@ export default function LirasApp({ backend = null }) {
         } else {
           const clone = {
             id: uuidv4(),
-            ownerId: newOwnerId,
+            ownerId: targetOwnerId,
             createdBy: authUser.id,
             name: currentMediator.name,
             phone,
@@ -7116,7 +7153,29 @@ export default function LirasApp({ backend = null }) {
       }
     }
 
-    updateLead(leadId, { ownerId: newOwnerId, mediatorId: nextMediatorId });
+    // Optimistically update UI first (skip debounced backend write) then commit immediately.
+    updateLead(leadId, { ownerId: targetOwnerId, mediatorId: nextMediatorId }, { skipBackend: true });
+
+    const { data: row, error } = await supabase
+      .from("leads")
+      .update({
+        owner_id: targetOwnerId,
+        mediator_id: nextMediatorId && nextMediatorId !== "3" ? nextMediatorId : null,
+      })
+      .eq("id", leadId)
+      .select("*")
+      .single();
+
+    if (error) {
+      setLeads((prev) => (prev || []).map((l) => (l.id === leadId ? prevLead : l)));
+      setActiveLead((prev) => (prev && prev.id === leadId ? prevLead : prev));
+      alert(`Could not reassign lead: ${error.message}`);
+      return;
+    }
+
+    const updatedLead = dbLeadToUi(row);
+    setLeads((prev) => (prev || []).map((l) => (l.id === leadId ? updatedLead : l)));
+    setActiveLead((prev) => (prev && prev.id === leadId ? updatedLead : prev));
   };
 
   const exportCSV = () => {
@@ -8446,6 +8505,7 @@ export default function LirasApp({ backend = null }) {
             onConsumeInitialMode={() => setLeadModalInitialMode(null)}
             canReassignOwner={backendEnabled && isAdmin}
             staffUsers={staffUsers}
+            staffUsersError={staffUsersError}
             onReassignOwner={(leadId, newOwnerId) => void reassignLeadOwner(leadId, newOwnerId)}
           />
         )}
