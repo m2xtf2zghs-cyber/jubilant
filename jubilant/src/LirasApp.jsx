@@ -5484,6 +5484,7 @@ const LoanDetailsEditor = ({ lead, onUpdate }) => {
             <option value="Daily">Daily</option>
             <option value="Weekly">Weekly</option>
             <option value="Bi-Weekly">Bi-Weekly</option>
+            <option value="Bi-Monthly">Bi-Monthly (15 days)</option>
             <option value="Monthly">Monthly</option>
           </select>
         </div>
@@ -5642,28 +5643,54 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
   const [givenAmount, setGivenAmount] = useState(lead.loanAmount || 0);
   const [interest, setInterest] = useState(0);
   const [months, setMonths] = useState(12);
+  const [frequency, setFrequency] = useState("monthly");
 
   const computedPrincipal = (Number(givenAmount) || 0) + (Number(interest) || 0);
 
   const rate = useMemo(() => {
-    const p = Number(computedPrincipal);
-    const i = Number(interest);
-    const m = Number(months);
-    if (!p || !m) return "0.00";
-    const result = (i / p) / ((m + 1) / 2) * 100;
+    const given = Number(givenAmount);
+    const weeks = Number(months); // keep variable name `weeks` for non-monthly formulas
+    const f = String(frequency || "monthly").toLowerCase();
+
+    // Preserved monthly logic (do not change).
+    if (f === "monthly") {
+      if (!(given > 0) || !(weeks > 0)) return "0.00";
+      const result = (Number(interest) / given) / ((weeks + 1) / 2) * 100;
+      return isFinite(result) ? result.toFixed(2) : "0.00";
+    }
+
+    if (!(given > 0) || !(weeks > 0)) return "0.00";
+
+    const daysMap = {
+      weekly: 7,
+      biweekly: 14,
+      bimonthly: 15, // every 15 days (two EMIs per month)
+    };
+    const DAYS = daysMap[f];
+    if (!DAYS) return "0.00";
+
+    const result = (Number(interest) / given) / ((weeks + 1) / 2) / DAYS * 3000;
     return isFinite(result) ? result.toFixed(2) : "0.00";
-  }, [computedPrincipal, interest, months]);
+  }, [givenAmount, interest, months, frequency]);
 
   // Business rule: Net Cash Out is Principal (= Given + Upfront interest)
   const netCashOut = computedPrincipal;
 
   const handleSubmit = () => {
     if (Number(givenAmount) <= 0) return alert("Given amount required.");
+    const frequencyLabel = (() => {
+      const f = String(frequency || "monthly").toLowerCase();
+      if (f === "weekly") return "Weekly";
+      if (f === "biweekly") return "Bi-Weekly";
+      if (f === "bimonthly") return "Bi-Monthly";
+      return "Monthly";
+    })();
     onConfirm({
       givenAmount: Number(givenAmount),
       principal: Number(computedPrincipal),
       interest: Number(interest),
       months: Number(months),
+      frequency: frequencyLabel,
       netDisbursed: Number(netCashOut),
       rate,
     });
@@ -5708,14 +5735,25 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
           Principal (Given + interest): <span className="font-extrabold text-slate-800">{formatCurrency(computedPrincipal)}</span>
         </div>
 
-        <div>
-          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Duration (Months)</label>
-          <input
-            type="number"
-            value={months}
-            onChange={(e) => setMonths(e.target.value)}
-            className="w-full py-2 text-lg font-bold"
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Frequency</label>
+            <select value={frequency} onChange={(e) => setFrequency(e.target.value)} className="w-full py-2 font-bold">
+              <option value="monthly">Monthly</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Bi-Weekly</option>
+              <option value="bimonthly">Bi-Monthly (15 days)</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Duration (Months)</label>
+            <input
+              type="number"
+              value={months}
+              onChange={(e) => setMonths(e.target.value)}
+              className="w-full py-2 text-lg font-bold"
+            />
+          </div>
         </div>
 
         <div className="surface-solid p-4 flex justify-between items-center">
@@ -6244,7 +6282,7 @@ const LeadActionModal = ({
         // Business rule: Net Cash Out is Principal (= Given + Upfront interest)
         netDisbursed: principal,
         tenure: data.months,
-        frequency: "Monthly",
+        frequency: data.frequency || "Monthly",
         rate: data.rate,
         paymentDate: today,
       },
@@ -6256,7 +6294,7 @@ const LeadActionModal = ({
             interest
           )}. Principal ${formatCurrency(principal)}. Net Cash Out ${formatCurrency(principal)}. Terms: ${
             data.months
-          }m @ ${data.rate}% rate. Follow-up set for 50% term (${new Date(followUpDate).toLocaleDateString()})`,
+          }m (${data.frequency || "Monthly"}) @ ${data.rate}% rate. Follow-up set for 50% term (${new Date(followUpDate).toLocaleDateString()})`,
           date: today,
         },
       ],
