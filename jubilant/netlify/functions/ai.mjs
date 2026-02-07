@@ -101,7 +101,14 @@ const geminiGenerateText = async ({ apiKey, model, prompt, temperature = 0.2, ma
 
   const raw = await res.text();
   if (!res.ok) {
-    return { ok: false, status: res.status, error: `Gemini error (${res.status}): ${raw.slice(0, 500)}` };
+    const parsed = safeJsonParse(raw);
+    const apiMessage = parsed?.error?.message ? String(parsed.error.message) : "";
+    const details = (apiMessage || raw || "").slice(0, 500);
+    const prefix =
+      res.status === 429
+        ? "Gemini quota exceeded (check billing / rate limits in Google AI Studio)."
+        : `Gemini error (${res.status})`;
+    return { ok: false, status: res.status, error: `${prefix} ${details}`.trim() };
   }
 
   const data = safeJsonParse(raw);
@@ -370,13 +377,32 @@ export async function handler(event) {
     return json(400, { ok: false, error: "Unknown action." });
   }
 
-  const modelCandidates = process.env.GEMINI_MODEL
-    ? [geminiModel]
-    : [
-        geminiModel, // default
-        "gemini-2.0-flash-lite",
-        "gemini-2.5-flash",
-      ];
+  // Robust model fallback:
+  // - If a user sets GEMINI_MODEL to an older/invalid name, we still try known working models.
+  // - We only fall back when the API returns 404 (model not found / not supported).
+  const uniqueModels = (list) => {
+    const seen = new Set();
+    const out = [];
+    for (const m of list) {
+      const v = String(m || "").trim();
+      if (!v) continue;
+      const key = v.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(v);
+    }
+    return out;
+  };
+
+  const modelCandidates = uniqueModels([
+    geminiModel, // configured/default
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+  ]);
 
   let gen = null;
   for (const candidate of modelCandidates) {

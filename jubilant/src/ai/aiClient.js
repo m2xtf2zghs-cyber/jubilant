@@ -1,6 +1,6 @@
-const AI_FN_PATH = "/.netlify/functions/ai";
+import { getFunctionsBaseUrl } from "../backend/functionsBase.js";
 
-const normalizeBase = (base) => String(base || "").trim().replace(/\/+$/, "");
+const AI_FN_PATH = "/.netlify/functions/ai";
 
 const isHttpOrigin = () => {
   try {
@@ -11,7 +11,7 @@ const isHttpOrigin = () => {
 };
 
 export const getAiFunctionUrl = () => {
-  const base = normalizeBase(import.meta.env.VITE_AI_BASE_URL);
+  const base = getFunctionsBaseUrl();
   if (base) return `${base}${AI_FN_PATH}`;
   return AI_FN_PATH;
 };
@@ -21,7 +21,9 @@ export async function callAiAction({ supabase, action, payload = {}, tone = "par
 
   const url = getAiFunctionUrl();
   if (!url.startsWith("http") && !isHttpOrigin()) {
-    throw new Error("AI endpoint not configured for mobile. Set VITE_AI_BASE_URL to your Netlify site URL and rebuild the app.");
+    throw new Error(
+      "AI endpoint not configured for mobile. Set VITE_FUNCTIONS_BASE_URL (or VITE_AI_BASE_URL) to your Netlify site URL, or set it in Settings → About this build."
+    );
   }
 
   const sessionRes = await supabase.auth.getSession();
@@ -54,4 +56,3 @@ export async function callAiAction({ supabase, action, payload = {}, tone = "par
   if (!data?.text) throw new Error("AI returned empty response");
   return String(data.text);
 }
-

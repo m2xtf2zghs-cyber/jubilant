@@ -11,26 +11,49 @@ const parseJson = (raw, fallback) => {
   }
 };
 
+const TZ = "Asia/Kolkata";
+
 const nowIso = () => new Date().toISOString();
 
 const formatDateTime = (d) =>
   d
-    ? new Date(d).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+    ? new Date(d).toLocaleString("en-IN", { timeZone: TZ, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
     : "";
+
+const toYmdIST = (dateLike) => {
+  const d = new Date(dateLike);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  const y = get("year");
+  const m = get("month");
+  const day = get("day");
+  if (!y || !m || !day) return "";
+  return `${y}-${m}-${day}`;
+};
 
 const isSameDay = (a, b) => {
   if (!a || !b) return false;
-  const da = new Date(a);
-  const db = new Date(b);
-  return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
+  const ya = toYmdIST(a);
+  const yb = toYmdIST(b);
+  return Boolean(ya && yb && ya === yb);
 };
 
 const isToday = (d) => isSameDay(d, new Date());
 
+const ymdToDayNumber = (ymd) => {
+  const parts = String(ymd || "").split("-");
+  if (parts.length !== 3) return 0;
+  const [y, m, d] = parts.map((n) => parseInt(n, 10));
+  if (!y || !m || !d) return 0;
+  return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+};
+
 const daysDiffFromToday = (d) => {
-  const target = new Date(new Date(d).setHours(0, 0, 0, 0));
-  const today = new Date(new Date().setHours(0, 0, 0, 0));
-  return Math.ceil((target - today) / 86400000);
+  const targetYmd = toYmdIST(d);
+  const todayYmd = toYmdIST(new Date());
+  if (!targetYmd || !todayYmd) return 0;
+  return ymdToDayNumber(targetYmd) - ymdToDayNumber(todayYmd);
 };
 
 const safeDigits = (phone) => String(phone || "").replace(/[^\d+]/g, "");
@@ -75,7 +98,7 @@ const makeIcsEvent = ({ uid, title, start, end, description = "", location = "" 
   return [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Jubilant LIRAS//Android CRM//EN",
+    "PRODID:-//Jubilant LIRAS//CRM//EN",
     "CALSCALE:GREGORIAN",
     "BEGIN:VEVENT",
     `UID:${escapeIcs(safeUid)}`,
@@ -250,9 +273,22 @@ const TaskModal = ({ isOpen, onClose, leads, onCreate }) => {
   );
 };
 
-export default function AndroidCrm({ route, leads = [], mediators = [], onFollowUp, onOpenLead, onNavigate }) {
-  const [tasks, setTasks] = useState(() => {
-    const stored = parseJson(localStorage.getItem(TASKS_KEY), []);
+export default function AndroidCrm({
+  route,
+  leads = [],
+  mediators = [],
+  tasks: tasksProp,
+  onTasksChange,
+  storageKey,
+  onFollowUp,
+  onOpenLead,
+  onNavigate,
+}) {
+  const key = storageKey || TASKS_KEY;
+
+  const [tasksState, setTasksState] = useState(() => {
+    if (Array.isArray(tasksProp)) return tasksProp;
+    const stored = parseJson(localStorage.getItem(key), []);
     return Array.isArray(stored) ? stored : [];
   });
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -260,8 +296,13 @@ export default function AndroidCrm({ route, leads = [], mediators = [], onFollow
   const [showDone, setShowDone] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
-  }, [tasks]);
+    if (!storageKey && Array.isArray(tasksProp)) return;
+    if (typeof onTasksChange === "function") return;
+    localStorage.setItem(key, JSON.stringify(tasksState));
+  }, [tasksState, key, onTasksChange, storageKey, tasksProp]);
+
+  const tasks = Array.isArray(tasksProp) ? tasksProp : tasksState;
+  const setTasks = typeof onTasksChange === "function" ? onTasksChange : setTasksState;
 
   const leadById = useMemo(() => {
     const map = new Map();
@@ -638,15 +679,15 @@ export default function AndroidCrm({ route, leads = [], mediators = [], onFollow
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full animate-fade-in">
       <div className="surface p-5">
-        <SectionHeader
-          icon={TimerIcon}
-          title="My Day (Android CRM)"
-          subtitle="Agenda + tasks on this device. Export follow-ups to your calendar when needed."
-          right={
-            <div className="flex gap-2">
-              <button className="btn-secondary" onClick={() => setIsCreateOpen(true)}>
-                <Plus size={18} /> Task
-              </button>
+          <SectionHeader
+            icon={TimerIcon}
+            title="My Day"
+            subtitle="Agenda + tasks. Export follow-ups to your calendar when needed."
+            right={
+              <div className="flex gap-2">
+                <button className="btn-secondary" onClick={() => setIsCreateOpen(true)}>
+                  <Plus size={18} /> Task
+                </button>
               <button className="btn-secondary" onClick={() => onNavigate?.("android_partners")}>
                 <Users size={18} /> Partners
               </button>

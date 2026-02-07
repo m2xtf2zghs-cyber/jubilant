@@ -286,7 +286,8 @@ Mobile builds load the app from local assets, so they must call the AI function 
 
 Add to `jubilant/.env`:
 
-- `VITE_AI_BASE_URL="https://YOUR_NETLIFY_SITE.netlify.app"`
+- `VITE_FUNCTIONS_BASE_URL="https://YOUR_NETLIFY_SITE.netlify.app"` (recommended)
+  - (Backward compatible) `VITE_AI_BASE_URL` also works, but `VITE_FUNCTIONS_BASE_URL` is clearer since it’s used for both AI + admin tools.
 
 Then rebuild + sync (`npm run build && npm run cap:sync`) and regenerate your APK/AAB.
 
@@ -346,3 +347,42 @@ using (
 Notes:
 - The app stores files under: `<owner_id>/<lead_id>/<file_id>-<filename>`
 - If upload fails, the attachment stays **local on the device** (IndexedDB) and can be uploaded later.
+
+## 8) (Optional) Enable in-app announcements (admin banner)
+
+This enables the **Admin: Announcements** panel in the app settings and shows a dismissible banner to staff.
+
+Run in Supabase SQL Editor:
+
+```sql
+create table if not exists public.announcements (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  created_by uuid not null references auth.users(id) on delete restrict,
+  title text not null,
+  body text not null,
+  severity text not null default 'info' check (severity in ('info','success','warning','danger')),
+  audience_role text not null default 'all' check (audience_role in ('all','staff','admin')),
+  starts_at timestamptz,
+  ends_at timestamptz,
+  is_active boolean not null default true
+);
+
+alter table public.announcements enable row level security;
+
+drop policy if exists "announcements: read" on public.announcements;
+create policy "announcements: read" on public.announcements
+for select using (auth.role() = 'authenticated');
+
+drop policy if exists "announcements: admin insert" on public.announcements;
+create policy "announcements: admin insert" on public.announcements
+for insert with check (public.is_admin() and created_by = auth.uid());
+
+drop policy if exists "announcements: admin update" on public.announcements;
+create policy "announcements: admin update" on public.announcements
+for update using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "announcements: admin delete" on public.announcements;
+create policy "announcements: admin delete" on public.announcements
+for delete using (public.is_admin());
+```

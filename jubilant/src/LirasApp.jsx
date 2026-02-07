@@ -4,6 +4,7 @@ import Chart from "chart.js/auto";
 import { callAiAction } from "./ai/aiClient.js";
 import { deleteAttachmentBlob, getAttachmentBlob, putAttachmentBlob } from "./attachments/attachmentsStore.js";
 import { callAdminAction } from "./backend/adminClient.js";
+import { getFunctionsBaseUrl, setFunctionsBaseUrl } from "./backend/functionsBase.js";
 import { BRAND, BrandMark, ReportBrandHeader } from "./brand/Brand.jsx";
 import AndroidCrm from "./android/AndroidCrm.jsx";
 import {
@@ -291,6 +292,46 @@ const isTomorrowIST = (dateLike) => {
   return isOnYmdIST(dateLike, tomorrowYmd);
 };
 
+const STALE_AFTER_DAYS = 3;
+
+const daysSinceIST = (dateLike) => {
+  const ymd = toYmdIST(dateLike);
+  if (!ymd) return 0;
+  const dayStart = startOfIstDay(ymd).getTime();
+  const todayStart = startOfIstDay(toYmdIST(new Date())).getTime();
+  if (!Number.isFinite(dayStart) || !Number.isFinite(todayStart)) return 0;
+  return Math.floor((todayStart - dayStart) / 86400000);
+};
+
+const maxIsoDate = (values) => {
+  let best = "";
+  let bestMs = -Infinity;
+  (values || []).forEach((v) => {
+    if (!v) return;
+    const ms = new Date(v).getTime();
+    if (!Number.isFinite(ms)) return;
+    if (ms > bestMs) {
+      bestMs = ms;
+      best = new Date(ms).toISOString();
+    }
+  });
+  return best;
+};
+
+const getLeadLastActivityIso = (lead) => {
+  const candidates = [];
+  if (lead?.createdAt) candidates.push(lead.createdAt);
+  if (lead?.loanDetails?.paymentDate) candidates.push(lead.loanDetails.paymentDate);
+  const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+  if (notes.length) {
+    const lastNote = notes[notes.length - 1];
+    if (lastNote?.date) candidates.push(lastNote.date);
+  }
+  const attachments = Array.isArray(lead?.documents?.attachments) ? lead.documents.attachments : [];
+  attachments.forEach((a) => a?.createdAt && candidates.push(a.createdAt));
+  return maxIsoDate(candidates) || (lead?.createdAt ? new Date(lead.createdAt).toISOString() : new Date().toISOString());
+};
+
 const calculateLeadScore = (lead) => {
   let score = 0;
   if (lead.isHighPotential) score += 30;
@@ -390,6 +431,36 @@ const Modal = ({ isOpen, onClose, title, children, large }) => {
           </button>
         </div>
         <div className="p-6 overflow-y-auto flex-1">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+const AnnouncementBanner = ({ announcement, onDismiss, canManage = false, onManage = null }) => {
+  const a = announcement ? sanitizeAnnouncement(announcement) : null;
+  if (!a || !a.isActive) return null;
+  const styles = ANNOUNCEMENT_STYLES[a.severity] || ANNOUNCEMENT_STYLES.info;
+
+  return (
+    <div className={`surface-solid p-4 border ${styles.border} ${styles.bg} print:hidden`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`chip ${styles.chip}`}>{a.severity}</span>
+            <div className={`font-extrabold ${styles.text} truncate`}>{a.title || "Announcement"}</div>
+          </div>
+          {a.body ? <div className="text-sm text-slate-700 mt-2 whitespace-pre-wrap">{a.body}</div> : null}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {canManage && typeof onManage === "function" ? (
+            <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={onManage} title="Open announcements">
+              <Settings size={14} /> Manage
+            </button>
+          ) : null}
+          <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={onDismiss} title="Dismiss">
+            <X size={14} /> Close
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -555,6 +626,31 @@ const sanitizeMediator = (raw) => {
   };
 };
 
+const sanitizeAnnouncement = (raw) => {
+  const a = raw && typeof raw === "object" ? raw : {};
+  const severity = String(a.severity || a.level || "info").toLowerCase();
+  const audienceRole = String(a.audienceRole || a.audience_role || a.audience || "all").toLowerCase();
+  return {
+    id: String(a.id || Date.now() + Math.random()),
+    title: String(a.title || "").slice(0, 140),
+    body: String(a.body || a.message || "").slice(0, 2000),
+    severity: ["info", "success", "warning", "danger"].includes(severity) ? severity : "info",
+    audienceRole: ["all", "staff", "admin"].includes(audienceRole) ? audienceRole : "all",
+    startsAt: a.startsAt || a.starts_at || "",
+    endsAt: a.endsAt || a.ends_at || "",
+    isActive: a.isActive === false ? false : Boolean(a.is_active ?? a.isActive ?? true),
+    createdAt: a.createdAt || a.created_at || new Date().toISOString(),
+    createdBy: a.createdBy || a.created_by || "",
+  };
+};
+
+const ANNOUNCEMENT_STYLES = {
+  info: { border: "border-indigo-200/70", bg: "bg-indigo-50/70", text: "text-indigo-900", chip: "bg-indigo-100 border-indigo-200 text-indigo-700" },
+  success: { border: "border-emerald-200/70", bg: "bg-emerald-50/70", text: "text-emerald-900", chip: "bg-emerald-100 border-emerald-200 text-emerald-700" },
+  warning: { border: "border-amber-200/70", bg: "bg-amber-50/70", text: "text-amber-950", chip: "bg-amber-100 border-amber-200 text-amber-800" },
+  danger: { border: "border-rose-200/70", bg: "bg-rose-50/70", text: "text-rose-950", chip: "bg-rose-100 border-rose-200 text-rose-800" },
+};
+
 // --- SETTINGS MODAL ---
 const SettingsModal = ({
   isOpen,
@@ -567,11 +663,20 @@ const SettingsModal = ({
   isAdmin,
   supabase,
   onUsersChanged,
+  announcements,
+  announcementsError,
+  onCreateAnnouncement,
+  onDeactivateAnnouncement,
+  onDeleteAnnouncement,
+  onReloadAnnouncements,
 }) => {
   const about = useMemo(() => {
     const platform = (() => {
       try {
-        return document.documentElement?.dataset?.platform === "android" ? "Android App" : "Web";
+        const p = String(document.documentElement?.dataset?.platform || "");
+        if (p === "android") return "Android App";
+        if (p === "ios") return "iPhone App";
+        return "Web";
       } catch {
         return "Web";
       }
@@ -596,6 +701,39 @@ const SettingsModal = ({
     return { platform, origin, buildTimeLabel, gitSha: String(__GIT_SHA__ || "") };
   }, []);
 
+  const [functionsBaseUrlInput, setFunctionsBaseUrlInput] = useState(() => {
+    try {
+      return safeLocalStorage.getItem("liras_functions_base_url") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [functionsBaseUrlOk, setFunctionsBaseUrlOk] = useState("");
+  const [functionsBaseUrlError, setFunctionsBaseUrlError] = useState("");
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setFunctionsBaseUrlOk("");
+    setFunctionsBaseUrlError("");
+    try {
+      setFunctionsBaseUrlInput(safeLocalStorage.getItem("liras_functions_base_url") || "");
+    } catch {
+      setFunctionsBaseUrlInput("");
+    }
+  }, [isOpen]);
+
+  const saveFunctionsBaseUrl = () => {
+    setFunctionsBaseUrlOk("");
+    setFunctionsBaseUrlError("");
+    const val = String(functionsBaseUrlInput || "").trim();
+    if (val && !/^https?:\/\//i.test(val)) {
+      setFunctionsBaseUrlError("Enter a full URL like https://jubilantcrm.netlify.app");
+      return;
+    }
+    setFunctionsBaseUrl(val);
+    setFunctionsBaseUrlOk(val ? "Saved. Re-open this screen if you still see errors." : "Cleared. Web will use relative functions.");
+  };
+
   const handleResetLocal = () => {
     if (confirm("DANGER: This will delete ALL local data on this device. Are you sure?")) {
       if (confirm("Double Check: Have you downloaded a backup?")) {
@@ -613,6 +751,16 @@ const SettingsModal = ({
   const [userBusy, setUserBusy] = useState(false);
   const [userOk, setUserOk] = useState("");
   const [userError, setUserError] = useState("");
+
+  const [announceTitle, setAnnounceTitle] = useState("");
+  const [announceBody, setAnnounceBody] = useState("");
+  const [announceSeverity, setAnnounceSeverity] = useState("info");
+  const [announceAudience, setAnnounceAudience] = useState("all");
+  const [announceStartsAt, setAnnounceStartsAt] = useState("");
+  const [announceEndsAt, setAnnounceEndsAt] = useState("");
+  const [announceBusy, setAnnounceBusy] = useState(false);
+  const [announceOk, setAnnounceOk] = useState("");
+  const [announceError, setAnnounceError] = useState("");
 
   const generatePassword = () => {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -661,6 +809,12 @@ const SettingsModal = ({
       setUserBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setAnnounceOk("");
+    setAnnounceError("");
+  }, [isOpen]);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Data Management & Settings">
@@ -808,6 +962,211 @@ const SettingsModal = ({
                 {userBusy ? "Working…" : userMode === "invite" ? "Send Invite" : "Create User"}
               </button>
             </div>
+          </div>
+        )}
+
+        {backendEnabled && isAdmin && (
+          <div className="surface-solid p-4">
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+                <Mail size={18} className="text-indigo-600" /> Admin: Announcements
+              </h3>
+              <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => onReloadAnnouncements?.()}>
+                <RefreshCw size={14} /> Refresh
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 mb-4">Post a banner for staff. Staff can dismiss per device.</p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Title</label>
+                <input value={announceTitle} onChange={(e) => setAnnounceTitle(e.target.value)} className="w-full py-3" placeholder="System update / reminder…" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Message</label>
+                <textarea value={announceBody} onChange={(e) => setAnnounceBody(e.target.value)} className="w-full p-3 h-24 resize-none text-sm" placeholder="Write a short message…" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Severity</label>
+                  <select value={announceSeverity} onChange={(e) => setAnnounceSeverity(e.target.value)} className="w-full py-3 text-sm">
+                    <option value="info">Info</option>
+                    <option value="success">Success</option>
+                    <option value="warning">Warning</option>
+                    <option value="danger">Danger</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Audience</label>
+                  <select value={announceAudience} onChange={(e) => setAnnounceAudience(e.target.value)} className="w-full py-3 text-sm">
+                    <option value="all">All</option>
+                    <option value="staff">Staff (and admin)</option>
+                    <option value="admin">Admin only</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Starts (optional)</label>
+                  <input type="datetime-local" value={announceStartsAt} onChange={(e) => setAnnounceStartsAt(e.target.value)} className="w-full py-3" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Ends (optional)</label>
+                  <input type="datetime-local" value={announceEndsAt} onChange={(e) => setAnnounceEndsAt(e.target.value)} className="w-full py-3" />
+                </div>
+              </div>
+
+              {announcementsError ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 font-bold">
+                  Announcements not available: {announcementsError}
+                  <div className="text-[11px] font-medium text-amber-800 mt-1">
+                    If this is a new backend, run the “Announcements” SQL in <span className="font-mono">jubilant/SUPABASE_SETUP.md</span>.
+                  </div>
+                </div>
+              ) : null}
+
+              {announceError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 font-bold">{announceError}</div>}
+              {announceOk && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 font-bold">{announceOk}</div>}
+
+              <button
+                type="button"
+                disabled={announceBusy}
+                onClick={async () => {
+                  setAnnounceOk("");
+                  setAnnounceError("");
+                  setAnnounceBusy(true);
+                  try {
+                    await onCreateAnnouncement?.({
+                      title: announceTitle,
+                      body: announceBody,
+                      severity: announceSeverity,
+                      audienceRole: announceAudience,
+                      startsAt: announceStartsAt ? new Date(announceStartsAt).toISOString() : "",
+                      endsAt: announceEndsAt ? new Date(announceEndsAt).toISOString() : "",
+                    });
+                    setAnnounceOk("Announcement posted.");
+                    setAnnounceTitle("");
+                    setAnnounceBody("");
+                    setAnnounceSeverity("info");
+                    setAnnounceAudience("all");
+                    setAnnounceStartsAt("");
+                    setAnnounceEndsAt("");
+                    onReloadAnnouncements?.();
+                  } catch (err) {
+                    setAnnounceError(err?.message || "Failed to post announcement");
+                  } finally {
+                    setAnnounceBusy(false);
+                  }
+                }}
+                className={`w-full py-3 rounded-xl font-bold text-white shadow-soft transition ${
+                  announceBusy ? "bg-slate-400" : "bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700"
+                }`}
+              >
+                {announceBusy ? "Posting…" : "Post Announcement"}
+              </button>
+            </div>
+
+            <div className="mt-5">
+              <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-2">Recent</div>
+              {(Array.isArray(announcements) ? announcements : []).length === 0 ? (
+                <div className="text-xs text-slate-500 italic">No announcements yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {(announcements || [])
+                    .map(sanitizeAnnouncement)
+                    .slice(0, 10)
+                    .map((a) => {
+                      const styles = ANNOUNCEMENT_STYLES[a.severity] || ANNOUNCEMENT_STYLES.info;
+                      const created = a.createdAt
+                        ? new Date(a.createdAt).toLocaleString("en-IN", { timeZone: BRAND.tz, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+                        : "";
+                      return (
+                        <div key={a.id} className={`rounded-2xl border p-3 bg-white/70 ${styles.border}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`chip ${styles.chip}`}>{a.severity}</span>
+                                <span className="chip">{a.audienceRole}</span>
+                                {!a.isActive ? <span className="chip bg-slate-100 border-slate-200 text-slate-600">inactive</span> : null}
+                              </div>
+                              <div className="font-extrabold text-slate-900 mt-1 truncate">{a.title}</div>
+                              {a.body ? <div className="text-xs text-slate-600 mt-1 whitespace-pre-wrap">{a.body.slice(0, 220)}</div> : null}
+                              {created ? <div className="text-[10px] text-slate-400 mt-2 font-mono">{created}</div> : null}
+                            </div>
+                            <div className="flex flex-col gap-2 shrink-0">
+                              {a.isActive ? (
+                                <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => onDeactivateAnnouncement?.(a.id)}>
+                                  <Ban size={14} /> Deactivate
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="btn-secondary px-3 py-2 text-xs"
+                                onClick={() => {
+                                  if (!confirm("Delete this announcement?")) return;
+                                  onDeleteAnnouncement?.(a.id);
+                                }}
+                              >
+                                <Trash2 size={14} /> Delete
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {backendEnabled && (
+          <div className="surface-solid p-4">
+            <h3 className="font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+              <Globe size={18} className="text-indigo-600" /> Mobile App: Netlify Site URL
+            </h3>
+            <p className="text-xs text-slate-600 mb-3">
+              Needed for <span className="font-bold">AI</span> and <span className="font-bold">Admin tools</span> inside the Android/iPhone app (Capacitor uses a non-HTTP origin, so relative URLs won’t work).
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
+              <input
+                value={functionsBaseUrlInput}
+                onChange={(e) => setFunctionsBaseUrlInput(e.target.value)}
+                className="w-full py-3"
+                placeholder="https://jubilantcrm.netlify.app"
+                inputMode="url"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs whitespace-nowrap"
+                  onClick={() => {
+                    try {
+                      if (/^https?:$/.test(window.location.protocol)) {
+                        setFunctionsBaseUrlInput(window.location.origin);
+                      }
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  title="Use current website URL"
+                >
+                  Use this site
+                </button>
+                <button type="button" className="btn-primary px-3 py-2 text-xs whitespace-nowrap" onClick={saveFunctionsBaseUrl}>
+                  Save
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 text-[10px] text-slate-500">
+              Current: <span className="font-mono font-bold">{getFunctionsBaseUrl() || "relative (web-only)"}</span>
+            </div>
+            {functionsBaseUrlError && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 font-bold">{functionsBaseUrlError}</div>
+            )}
+            {functionsBaseUrlOk && (
+              <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 font-bold">{functionsBaseUrlOk}</div>
+            )}
           </div>
         )}
 
@@ -979,18 +1338,20 @@ const MediatorFollowUpWidget = ({ mediators, onFollowUp }) => {
 
 const MonthlyPerformanceWidget = ({ leads, targetStorageKey = "liras_monthly_target" }) => {
   const currentYm = toYmIST(new Date());
-  const [target, setTarget] = useState(() => parseInt(safeLocalStorage.getItem(targetStorageKey)) || 5000000);
+  const monthKey = useMemo(() => `${targetStorageKey}_${currentYm}`, [targetStorageKey, currentYm]);
+  const [target, setTarget] = useState(() => parseInt(safeLocalStorage.getItem(monthKey)) || 5000000);
   const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
-    setTarget(parseInt(safeLocalStorage.getItem(targetStorageKey)) || 5000000);
-  }, [targetStorageKey]);
+    // Monthly reset: store targets per IST month (new key each month).
+    setTarget(parseInt(safeLocalStorage.getItem(monthKey)) || 5000000);
+  }, [monthKey]);
 
   const handleSaveTarget = (val) => {
     const num = parseInt(val);
     if (!isNaN(num)) {
       setTarget(num);
-      safeLocalStorage.setItem(targetStorageKey, String(num));
+      safeLocalStorage.setItem(monthKey, String(num));
     }
     setIsEditing(false);
   };
@@ -1654,8 +2015,9 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
   const [aiTone, setAiTone] = useState(ai?.tone || "partner");
   const [aiLanguage, setAiLanguage] = useState(ai?.language || "English");
 
-  const monthlyTarget = parseInt(safeLocalStorage.getItem(targetStorageKey)) || 5000000;
   const currentYm = toYmIST(new Date());
+  const monthKey = useMemo(() => `${targetStorageKey}_${currentYm}`, [targetStorageKey, currentYm]);
+  const monthlyTarget = parseInt(safeLocalStorage.getItem(monthKey)) || 5000000;
   const achievedThisMonth = useMemo(() => {
     let achieved = 0;
     leads.forEach((l) => {
@@ -4013,6 +4375,17 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
 
     const leadsTouched = new Set();
     const events = [];
+    const MAX_EVENTS_STORED = 900; // keeps the UI/print stable on large datasets (mobile WebView friendly)
+    const MAX_NOTES_SCAN = 260; // scan tail only (notes are appended chronologically)
+    const MAX_ATTACHMENTS_SCAN = 160; // attachments are stored newest-first
+    let eventsTotal = 0;
+    let eventsDropped = 0;
+
+    const pushEvent = (evt) => {
+      eventsTotal += 1;
+      if (events.length < MAX_EVENTS_STORED) events.push(evt);
+      else eventsDropped += 1;
+    };
 
     const noteKind = (text) => {
       const raw = String(text || "").trim();
@@ -4045,11 +4418,18 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       return `${(num / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     };
 
+    let callsCount = 0;
+    let whatsappCount = 0;
+    let meetingsCount = 0;
+    let checkinsCount = 0;
+    let rejectionsCount = 0;
+    let attachmentsCount = 0;
+
     leadsOwned.forEach((l) => {
       if (!l?.id) return;
 
       if (isOnYmdIST(l.createdAt, dateYmd)) {
-        events.push({
+        pushEvent({
           ts: l.createdAt,
           type: "new_lead",
           label: "New Lead",
@@ -4058,12 +4438,17 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
         });
       }
 
-      const notes = Array.isArray(l.notes) ? l.notes : [];
+      const notesAll = Array.isArray(l.notes) ? l.notes : [];
+      const notes = notesAll.length > MAX_NOTES_SCAN ? notesAll.slice(notesAll.length - MAX_NOTES_SCAN) : notesAll;
       notes.forEach((n) => {
         if (!n?.date || !isOnYmdIST(n.date, dateYmd)) return;
         leadsTouched.add(l.id);
         const meta = noteKind(n.text);
-        events.push({
+        if (meta.kind === "call") callsCount += 1;
+        if (meta.kind === "whatsapp") whatsappCount += 1;
+        if (meta.kind === "checkin") checkinsCount += 1;
+        if (meta.kind === "rejection") rejectionsCount += 1;
+        pushEvent({
           ts: n.date,
           type: meta.kind,
           label: meta.label,
@@ -4072,11 +4457,13 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
         });
       });
 
-      const attachments = Array.isArray(l.documents?.attachments) ? l.documents.attachments : [];
+      const attachmentsAll = Array.isArray(l.documents?.attachments) ? l.documents.attachments : [];
+      const attachments = attachmentsAll.length > MAX_ATTACHMENTS_SCAN ? attachmentsAll.slice(0, MAX_ATTACHMENTS_SCAN) : attachmentsAll;
       attachments.forEach((a) => {
         if (!a?.createdAt || !isOnYmdIST(a.createdAt, dateYmd)) return;
         leadsTouched.add(l.id);
-        events.push({
+        attachmentsCount += 1;
+        pushEvent({
           ts: a.createdAt,
           type: "attachment",
           label: "Attachment",
@@ -4087,9 +4474,9 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
 
       // If payment was recorded without a note, add an event.
       if (l?.loanDetails?.paymentDate && isOnYmdIST(l.loanDetails.paymentDate, dateYmd)) {
-        const hasNote = notes.some((n) => isOnYmdIST(n?.date, dateYmd) && String(n?.text || "").toUpperCase().includes("PAYMENT DONE"));
+        const hasNote = notesAll.some((n) => isOnYmdIST(n?.date, dateYmd) && String(n?.text || "").toUpperCase().includes("PAYMENT DONE"));
         if (!hasNote) {
-          events.push({
+          pushEvent({
             ts: l.loanDetails.paymentDate,
             type: "payment",
             label: "Payment Done",
@@ -4100,7 +4487,6 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       }
     });
 
-    const mediatorHistoryEvents = [];
     mediatorsOwned.forEach((m) => {
       const history = Array.isArray(m.followUpHistory) ? m.followUpHistory : [];
       history
@@ -4113,7 +4499,10 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
           const label = t === "call" ? "Partner Call" : t === "whatsapp" ? "Partner WhatsApp" : t === "meeting" ? "Partner Meeting" : "Partner";
           const outcome = h.outcome ? ` • ${String(h.outcome).replace(/_/g, " ")}` : "";
           const notes = h.notes ? ` • ${String(h.notes).trim()}` : "";
-          mediatorHistoryEvents.push({
+          if (t === "call") callsCount += 1;
+          if (t === "whatsapp") whatsappCount += 1;
+          if (t === "meeting") meetingsCount += 1;
+          pushEvent({
             ts,
             type: t,
             label,
@@ -4122,16 +4511,8 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
           });
         });
     });
-    mediatorHistoryEvents.forEach((e) => events.push(e));
-
-    const calls = events.filter((e) => e.type === "call").length;
-    const whatsapp = events.filter((e) => e.type === "whatsapp").length;
-    const partnerMeetings = events.filter((e) => e.type === "meeting").length;
 
     const leadsUpdated = leadsTouched.size;
-    const checkins = events.filter((e) => e.type === "checkin").length;
-    const rejections = events.filter((e) => e.type === "rejection").length;
-    const attachmentsAdded = events.filter((e) => e.type === "attachment").length;
 
     const pendingEod = leadsOwned.filter((l) => {
       if (!l) return false;
@@ -4156,19 +4537,48 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       leadsUpdated,
       paymentsCount: payments.length,
       paymentVolume,
-      calls,
-      whatsapp,
-      partnerMeetings,
-      checkins,
-      rejections,
-      attachmentsAdded,
+      calls: callsCount,
+      whatsapp: whatsappCount,
+      partnerMeetings: meetingsCount,
+      checkins: checkinsCount,
+      rejections: rejectionsCount,
+      attachmentsAdded: attachmentsCount,
       pendingEod,
       pendingMeetings,
       events,
+      eventsTotal,
+      eventsDropped,
     };
   };
 
-  const reports = useMemo(() => staffList.map((u) => computeReportForUser(u)), [staffList, leads, mediators, dateYmd]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reports = useMemo(() => {
+    return staffList.map((u) => {
+      try {
+        return computeReportForUser(u);
+      } catch (err) {
+        const message = String(err?.message || err || "Report generation failed");
+        return {
+          user: u,
+          error: message,
+          newLeadsCount: 0,
+          leadsUpdated: 0,
+          paymentsCount: 0,
+          paymentVolume: 0,
+          calls: 0,
+          whatsapp: 0,
+          partnerMeetings: 0,
+          checkins: 0,
+          rejections: 0,
+          attachmentsAdded: 0,
+          pendingEod: 0,
+          pendingMeetings: 0,
+          events: [],
+          eventsTotal: 0,
+          eventsDropped: 0,
+        };
+      }
+    });
+  }, [staffList, leads, mediators, dateYmd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleReports = useMemo(() => {
     if (userFilter === "all") return reports;
@@ -4391,8 +4801,17 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
                 <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
                   <History size={16} className="text-indigo-600" /> Activity Timeline
                 </div>
-                <div className="chip bg-white/60">{r.events.length}</div>
+                <div className="chip bg-white/60">
+                  {r.eventsTotal || r.events.length}
+                  {r.eventsDropped ? ` (+${r.eventsDropped} capped)` : ""}
+                </div>
               </div>
+
+              {r.error ? (
+                <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 font-bold">
+                  Report generation failed for this staff: {r.error}
+                </div>
+              ) : null}
 
               <div className="mt-4 overflow-hidden rounded-xl border border-slate-200/70">
                 <table className="w-full text-sm">
@@ -4405,7 +4824,13 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {r.events.length === 0 ? (
+                    {r.error ? (
+                      <tr>
+                        <td colSpan="4" className="p-6 text-center text-slate-500">
+                          Fix the error and try again.
+                        </td>
+                      </tr>
+                    ) : r.events.length === 0 ? (
                       <tr>
                         <td colSpan="4" className="p-6 text-center text-slate-400 italic">
                           No activity recorded for this date.
@@ -4427,6 +4852,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
                       <tr>
                         <td colSpan="4" className="p-3 text-xs text-slate-500">
                           Showing first 220 events (PDF-friendly). Refine to a single staff to print the full day.
+                          {r.eventsDropped ? ` (Report capped: ${r.eventsDropped} additional events not stored to keep mobile stable.)` : ""}
                         </td>
                       </tr>
                     )}
@@ -4962,35 +5388,48 @@ const NewLeadTriageCard = ({ lead, onUpdate, onPaymentDone }) => {
 };
 
 const LoanDetailsEditor = ({ lead, onUpdate }) => {
-  const [principal, setPrincipal] = useState(lead.loanDetails?.principal || lead.loanAmount || 0);
-  const [interest, setInterest] = useState(lead.loanDetails?.interest || 0);
+  const storedPrincipal = Number(lead.loanDetails?.principal ?? lead.loanAmount ?? 0);
+  const storedInterest = Number(lead.loanDetails?.interest ?? 0);
+  const storedNet = lead.loanDetails?.netDisbursed;
+  // Backward compatible default:
+  // - old logic stored principal=given and netDisbursed=principal-interest (smaller than principal)
+  // - new logic stores principal=(given+interest) and netDisbursed=principal
+  const initialGiven =
+    storedNet != null && Number(storedNet) >= 0 && Number(storedNet) < storedPrincipal
+      ? storedPrincipal
+      : Math.max(0, storedPrincipal - storedInterest);
+
+  const [givenAmount, setGivenAmount] = useState(initialGiven);
+  const [interest, setInterest] = useState(storedInterest);
   const [tenure, setTenure] = useState(lead.loanDetails?.tenure || 1);
   const [frequency, setFrequency] = useState(lead.loanDetails?.frequency || "Monthly");
 
-  const netDisbursed = (Number(principal) || 0) - (Number(interest) || 0);
+  const computedPrincipal = (Number(givenAmount) || 0) + (Number(interest) || 0);
+  const netCashOut = computedPrincipal;
 
   useEffect(() => {
     const current = lead.loanDetails || {};
     const changed =
-      principal !== current.principal ||
-      interest !== current.interest ||
+      computedPrincipal !== Number(current.principal ?? 0) ||
+      Number(interest) !== Number(current.interest ?? 0) ||
       tenure !== current.tenure ||
       frequency !== current.frequency ||
-      netDisbursed !== current.netDisbursed;
+      netCashOut !== Number(current.netDisbursed ?? 0);
     if (!changed) return;
     onUpdate({
       loanDetails: {
         ...current,
-        principal,
-        interest,
-        netDisbursed,
+        principal: computedPrincipal,
+        interest: Number(interest) || 0,
+        // Business rule: Net Cash Out is Principal (= Given + Upfront interest)
+        netDisbursed: netCashOut,
         tenure,
         frequency,
         paymentDate: current.paymentDate || new Date().toISOString(),
       },
-      loanAmount: principal,
+      loanAmount: computedPrincipal,
     });
-  }, [principal, interest, tenure, frequency]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [givenAmount, interest, tenure, frequency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="surface p-4 animate-fade-in">
@@ -5003,11 +5442,11 @@ const LoanDetailsEditor = ({ lead, onUpdate }) => {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Principal (₹)</label>
+          <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Given Amount (₹)</label>
           <input
             type="number"
-            value={principal}
-            onChange={(e) => setPrincipal(Number(e.target.value))}
+            value={givenAmount}
+            onChange={(e) => setGivenAmount(Number(e.target.value))}
             className="w-full py-2 font-bold"
           />
         </div>
@@ -5022,8 +5461,11 @@ const LoanDetailsEditor = ({ lead, onUpdate }) => {
         </div>
 
         <div className="col-span-2 bg-white/70 p-3 rounded-xl border border-slate-200/70 flex justify-between items-center shadow-sm">
-          <span className="text-sm font-bold text-slate-500">Net Cash Disbursed:</span>
-          <span className="text-xl font-extrabold text-emerald-700 font-mono">{formatCurrency(netDisbursed)}</span>
+          <span className="text-sm font-bold text-slate-500">Net Cash Out (Principal):</span>
+          <span className="text-xl font-extrabold text-emerald-700 font-mono">{formatCurrency(netCashOut)}</span>
+        </div>
+        <div className="col-span-2 text-xs text-slate-500 font-bold -mt-2">
+          Principal is saved as: Given + Upfront Interest = {formatCurrency(computedPrincipal)}
         </div>
 
         <div>
@@ -5197,24 +5639,34 @@ const RejectionStrategyPanel = ({ onConfirm, onCancel, leadId = null, ai = null 
 };
 
 const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
-  const [principal, setPrincipal] = useState(lead.loanAmount || 0);
+  const [givenAmount, setGivenAmount] = useState(lead.loanAmount || 0);
   const [interest, setInterest] = useState(0);
   const [months, setMonths] = useState(12);
 
+  const computedPrincipal = (Number(givenAmount) || 0) + (Number(interest) || 0);
+
   const rate = useMemo(() => {
-    const p = Number(principal);
+    const p = Number(computedPrincipal);
     const i = Number(interest);
     const m = Number(months);
     if (!p || !m) return "0.00";
     const result = (i / p) / ((m + 1) / 2) * 100;
     return isFinite(result) ? result.toFixed(2) : "0.00";
-  }, [principal, interest, months]);
+  }, [computedPrincipal, interest, months]);
 
-  const netDisbursed = Number(principal) - Number(interest);
+  // Business rule: Net Cash Out is Principal (= Given + Upfront interest)
+  const netCashOut = computedPrincipal;
 
   const handleSubmit = () => {
-    if (principal <= 0) return alert("Principal amount required.");
-    onConfirm({ principal: Number(principal), interest: Number(interest), months: Number(months), netDisbursed, rate });
+    if (Number(givenAmount) <= 0) return alert("Given amount required.");
+    onConfirm({
+      givenAmount: Number(givenAmount),
+      principal: Number(computedPrincipal),
+      interest: Number(interest),
+      months: Number(months),
+      netDisbursed: Number(netCashOut),
+      rate,
+    });
   };
 
   return (
@@ -5234,11 +5686,11 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Given Amount (Principal)</label>
+            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Given Amount</label>
             <input
               type="number"
-              value={principal}
-              onChange={(e) => setPrincipal(e.target.value)}
+              value={givenAmount}
+              onChange={(e) => setGivenAmount(e.target.value)}
               className="w-full py-2 text-lg font-bold"
             />
           </div>
@@ -5251,6 +5703,9 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
               className="w-full py-2 text-lg font-bold text-red-600"
             />
           </div>
+        </div>
+        <div className="text-xs font-bold text-slate-500">
+          Principal (Given + interest): <span className="font-extrabold text-slate-800">{formatCurrency(computedPrincipal)}</span>
         </div>
 
         <div>
@@ -5272,7 +5727,7 @@ const PaymentProcessingPanel = ({ lead, onConfirm, onCancel }) => {
           </div>
           <div className="text-right">
             <div className="text-xs text-slate-500 font-bold uppercase">Net Cash Out</div>
-            <div className="text-xl font-bold text-slate-900">{formatCurrency(netDisbursed)}</div>
+            <div className="text-xl font-bold text-slate-900">{formatCurrency(netCashOut)}</div>
           </div>
         </div>
 
@@ -5497,7 +5952,7 @@ const LeadActionModal = ({
   onDelete,
   mediators,
   onOpenRejectionLetter,
-  androidApp = false,
+  nativeApp = false,
   backendEnabled = false,
   supabase = null,
   ai = null,
@@ -5512,6 +5967,9 @@ const LeadActionModal = ({
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [attachmentBusy, setAttachmentBusy] = useState({});
+  const [manualOverrideOpen, setManualOverrideOpen] = useState(false);
+
+  const allowManualOverride = !backendEnabled || canReassignOwner;
 
   const attachmentsInputGeneralRef = useRef(null);
   const attachmentsInputKycRef = useRef(null);
@@ -5586,6 +6044,10 @@ const LeadActionModal = ({
       void uploadAttachment(meta);
     }
   };
+
+  useEffect(() => {
+    if (showRejectForm || showPaymentForm) setManualOverrideOpen(false);
+  }, [showRejectForm, showPaymentForm]);
 
   const uploadAttachment = async (attachment) => {
     if (!backendEnabled || !supabase) return;
@@ -5673,6 +6135,22 @@ const LeadActionModal = ({
 
   if (!lead) return null;
   const attachments = normalizeAttachments(lead.documents || {});
+  const mediatorName = mediators?.find?.((m) => m.id === lead.mediatorId)?.name || "Direct/None";
+  const ownerLabel = staffUsers?.find?.((u) => String(u.userId) === String(lead.ownerId || ""))?.label || "";
+  const lastActivityIso = getLeadLastActivityIso(lead);
+  const lastActivityDays = daysSinceIST(lastActivityIso);
+  const nextYmd = lead?.nextFollowUp ? toYmdIST(lead.nextFollowUp) : "";
+  const nextTime = lead?.nextFollowUp ? formatTimeIST(lead.nextFollowUp) : "";
+  const followUpDiffDays = (() => {
+    if (!nextYmd) return 0;
+    const todayStart = startOfIstDay(toYmdIST(new Date())).getTime();
+    const followStart = startOfIstDay(nextYmd).getTime();
+    if (!Number.isFinite(todayStart) || !Number.isFinite(followStart)) return 0;
+    return Math.floor((followStart - todayStart) / 86400000);
+  })();
+  const isClosedStatus = ["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(lead.status);
+  const isOverdue = !isClosedStatus && followUpDiffDays < 0;
+  const docsCount = ["kyc", "itr", "bank"].reduce((acc, k) => (lead?.documents?.[k] ? acc + 1 : acc), 0);
 
   const handleOutcome = (type) => {
     const today = new Date().toISOString();
@@ -5753,14 +6231,18 @@ const LeadActionModal = ({
     const today = new Date().toISOString();
     const notes = [...(lead.notes || [])];
     const followUpDate = addMonths(new Date(), data.months / 2).toISOString();
+    const given = Number(data.givenAmount || 0);
+    const principal = Number(data.principal || 0);
+    const interest = Number(data.interest || 0);
 
     onUpdate(lead.id, {
       status: "Payment Done",
-      loanAmount: data.principal,
+      loanAmount: principal,
       loanDetails: {
-        principal: data.principal,
-        interest: data.interest,
-        netDisbursed: data.netDisbursed,
+        principal: principal,
+        interest: interest,
+        // Business rule: Net Cash Out is Principal (= Given + Upfront interest)
+        netDisbursed: principal,
         tenure: data.months,
         frequency: "Monthly",
         rate: data.rate,
@@ -5770,9 +6252,11 @@ const LeadActionModal = ({
       notes: [
         ...notes,
         {
-          text: `[PAYMENT DONE]: Disbursed ${formatCurrency(data.netDisbursed)}. Terms: ${data.months}m @ ${data.rate}% rate. Interest: ${formatCurrency(
-            data.interest
-          )}. Follow-up set for 50% term (${new Date(followUpDate).toLocaleDateString()})`,
+          text: `[PAYMENT DONE]: Given ${formatCurrency(given)}. Upfront Interest ${formatCurrency(
+            interest
+          )}. Principal ${formatCurrency(principal)}. Net Cash Out ${formatCurrency(principal)}. Terms: ${
+            data.months
+          }m @ ${data.rate}% rate. Follow-up set for 50% term (${new Date(followUpDate).toLocaleDateString()})`,
           date: today,
         },
       ],
@@ -5914,7 +6398,7 @@ const LeadActionModal = ({
                 if (!lead.phone) return;
                 const startedAt = new Date().toISOString();
                 onUpdate(lead.id, { notes: [...(lead.notes || []), { text: "[CALL]: Dialed client", date: startedAt }] });
-                if (androidApp) {
+                if (nativeApp) {
                   try {
                     safeLocalStorage.setItem(
                       "liras_pending_call_v1",
@@ -5935,7 +6419,7 @@ const LeadActionModal = ({
               className={`text-indigo-600 hover:text-indigo-700 transition-colors bg-indigo-50 p-2 rounded-full ${
                 !lead.phone ? "opacity-50 pointer-events-none" : ""
               }`}
-              title={lead.phone ? (androidApp ? "Call (auto-log)" : "Call") : "No phone number"}
+              title={lead.phone ? (nativeApp ? "Call (auto-log)" : "Call") : "No phone number"}
             >
               <Phone size={20} />
             </button>
@@ -5987,6 +6471,42 @@ const LeadActionModal = ({
         </div>
       </div>
 
+      <div className="surface-solid p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className={`rounded-2xl border p-3 bg-white/70 ${isOverdue ? "border-rose-200 bg-rose-50/70" : "border-slate-200/70"}`}>
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Next Action (IST)</div>
+            <div className="mt-1 font-extrabold text-slate-900">{nextYmd ? `${nextYmd}${nextTime ? ` • ${nextTime}` : ""}` : "—"}</div>
+            <div className={`text-[11px] font-bold mt-1 ${isOverdue ? "text-rose-700" : "text-slate-500"}`}>
+              {nextYmd
+                ? followUpDiffDays === 0
+                  ? "Today"
+                  : followUpDiffDays > 0
+                    ? `In ${followUpDiffDays} day${followUpDiffDays === 1 ? "" : "s"}`
+                    : `Overdue ${Math.abs(followUpDiffDays)} day${Math.abs(followUpDiffDays) === 1 ? "" : "s"}`
+                : "No follow-up scheduled"}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/70 p-3 bg-white/70">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Last Activity (IST)</div>
+            <div className="mt-1 font-extrabold text-slate-900">{lastActivityIso ? `${toYmdIST(lastActivityIso)} • ${formatTimeIST(lastActivityIso)}` : "—"}</div>
+            <div className="text-[11px] font-bold text-slate-500 mt-1">{lastActivityDays} day{lastActivityDays === 1 ? "" : "s"} ago</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/70 p-3 bg-white/70">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Partner</div>
+            <div className="mt-1 font-extrabold text-slate-900 truncate">{mediatorName}</div>
+            {backendEnabled && ownerLabel ? <div className="text-[11px] font-bold text-slate-500 mt-1 truncate">Owner: {ownerLabel}</div> : null}
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/70 p-3 bg-white/70">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Docs / Files</div>
+            <div className="mt-1 font-extrabold text-slate-900">{docsCount}/3 collected</div>
+            <div className="text-[11px] font-bold text-slate-500 mt-1">{attachments.length} attachment{attachments.length === 1 ? "" : "s"}</div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-6">
           {showPaymentForm ? (
@@ -6017,7 +6537,7 @@ const LeadActionModal = ({
                 >
                   <Clock size={20} /> Follow Up
                 </button>
-                {androidApp && (
+                {nativeApp && (
                   <button
                     onClick={handleCheckIn}
                     disabled={isCheckingIn}
@@ -6049,28 +6569,45 @@ const LeadActionModal = ({
                 </button>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-200">
-                <label className="text-[10px] uppercase font-bold text-slate-400 mb-1 block">Manual Override</label>
-                <select
-                  value={lead.status}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    if (next === "Payment Done") {
-                      setShowRejectForm(false);
-                      setShowPaymentForm(true);
-                      return;
-                    }
-                    onUpdate(lead.id, { status: next });
-                  }}
-                  className="w-full py-2 text-sm"
-                >
-                  {Object.keys(STATUS_CONFIG).map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {allowManualOverride && (
+                <div className="mt-4 pt-3 border-t border-slate-200">
+                  <button
+                    type="button"
+                    className="btn-secondary w-full py-2 text-xs"
+                    onClick={() => setManualOverrideOpen((p) => !p)}
+                  >
+                    <Settings size={14} /> {manualOverrideOpen ? "Hide manual override" : "Manual override"}
+                  </button>
+
+                  {manualOverrideOpen && (
+                    <div className="mt-3 surface-solid p-3">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 mb-1 block">Set Status</label>
+                      <select
+                        value={lead.status}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          if (next === "Payment Done") {
+                            setShowRejectForm(false);
+                            setShowPaymentForm(true);
+                            return;
+                          }
+                          onUpdate(lead.id, { status: next });
+                        }}
+                        className="w-full py-2 text-sm"
+                      >
+                        {Object.keys(STATUS_CONFIG).map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="text-[10px] text-slate-500 mt-2 leading-relaxed">
+                        Use only for exceptional cases. Prefer the action buttons above so notes and follow-up dates remain consistent.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -6083,7 +6620,7 @@ const LeadActionModal = ({
                 value={lead.nextFollowUp ? new Date(lead.nextFollowUp).toISOString().slice(0, 16) : ""}
                 onChange={(e) => onUpdate(lead.id, { nextFollowUp: new Date(e.target.value).toISOString() })}
               />
-              {androidApp && lead.nextFollowUp && (
+              {lead.nextFollowUp && (
                 <div className="mt-2">
                   <button type="button" className="btn-secondary w-full py-3 text-xs" onClick={exportNextActionToIcs}>
                     <Calendar size={14} /> Add to Calendar (.ics)
@@ -6424,9 +6961,7 @@ export default function LirasApp({ backend = null }) {
   const isAdmin = backendEnabled && role === "admin";
   const currentUser = backendEnabled ? authUser?.email || "User" : "Admin";
   const onLogout = typeof backend?.onLogout === "function" ? backend.onLogout : null;
-  const androidApp = useMemo(() => {
-    return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
-  }, []);
+  const nativeApp = useMemo(() => Capacitor.isNativePlatform(), []);
 
   const [isBootstrapping, setIsBootstrapping] = useState(backendEnabled);
   const [bootstrapError, setBootstrapError] = useState("");
@@ -6468,6 +7003,56 @@ export default function LirasApp({ backend = null }) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [dayLeads, setDayLeads] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const tasksKey = useMemo(() => {
+    const suffix = backendEnabled ? String(authUser?.id || "user") : "offline";
+    return `liras_tasks_v1_${suffix}`;
+  }, [backendEnabled, authUser?.id]);
+  const [tasks, setTasks] = useState(() => {
+    const stored = parseJson(safeLocalStorage.getItem(tasksKey), []);
+    return Array.isArray(stored) ? stored : [];
+  });
+  useEffect(() => {
+    const stored = parseJson(safeLocalStorage.getItem(tasksKey), []);
+    setTasks(Array.isArray(stored) ? stored : []);
+  }, [tasksKey]);
+  useEffect(() => {
+    safeLocalStorage.setItem(tasksKey, JSON.stringify(tasks || []));
+  }, [tasksKey, tasks]);
+
+  const announcementsStorageKey = useMemo(() => {
+    const suffix = backendEnabled ? String(authUser?.id || "user") : "offline";
+    return `liras_announcements_v1_${suffix}`;
+  }, [backendEnabled, authUser?.id]);
+  const [announcements, setAnnouncements] = useState(() => {
+    if (backendEnabled) return [];
+    const stored = parseJson(safeLocalStorage.getItem(announcementsStorageKey), []);
+    return Array.isArray(stored) ? stored.map(sanitizeAnnouncement) : [];
+  });
+  const [announcementsError, setAnnouncementsError] = useState("");
+  const [announcementsReloadNonce, setAnnouncementsReloadNonce] = useState(0);
+
+  const dismissedAnnouncementsKey = useMemo(() => {
+    const suffix = backendEnabled ? String(authUser?.id || "user") : "offline";
+    return `liras_announcements_dismissed_v1_${suffix}`;
+  }, [backendEnabled, authUser?.id]);
+  const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState(() => {
+    const stored = parseJson(safeLocalStorage.getItem(dismissedAnnouncementsKey), []);
+    return Array.isArray(stored) ? stored.map(String) : [];
+  });
+
+  useEffect(() => {
+    const stored = parseJson(safeLocalStorage.getItem(dismissedAnnouncementsKey), []);
+    setDismissedAnnouncementIds(Array.isArray(stored) ? stored.map(String) : []);
+  }, [dismissedAnnouncementsKey]);
+  useEffect(() => {
+    safeLocalStorage.setItem(dismissedAnnouncementsKey, JSON.stringify(dismissedAnnouncementIds || []));
+  }, [dismissedAnnouncementsKey, dismissedAnnouncementIds]);
+
+  useEffect(() => {
+    if (backendEnabled) return;
+    safeLocalStorage.setItem(announcementsStorageKey, JSON.stringify((announcements || []).map(sanitizeAnnouncement)));
+  }, [backendEnabled, announcementsStorageKey, announcements]);
+
   const viewsKeyBase = useMemo(() => {
     const suffix = backendEnabled ? String(authUser?.id || "user") : "offline";
     return `liras_views_v1_${suffix}`;
@@ -6519,9 +7104,9 @@ export default function LirasApp({ backend = null }) {
     safeLocalStorage.setItem(`${viewsKeyBase}_active`, activeSavedViewId || "");
   }, [viewsKeyBase, activeSavedViewId]);
 
-  // Android: prompt for call outcome after returning from the dialer (Play Store–safe; no call-log permission).
+  // Native app: prompt for call outcome after returning from the dialer (Play Store–safe; no call-log permission).
   useEffect(() => {
-    if (!androidApp) return;
+    if (!nativeApp) return;
 
     const maybePrompt = () => {
       if (document.hidden) return;
@@ -6550,7 +7135,7 @@ export default function LirasApp({ backend = null }) {
       document.removeEventListener("visibilitychange", maybePrompt);
       window.removeEventListener("focus", maybePrompt);
     };
-  }, [androidApp]);
+  }, [nativeApp]);
 
   const ai = useMemo(() => {
     if (!backendEnabled || !supabase) return null;
@@ -6704,6 +7289,34 @@ export default function LirasApp({ backend = null }) {
   }, [backendEnabled, supabase, authUser?.id]);
 
   useEffect(() => {
+    if (!backendEnabled) return;
+    let cancelled = false;
+
+    const loadAnnouncements = async () => {
+      setAnnouncementsError("");
+      const { data, error } = await supabase
+        .from("announcements")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (cancelled) return;
+      if (error) {
+        setAnnouncementsError(error.message || "Failed to load announcements");
+        return;
+      }
+
+      setAnnouncements((data || []).map(sanitizeAnnouncement));
+    };
+
+    void loadAnnouncements();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendEnabled, supabase, authUser?.id, announcementsReloadNonce]);
+
+  useEffect(() => {
     if (!backendEnabled || !isAdmin) return;
     let cancelled = false;
 
@@ -6736,11 +7349,118 @@ export default function LirasApp({ backend = null }) {
     };
   }, [backendEnabled, isAdmin, supabase, authUser?.id, staffReloadNonce]);
 
+  const dismissAnnouncement = (id) => {
+    const announcementId = String(id || "");
+    if (!announcementId) return;
+    setDismissedAnnouncementIds((prev) => (prev || []).includes(announcementId) ? prev : [...(prev || []), announcementId]);
+  };
+
+  const activeAnnouncement = useMemo(() => {
+    const dismissed = new Set((dismissedAnnouncementIds || []).map(String));
+    const now = Date.now();
+    const list = (announcements || [])
+      .map(sanitizeAnnouncement)
+      .filter((a) => a && a.id && a.isActive)
+      .filter((a) => !dismissed.has(String(a.id)))
+      .filter((a) => {
+        const audience = String(a.audienceRole || "all").toLowerCase();
+        if (audience === "admin") return isAdmin || !backendEnabled;
+        return true; // all + staff visible to everyone (admin sees too)
+      })
+      .filter((a) => {
+        const startMs = a.startsAt ? new Date(a.startsAt).getTime() : Number.NEGATIVE_INFINITY;
+        const endMs = a.endsAt ? new Date(a.endsAt).getTime() : Number.POSITIVE_INFINITY;
+        if (Number.isFinite(startMs) && now < startMs) return false;
+        if (Number.isFinite(endMs) && now > endMs) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+    return list[0] || null;
+  }, [announcements, dismissedAnnouncementIds, isAdmin, backendEnabled]);
+
+  const reloadAnnouncements = () => setAnnouncementsReloadNonce((n) => n + 1);
+
+  const createAnnouncement = async (draft) => {
+    const cleaned = sanitizeAnnouncement({ ...draft, isActive: true });
+    if (!cleaned.title.trim()) throw new Error("Title is required.");
+    if (!cleaned.body.trim()) throw new Error("Message is required.");
+
+    if (!backendEnabled) {
+      const local = {
+        ...cleaned,
+        id: String(Date.now()),
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser,
+        isActive: true,
+      };
+      setAnnouncements((prev) => [local, ...(prev || [])].map(sanitizeAnnouncement).slice(0, 80));
+      return local;
+    }
+
+    const payload = {
+      title: cleaned.title,
+      body: cleaned.body,
+      severity: cleaned.severity,
+      audience_role: cleaned.audienceRole,
+      starts_at: cleaned.startsAt || null,
+      ends_at: cleaned.endsAt || null,
+      is_active: true,
+      created_by: authUser.id,
+    };
+
+    const { data, error } = await supabase.from("announcements").insert(payload).select("*").single();
+    if (error) throw error;
+    const ui = sanitizeAnnouncement(data);
+    setAnnouncements((prev) => [ui, ...(prev || [])].map(sanitizeAnnouncement).slice(0, 80));
+    return ui;
+  };
+
+  const deactivateAnnouncement = async (id) => {
+    const announcementId = String(id || "");
+    if (!announcementId) return;
+
+    if (!backendEnabled) {
+      setAnnouncements((prev) => (prev || []).map((a) => (String(a.id) === announcementId ? sanitizeAnnouncement({ ...a, isActive: false }) : a)));
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("announcements")
+      .update({ is_active: false })
+      .eq("id", announcementId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    const ui = sanitizeAnnouncement(data);
+    setAnnouncements((prev) => (prev || []).map((a) => (String(a.id) === announcementId ? ui : a)));
+  };
+
+  const deleteAnnouncement = async (id) => {
+    const announcementId = String(id || "");
+    if (!announcementId) return;
+
+    if (!backendEnabled) {
+      setAnnouncements((prev) => (prev || []).filter((a) => String(a.id) !== announcementId));
+      return;
+    }
+
+    const { error } = await supabase.from("announcements").delete().eq("id", announcementId);
+    if (error) throw error;
+    setAnnouncements((prev) => (prev || []).filter((a) => String(a.id) !== announcementId));
+  };
+
   const stats = useMemo(
     () => ({
       total: leads.length,
       today: leads.filter((l) => isTodayIST(l.nextFollowUp)).length,
       overdue: leads.filter((l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)).length,
+      stale: leads.filter((l) => {
+        if (!l) return false;
+        if (["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status)) return false;
+        const lastIso = getLeadLastActivityIso(l);
+        return daysSinceIST(lastIso) >= STALE_AFTER_DAYS;
+      }).length,
       watch: leads.filter((l) => l.isHighPotential).length,
       renewal: leads.filter((l) => l.status === "Payment Done" && getDaysDiff(l.nextFollowUp) <= 30).length,
     }),
@@ -7542,6 +8262,12 @@ export default function LirasApp({ backend = null }) {
     displayLeads = filteredLeads.filter(
       (l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)
     );
+  else if (activeView === "stale")
+    displayLeads = filteredLeads.filter((l) => {
+      if (!l) return false;
+      if (["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status)) return false;
+      return daysSinceIST(getLeadLastActivityIso(l)) >= STALE_AFTER_DAYS;
+    });
   else if (activeView === "watchlist") displayLeads = filteredLeads.filter((l) => l.isHighPotential);
   else if (activeView === "renewal_watch") displayLeads = filteredLeads.filter((l) => l.status === "Payment Done" && getDaysDiff(l.nextFollowUp) <= 30);
   if (activeView === "all" && tagFilter) {
@@ -7620,6 +8346,17 @@ export default function LirasApp({ backend = null }) {
             }}
           />
           <SidebarItem
+            icon={History}
+            label="Stale Leads"
+            active={activeView === "stale"}
+            count={stats.stale ? stats.stale : undefined}
+            alert={stats.stale > 0}
+            onClick={() => {
+              setActiveView("stale");
+              setIsSidebarOpen(false);
+            }}
+          />
+          <SidebarItem
             icon={Layout}
             label="Kanban Board"
             active={activeView === "kanban"}
@@ -7676,38 +8413,34 @@ export default function LirasApp({ backend = null }) {
             }}
           />
 
-          {androidApp && (
-            <>
-              <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">Android CRM</div>
-              <SidebarItem
-                icon={Timer}
-                label="My Day"
-                active={activeView === "android_myday"}
-                onClick={() => {
-                  setActiveView("android_myday");
-                  setIsSidebarOpen(false);
-                }}
-              />
-              <SidebarItem
-                icon={Users}
-                label="Partners"
-                active={activeView === "android_partners"}
-                onClick={() => {
-                  setActiveView("android_partners");
-                  setIsSidebarOpen(false);
-                }}
-              />
-              <SidebarItem
-                icon={ClipboardList}
-                label="Tasks"
-                active={activeView === "android_tasks"}
-                onClick={() => {
-                  setActiveView("android_tasks");
-                  setIsSidebarOpen(false);
-                }}
-              />
-            </>
-          )}
+          <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">CRM</div>
+          <SidebarItem
+            icon={Timer}
+            label="My Day"
+            active={activeView === "android_myday"}
+            onClick={() => {
+              setActiveView("android_myday");
+              setIsSidebarOpen(false);
+            }}
+          />
+          <SidebarItem
+            icon={ClipboardList}
+            label="Tasks"
+            active={activeView === "android_tasks"}
+            onClick={() => {
+              setActiveView("android_tasks");
+              setIsSidebarOpen(false);
+            }}
+          />
+          <SidebarItem
+            icon={Users}
+            label="Partners"
+            active={activeView === "android_partners"}
+            onClick={() => {
+              setActiveView("android_partners");
+              setIsSidebarOpen(false);
+            }}
+          />
 
           <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">Reports & Tools</div>
           {backendEnabled && isAdmin && (
@@ -7807,12 +8540,25 @@ export default function LirasApp({ backend = null }) {
         </header>
 
         <main className="flex-1 overflow-hidden relative">
-          {androidApp && (activeView === "android_myday" || activeView === "android_tasks" || activeView === "android_partners") && (
+          {(activeView === "android_myday" || activeView === "android_tasks" || activeView === "android_partners") && (
             <div className="h-full overflow-y-auto">
+              {activeAnnouncement && (
+                <div className="p-4 pb-0">
+                  <AnnouncementBanner
+                    announcement={activeAnnouncement}
+                    onDismiss={() => dismissAnnouncement(activeAnnouncement.id)}
+                    canManage={isAdmin}
+                    onManage={() => setIsSettingsOpen(true)}
+                  />
+                </div>
+              )}
               <AndroidCrm
                 route={activeView === "android_tasks" ? "tasks" : activeView === "android_partners" ? "partners" : "myday"}
                 leads={leads}
                 mediators={mediators}
+                tasks={tasks}
+                onTasksChange={setTasks}
+                storageKey={tasksKey}
                 onFollowUp={handleMediatorFollowUp}
                 onOpenLead={(l) => setActiveLead(l)}
                 onNavigate={(next) => setActiveView(String(next || "android_myday"))}
@@ -7822,6 +8568,14 @@ export default function LirasApp({ backend = null }) {
 
           {activeView === "clearance" && (
             <div className="p-6 space-y-6 overflow-y-auto h-full pb-20 animate-fade-in">
+              {activeAnnouncement && (
+                <AnnouncementBanner
+                  announcement={activeAnnouncement}
+                  onDismiss={() => dismissAnnouncement(activeAnnouncement.id)}
+                  canManage={isAdmin}
+                  onManage={() => setIsSettingsOpen(true)}
+                />
+              )}
               <div className="surface p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -7943,6 +8697,14 @@ export default function LirasApp({ backend = null }) {
 
           {activeView === "dashboard" && (
             <div className="p-6 space-y-6 overflow-y-auto h-full pb-20 animate-fade-in">
+              {activeAnnouncement && (
+                <AnnouncementBanner
+                  announcement={activeAnnouncement}
+                  onDismiss={() => dismissAnnouncement(activeAnnouncement.id)}
+                  canManage={isAdmin}
+                  onManage={() => setIsSettingsOpen(true)}
+                />
+              )}
               {newLeads.length > 0 && (
                 <div className="mb-2">
                   <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2 text-lg">
@@ -8004,6 +8766,27 @@ export default function LirasApp({ backend = null }) {
                       className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors"
                     >
                       Open Clearance Center
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {stats.stale > 0 && (
+                <div className="bg-amber-50 border-l-4 border-amber-500 rounded-r-xl p-4 shadow-md mb-6 animate-slide-up">
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <h3 className="font-bold text-amber-900 text-lg flex items-center gap-2">
+                        <History size={20} /> Stale Leads
+                      </h3>
+                      <p className="text-sm text-amber-800 mt-1">
+                        You have <strong>{stats.stale}</strong> leads with no updates for {STALE_AFTER_DAYS}+ days.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setActiveView("stale")}
+                      className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors whitespace-nowrap"
+                    >
+                      Review Stale
                     </button>
                   </div>
                 </div>
@@ -8103,8 +8886,16 @@ export default function LirasApp({ backend = null }) {
           {activeView === "loan_book" && <LoanBookView leads={leads} mediators={mediators} />}
           {activeView === "calendar" && <CalendarView leads={leads} onDateClick={setDayLeads} />}
 
-          {["all", "today", "overdue", "watchlist", "renewal_watch"].includes(activeView) && (
+          {["all", "today", "overdue", "stale", "watchlist", "renewal_watch"].includes(activeView) && (
             <div className="p-6 overflow-y-auto h-full animate-fade-in space-y-2">
+              {activeAnnouncement && (
+                <AnnouncementBanner
+                  announcement={activeAnnouncement}
+                  onDismiss={() => dismissAnnouncement(activeAnnouncement.id)}
+                  canManage={isAdmin}
+                  onManage={() => setIsSettingsOpen(true)}
+                />
+              )}
               {activeView === "all" && (
                 <div className="surface p-4">
                   <div className="flex flex-col lg:flex-row lg:items-end gap-3">
@@ -8213,6 +9004,16 @@ export default function LirasApp({ backend = null }) {
 
           {activeView === "mediators" && (
             <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in overflow-y-auto h-full">
+              {activeAnnouncement && (
+                <div className="md:col-span-2">
+                  <AnnouncementBanner
+                    announcement={activeAnnouncement}
+                    onDismiss={() => dismissAnnouncement(activeAnnouncement.id)}
+                    canManage={isAdmin}
+                    onManage={() => setIsSettingsOpen(true)}
+                  />
+                </div>
+              )}
               {mediators.map((m) => (
                 <div
                   key={m.id}
@@ -8257,6 +9058,14 @@ export default function LirasApp({ backend = null }) {
 
           {activeView === "analytics" && (
             <div className="p-6 space-y-6 overflow-y-auto h-full pb-20 animate-fade-in">
+              {activeAnnouncement && (
+                <AnnouncementBanner
+                  announcement={activeAnnouncement}
+                  onDismiss={() => dismissAnnouncement(activeAnnouncement.id)}
+                  canManage={isAdmin}
+                  onManage={() => setIsSettingsOpen(true)}
+                />
+              )}
               <AiPartnerInsightsWidget ai={ai} />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-full min-h-[500px]">
                 <LossAnalysisWidget leads={leads} />
@@ -8283,7 +9092,7 @@ export default function LirasApp({ backend = null }) {
           )}
         </main>
 
-        {androidApp && (
+        {nativeApp && (
           <nav className="print:hidden safe-bottom bg-white/70 backdrop-blur border-t border-slate-200/60 shadow-soft">
             {(() => {
               const myDayActive =
@@ -8360,12 +9169,13 @@ export default function LirasApp({ backend = null }) {
             const notes = rawNotes ? [{ text: rawNotes, date: new Date().toISOString() }] : [];
 
             if (isRenewal) {
-              const principal = Number(d.get("principal") || 0);
+              const givenAmount = Number(d.get("principal") || 0);
               const interest = Number(d.get("interest") || 0);
               const tenure = Number(d.get("tenure") || 12);
               const paymentDateStr = String(d.get("paymentDate") || "");
               const paymentDate = paymentDateStr ? new Date(paymentDateStr) : new Date();
-              const netDisbursed = principal - interest;
+              const principal = givenAmount + interest;
+              const netCashOut = principal;
 
               const followUpDate = addMonths(paymentDate, tenure / 2).toISOString();
               const paymentISO = paymentDate.toISOString();
@@ -8375,11 +9185,13 @@ export default function LirasApp({ backend = null }) {
                 status: "Payment Done",
                 loanAmount: principal,
                 nextFollowUp: followUpDate,
-                loanDetails: { principal, interest, netDisbursed, tenure, frequency: "Monthly", rate: "0.00", paymentDate: paymentISO },
+                loanDetails: { principal, interest, netDisbursed: netCashOut, tenure, frequency: "Monthly", rate: "0.00", paymentDate: paymentISO },
                 notes: [
                   ...notes,
                   {
-                    text: `[RENEWAL ADDED]: Legacy deal added. Disbursed ${formatCurrency(netDisbursed)} on ${paymentDate.toLocaleDateString()}. Follow-up set for 50% term (${new Date(
+                    text: `[RENEWAL ADDED]: Given ${formatCurrency(givenAmount)}. Upfront Interest ${formatCurrency(
+                      interest
+                    )}. Principal ${formatCurrency(principal)}. Net Cash Out ${formatCurrency(principal)}. Payment date: ${paymentDate.toLocaleDateString()}. Follow-up set for 50% term (${new Date(
                       followUpDate
                     ).toLocaleDateString()})`,
                     date: new Date().toISOString(),
@@ -8483,7 +9295,7 @@ export default function LirasApp({ backend = null }) {
         {activeLead && (
           <LeadActionModal
             lead={activeLead}
-            androidApp={androidApp}
+            nativeApp={nativeApp}
             backendEnabled={backendEnabled}
             supabase={supabase}
             ai={ai}
@@ -8725,6 +9537,12 @@ export default function LirasApp({ backend = null }) {
         isAdmin={isAdmin}
         supabase={supabase}
         onUsersChanged={() => setStaffReloadNonce((n) => n + 1)}
+        announcements={announcements}
+        announcementsError={announcementsError}
+        onCreateAnnouncement={createAnnouncement}
+        onDeactivateAnnouncement={deactivateAnnouncement}
+        onDeleteAnnouncement={deleteAnnouncement}
+        onReloadAnnouncements={reloadAnnouncements}
       />
     </div>
   );

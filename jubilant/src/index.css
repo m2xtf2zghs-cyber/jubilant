@@ -173,6 +173,14 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+:root[data-platform="ios"] .safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+:root[data-platform="ios"] .safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

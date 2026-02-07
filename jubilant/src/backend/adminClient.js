@@ -1,6 +1,6 @@
-const ADMIN_FN_PATH = "/.netlify/functions/admin-users";
+import { getFunctionsBaseUrl } from "./functionsBase.js";
 
-const normalizeBase = (base) => String(base || "").trim().replace(/\/+$/, "");
+const ADMIN_FN_PATH = "/.netlify/functions/admin-users";
 
 const isHttpOrigin = () => {
   try {
@@ -11,7 +11,7 @@ const isHttpOrigin = () => {
 };
 
 export const getAdminFunctionUrl = () => {
-  const base = normalizeBase(import.meta.env.VITE_AI_BASE_URL);
+  const base = getFunctionsBaseUrl();
   if (base) return `${base}${ADMIN_FN_PATH}`;
   return ADMIN_FN_PATH;
 };
@@ -21,7 +21,9 @@ export async function callAdminAction({ supabase, action, payload = {} }) {
 
   const url = getAdminFunctionUrl();
   if (!url.startsWith("http") && !isHttpOrigin()) {
-    throw new Error("Admin endpoint not configured for mobile. Set VITE_AI_BASE_URL to your Netlify site URL and rebuild the app.");
+    throw new Error(
+      "Admin endpoint not configured for mobile. Set VITE_FUNCTIONS_BASE_URL (or VITE_AI_BASE_URL) to your Netlify site URL, or set it in Settings → About this build."
+    );
   }
 
   const sessionRes = await supabase.auth.getSession();
@@ -53,4 +55,3 @@ export async function callAdminAction({ supabase, action, payload = {} }) {
   if (!data?.ok) throw new Error(data?.error || "Admin request failed");
   return data;
 }
-

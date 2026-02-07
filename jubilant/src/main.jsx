@@ -4,9 +4,9 @@ import App from "./App.jsx";
 import "./index.css";
 import { Capacitor } from "@capacitor/core";
 
-// Android-only styling hook (native app only)
-if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-  document.documentElement.dataset.platform = "android";
+// Native styling hook (Android/iOS)
+if (Capacitor.isNativePlatform()) {
+  document.documentElement.dataset.platform = Capacitor.getPlatform();
 }
 
 class ErrorBoundary extends React.Component {
