@@ -18,25 +18,22 @@ body {
 /* --- PREMIUM FINTECH THEME (CSS variables + Tailwind @apply) --- */
 @layer base {
   :root {
-    /* Calm, decision-focused fintech palette */
-    --bg: 248 250 252; /* slate-50 */
-    --surface: 255 255 255;
-    --text: 15 23 42; /* slate-900 */
-    --muted: 100 116 139; /* slate-500 */
-    --border: 226 232 240; /* slate-200 */
-
-    /* Brand */
-    --navy: 11 18 32; /* #0b1220 */
+    --bg-top: 248 250 252; /* slate-50 */
+    --bg-bottom: 241 245 249; /* slate-100 */
+    --brand: 79 70 229; /* indigo-600 */
+    --brand-2: 37 99 235; /* blue-600 */
     --gold: 202 162 74; /* #caa24a */
-
-    /* Status */
-    --success: 5 150 105; /* emerald-600 */
-    --danger: 220 38 38; /* red-600 */
+    --success: 16 185 129; /* emerald-500 */
+    --danger: 239 68 68; /* red-500 */
   }
 
   body {
-    color: rgb(var(--text));
-    background: rgb(var(--bg));
+    color: rgb(15 23 42);
+    background:
+      radial-gradient(1100px circle at 90% -10%, rgba(var(--brand), 0.14), transparent 55%),
+      radial-gradient(900px circle at 45% 0%, rgba(var(--gold), 0.10), transparent 58%),
+      radial-gradient(900px circle at -10% 110%, rgba(var(--success), 0.10), transparent 55%),
+      linear-gradient(to bottom, rgb(var(--bg-top)), rgb(var(--bg-bottom)));
     overflow-x: hidden;
   }
 
@@ -60,52 +57,54 @@ body {
   input[type="datetime-local"],
   textarea,
   select {
-    @apply bg-white border border-slate-200 rounded-lg;
+    @apply bg-white/80 backdrop-blur border border-slate-200/70 rounded-xl shadow-sm;
     @apply px-3 py-2 text-slate-900 placeholder:text-slate-400;
-    @apply focus:outline-none focus:ring-2 focus:ring-slate-200 focus:border-slate-300;
+    @apply focus:outline-none focus:ring-4 focus:ring-indigo-100 focus:border-indigo-300;
     @apply transition-colors;
   }
 }
 
 @layer components {
   .surface {
-    @apply bg-white border border-slate-200 rounded-2xl;
+    @apply bg-white/80 backdrop-blur-xl border border-slate-200/70 rounded-2xl shadow-soft;
+    @apply ring-1 ring-black/5;
   }
 
   .surface-solid {
-    @apply bg-white border border-slate-200 rounded-2xl;
+    @apply bg-white border border-slate-200/70 rounded-2xl shadow-soft;
+    @apply ring-1 ring-black/5;
   }
 
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2;
     @apply px-4 py-2 rounded-xl font-bold text-white;
-    @apply bg-slate-900;
-    @apply hover:bg-slate-800;
+    @apply bg-gradient-to-r from-indigo-600 to-blue-600 shadow-soft;
+    @apply hover:from-indigo-700 hover:to-blue-700;
     @apply active:scale-[0.98] transition;
-    @apply focus:outline-none focus:ring-2 focus:ring-slate-300;
+    @apply focus:outline-none focus:ring-4 focus:ring-indigo-200;
   }
 
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2;
     @apply px-4 py-2 rounded-xl font-bold;
-    @apply bg-white border border-slate-200 text-slate-900;
-    @apply hover:bg-slate-50;
+    @apply bg-white/70 backdrop-blur border border-slate-200 text-slate-800 shadow-sm;
+    @apply hover:bg-white;
     @apply active:scale-[0.98] transition;
-    @apply focus:outline-none focus:ring-2 focus:ring-slate-200;
+    @apply focus:outline-none focus:ring-4 focus:ring-slate-200;
   }
 
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2;
     @apply px-4 py-2 rounded-xl font-bold text-white;
-    @apply bg-red-600;
-    @apply hover:bg-red-700;
+    @apply bg-gradient-to-r from-red-600 to-rose-600 shadow-soft;
+    @apply hover:from-red-700 hover:to-rose-700;
     @apply active:scale-[0.98] transition;
-    @apply focus:outline-none focus:ring-2 focus:ring-red-200;
+    @apply focus:outline-none focus:ring-4 focus:ring-red-200;
   }
 
   .chip {
     @apply inline-flex items-center gap-1;
-    @apply rounded-full border border-slate-200 bg-slate-100;
+    @apply rounded-full border border-slate-200 bg-white/70;
     @apply px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600;
   }
 }
@@ -113,43 +112,57 @@ body {
 /* --- ANDROID APP POLISH (does not affect web deployments) --- */
 :root[data-platform="android"] {
   /* Slightly cooler, more "institutional" palette */
-  --bg: 250 251 253;
+  --bg-top: 250 251 253;
+  --bg-bottom: 238 244 251;
+  --brand: 67 56 202; /* indigo-700 */
+  --brand-2: 2 132 199; /* sky-600 */
+  --success: 5 150 105; /* emerald-600 */
+  --danger: 220 38 38; /* red-600 */
 }
 
 :root[data-platform="android"] body {
-  background: rgb(var(--bg));
+  background:
+    radial-gradient(1200px circle at 95% -10%, rgba(var(--brand), 0.18), transparent 58%),
+    radial-gradient(900px circle at -10% 110%, rgba(var(--brand-2), 0.12), transparent 60%),
+    linear-gradient(to bottom, rgb(var(--bg-top)), rgb(var(--bg-bottom)));
 }
 
 :root[data-platform="android"] .surface {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: rgba(226, 232, 240, 0.9);
-  border-radius: 1.25rem;
-  box-shadow: none;
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(148, 163, 184, 0.35);
+  border-radius: 1.6rem;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 18px 60px rgba(15, 23, 42, 0.10);
 }
 
 :root[data-platform="android"] .surface-solid {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(226, 232, 240, 0.95);
-  border-radius: 1.25rem;
-  box-shadow: none;
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(148, 163, 184, 0.38);
+  border-radius: 1.6rem;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 12px 36px rgba(15, 23, 42, 0.08);
 }
 
 :root[data-platform="android"] .btn-primary {
-  box-shadow: none;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    0 16px 40px rgba(37, 99, 235, 0.18);
 }
 
 :root[data-platform="android"] .btn-secondary {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(226, 232, 240, 0.95);
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(148, 163, 184, 0.45);
 }
 
 :root[data-platform="android"] .btn-secondary:hover {
-  background: rgba(248, 250, 252, 1);
+  background: rgba(255, 255, 255, 0.92);
 }
 
 :root[data-platform="android"] .chip {
-  background: rgba(241, 245, 249, 1);
-  border-color: rgba(226, 232, 240, 1);
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(148, 163, 184, 0.35);
 }
 
 :root[data-platform="android"] .safe-top {
