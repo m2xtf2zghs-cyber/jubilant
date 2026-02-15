@@ -90,6 +90,7 @@ export default function PdView({ backend, applicationId, lead = null, isAdmin = 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
+  const [doubtsOpen, setDoubtsOpen] = useState(false);
 
   const ownerId = app?.owner_id || lead?.ownerId || null;
 
@@ -482,144 +483,155 @@ export default function PdView({ backend, applicationId, lead = null, isAdmin = 
   }
 
   return (
-    <div className="p-6 space-y-6 overflow-y-auto h-full">
-      <div className="surface p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <button className="btn-secondary px-3 py-2" onClick={onBack}>
-                <ArrowLeft size={16} /> Back
-              </button>
-              <div className="text-xl font-extrabold text-slate-900">PD + Dynamic Doubts</div>
-            </div>
-            <div className="text-sm text-slate-600 mt-1">
-              Lead: <span className="font-bold text-slate-900">{lead?.name || app?.lead_id || "—"}</span>{" "}
-              <span className="text-slate-300">•</span> Underwriting ID: <span className="font-mono">{String(applicationId).slice(0, 8)}</span>
-            </div>
-            <div className="text-xs text-slate-500 mt-1">
-              Ask: {fmtInr(lead?.loanAmount || app?.requested_exposure || 0)} • Recommendation: {fmtInr(underwriting?.recommendation?.recommendedExposure || 0)}
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            {statusMsg && <div className="text-xs font-bold text-slate-500">{statusMsg}</div>}
-            <button className="btn-primary" onClick={submitPd} disabled={busy}>
-              <CheckCircle2 size={18} /> Submit PD
+    <div className="fixed inset-0 z-[60] bg-slate-50">
+      <iframe
+        ref={iframeRef}
+        title="PD Master v50"
+        src="/pd/pd_master_v50.html"
+        className="w-full h-full"
+        style={{ border: 0 }}
+        onLoad={() => sendInitToIframe()}
+      />
+
+      {/* Bottom action bar (keeps PD Master UI clean, avoids double headers) */}
+      <div className="fixed inset-x-0 bottom-0 z-[70] safe-bottom print:hidden">
+        <div className="mx-auto max-w-5xl px-3 pb-3">
+          <div className="surface-solid px-3 py-2 flex items-center justify-between gap-2 bg-white/80 backdrop-blur">
+            <button className="btn-secondary px-3 py-2" onClick={onBack} disabled={busy}>
+              <ArrowLeft size={16} /> Back
             </button>
-            <div className="text-[11px] text-slate-500">
-              {immediatePending.length ? (
-                <span className="text-red-600 font-bold">{immediatePending.length} Immediate Action pending</span>
-              ) : anyPending ? (
-                <span className="text-orange-600 font-bold">Pending doubts remain</span>
-              ) : (
-                <span className="text-emerald-700 font-bold">All doubts resolved</span>
-              )}
+
+            <div className="min-w-0 flex-1 px-2">
+              <div className="text-[11px] text-slate-600 truncate">
+                Lead: <span className="font-bold text-slate-900">{lead?.name || "—"}</span>{" "}
+                <span className="text-slate-300">•</span>{" "}
+                {immediatePending.length ? (
+                  <span className="text-red-600 font-bold">{immediatePending.length} Immediate Action pending</span>
+                ) : anyPending ? (
+                  <span className="text-orange-600 font-bold">Pending doubts remain</span>
+                ) : (
+                  <span className="text-emerald-700 font-bold">All doubts resolved</span>
+                )}
+              </div>
+              {statusMsg ? <div className="text-[11px] text-slate-500 truncate">{statusMsg}</div> : null}
+              {error ? <div className="text-[11px] text-red-700 font-bold truncate">{error}</div> : null}
             </div>
+
+            <button className="btn-secondary px-3 py-2" onClick={() => setDoubtsOpen(true)} disabled={busy}>
+              <ShieldAlert size={16} />
+              Doubts
+              {questions.length ? <span className="ml-1 chip bg-white/70 border-slate-200">{questions.length}</span> : null}
+            </button>
+            <button className="btn-primary px-3 py-2" onClick={submitPd} disabled={busy}>
+              <CheckCircle2 size={18} /> Submit
+            </button>
           </div>
         </div>
-        {error && <div className="mt-4 p-4 rounded-xl border border-red-200 bg-red-50 text-red-700 font-bold text-sm">{error}</div>}
       </div>
 
-      <div className="surface p-6">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Auto-generated doubts</div>
-            <div className="text-lg font-extrabold text-slate-900 mt-1">Questions that must be cleared</div>
-          </div>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {questions.length === 0 && <div className="text-sm text-slate-500 italic">No doubts generated.</div>}
-          {questions.map((q) => {
-            const ans = answersByQ[q.id] || null;
-            const val =
-              q.answer_type === "number"
-                ? ans?.answer_number ?? ""
-                : q.answer_type === "date" || q.answer_type === "yes-no" || q.answer_type === "select"
-                  ? ans?.answer_text ?? ""
-                  : ans?.answer_text ?? "";
-            const requiredHint = q?.evidence_json?.required_upload_hint || "";
-
-            return (
-              <div key={q.id} className="border border-slate-200 rounded-2xl p-4 bg-white">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={chipClass(q.severity)}>{q.severity}</span>
-                      {q.category && <span className="chip bg-slate-50 border-slate-200 text-slate-700">{q.category}</span>}
-                      {q.source_rule_id && <span className="chip bg-indigo-50 border-indigo-200 text-indigo-700">Rule {q.source_rule_id}</span>}
-                      <span className="text-[10px] font-mono text-slate-400">{q.code}</span>
-                    </div>
-                    <div className="mt-2 font-bold text-slate-900">{q.question_text}</div>
-                    {requiredHint ? <div className="text-xs text-slate-500 mt-2">Evidence: {requiredHint}</div> : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select
-                      className="py-2"
-                      value={q.status || "Pending"}
-                      onChange={(e) => updateQuestion(q.id, { status: e.target.value })}
-                      disabled={busy}
-                    >
-                      <option value="Pending">Pending</option>
-                      <option value="Resolved">Resolved</option>
-                      <option value="Waived" disabled={!isAdmin}>
-                        Waived (Admin)
-                      </option>
-                    </select>
-                    {isAdmin && q.status !== "Waived" && (
-                      <button className="btn-secondary px-3 py-2" onClick={() => updateQuestion(q.id, { status: "Waived" })} disabled={busy}>
-                        Waive
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {answerField(q, val, (next) => {
-                    if (q.answer_type === "number") return upsertAnswer(q.id, { number: next === "" ? null : Number(next) });
-                    if (q.answer_type === "date" || q.answer_type === "yes-no" || q.answer_type === "select") return upsertAnswer(q.id, { text: next });
-                    return upsertAnswer(q.id, { text: next });
-                  })}
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs text-slate-500 font-mono truncate">
-                      {ans?.attachment_path ? `Attachment: ${ans.attachment_path}` : "No attachment uploaded"}
-                    </div>
-                    <label className="btn-secondary px-3 py-2 cursor-pointer">
-                      <UploadCloud size={16} /> Upload evidence
-                      <input
-                        type="file"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) uploadEvidence(q.id, f);
-                          e.target.value = "";
-                        }}
-                      />
-                    </label>
-                  </div>
+      {/* Doubts drawer */}
+      {doubtsOpen && (
+        <div className="fixed inset-0 z-[80] bg-slate-950/50 backdrop-blur-sm p-3 md:p-6 overflow-y-auto print:hidden">
+          <div className="mx-auto max-w-4xl surface-solid p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Auto-generated doubts</div>
+                <div className="text-lg font-extrabold text-slate-900 mt-1">Questions that must be cleared</div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Ask: {fmtInr(lead?.loanAmount || app?.requested_exposure || 0)} • Recommendation:{" "}
+                  {fmtInr(underwriting?.recommendation?.recommendedExposure || 0)}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </div>
+              <button className="btn-secondary px-3 py-2" onClick={() => setDoubtsOpen(false)}>
+                Close
+              </button>
+            </div>
 
-      <div className="surface p-6">
-        <div className="text-xs font-bold uppercase tracking-wider text-slate-500">PD Master v50</div>
-        <div className="text-lg font-extrabold text-slate-900 mt-1">Personal Discussion form</div>
-        <div className="text-sm text-slate-600 mt-1">Autosaves to cloud. Use “Save PDF” inside the form when needed.</div>
+            <div className="mt-5 space-y-3">
+              {questions.length === 0 && <div className="text-sm text-slate-500 italic">No doubts generated.</div>}
+              {questions.map((q) => {
+                const ans = answersByQ[q.id] || null;
+                const val =
+                  q.answer_type === "number"
+                    ? ans?.answer_number ?? ""
+                    : q.answer_type === "date" || q.answer_type === "yes-no" || q.answer_type === "select"
+                      ? ans?.answer_text ?? ""
+                      : ans?.answer_text ?? "";
+                const requiredHint = q?.evidence_json?.required_upload_hint || "";
 
-        <div className="mt-4 rounded-2xl overflow-hidden border border-slate-200 bg-white">
-          <iframe
-            ref={iframeRef}
-            title="PD Master v50"
-            src="/pd/pd_master_v50.html"
-            className="w-full"
-            style={{ height: "85vh" }}
-            onLoad={() => sendInitToIframe()}
-          />
+                return (
+                  <div key={q.id} className="border border-slate-200 rounded-2xl p-4 bg-white">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={chipClass(q.severity)}>{q.severity}</span>
+                          {q.category && <span className="chip bg-slate-50 border-slate-200 text-slate-700">{q.category}</span>}
+                          {q.source_rule_id && (
+                            <span className="chip bg-indigo-50 border-indigo-200 text-indigo-700">Rule {q.source_rule_id}</span>
+                          )}
+                          <span className="text-[10px] font-mono text-slate-400">{q.code}</span>
+                        </div>
+                        <div className="mt-2 font-bold text-slate-900">{q.question_text}</div>
+                        {requiredHint ? <div className="text-xs text-slate-500 mt-2">Evidence: {requiredHint}</div> : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="py-2"
+                          value={q.status || "Pending"}
+                          onChange={(e) => updateQuestion(q.id, { status: e.target.value })}
+                          disabled={busy}
+                        >
+                          <option value="Pending">Pending</option>
+                          <option value="Resolved">Resolved</option>
+                          <option value="Waived" disabled={!isAdmin}>
+                            Waived (Admin)
+                          </option>
+                        </select>
+                        {isAdmin && q.status !== "Waived" && (
+                          <button
+                            className="btn-secondary px-3 py-2"
+                            onClick={() => updateQuestion(q.id, { status: "Waived" })}
+                            disabled={busy}
+                          >
+                            Waive
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-3">
+                      {answerField(q, val, (next) => {
+                        if (q.answer_type === "number") return upsertAnswer(q.id, { number: next === "" ? null : Number(next) });
+                        if (q.answer_type === "date" || q.answer_type === "yes-no" || q.answer_type === "select")
+                          return upsertAnswer(q.id, { text: next });
+                        return upsertAnswer(q.id, { text: next });
+                      })}
+
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs text-slate-500 font-mono truncate">
+                          {ans?.attachment_path ? `Attachment: ${ans.attachment_path}` : "No attachment uploaded"}
+                        </div>
+                        <label className="btn-secondary px-3 py-2 cursor-pointer">
+                          <UploadCloud size={16} /> Upload evidence
+                          <input
+                            type="file"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) uploadEvidence(q.id, f);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
