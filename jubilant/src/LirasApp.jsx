@@ -8455,13 +8455,21 @@ export default function LirasApp({ backend = null }) {
           </button>
         </div>
         <div className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-2">Main</div>
           <SidebarItem
             icon={TrendingUp}
             label="Dashboard"
             active={activeView === "dashboard"}
             onClick={() => {
               setActiveView("dashboard");
+              setIsSidebarOpen(false);
+            }}
+          />
+          <SidebarItem
+            icon={FileText}
+            label="Leads"
+            active={["all", "kanban", "calendar", "watchlist", "stale"].includes(activeView)}
+            onClick={() => {
+              setActiveView("all");
               setIsSidebarOpen(false);
             }}
           />
@@ -8475,37 +8483,6 @@ export default function LirasApp({ backend = null }) {
             }}
           />
           <SidebarItem
-            icon={AlertTriangle}
-            label="Clearance Center"
-            active={activeView === "clearance"}
-            count={clearanceCount ? clearanceCount : undefined}
-            alert={clearanceCount > 0}
-            onClick={() => {
-              setActiveView("clearance");
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
-            icon={History}
-            label="Stale Leads"
-            active={activeView === "stale"}
-            count={stats.stale ? stats.stale : undefined}
-            alert={stats.stale > 0}
-            onClick={() => {
-              setActiveView("stale");
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
-            icon={Layout}
-            label="Kanban Board"
-            active={activeView === "kanban"}
-            onClick={() => {
-              setActiveView("kanban");
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
             icon={BookOpen}
             label="Loan Book"
             active={activeView === "loan_book"}
@@ -8515,115 +8492,40 @@ export default function LirasApp({ backend = null }) {
             }}
           />
           <SidebarItem
-            icon={Calendar}
-            label="Calendar"
-            active={activeView === "calendar"}
+            icon={ClipboardList}
+            label="Collections"
+            active={["today", "overdue", "renewal_watch", "clearance"].includes(activeView)}
+            count={collectionsBadge}
+            alert={clearanceCount > 0 || stats.overdue > 0}
             onClick={() => {
-              setActiveView("calendar");
+              setActiveView(clearanceCount > 0 ? "clearance" : stats.overdue > 0 ? "overdue" : "today");
               setIsSidebarOpen(false);
             }}
           />
           <SidebarItem
-            icon={FileText}
-            label="All Leads"
-            active={activeView === "all"}
+            icon={FileBarChart}
+            label="Reports"
+            active={isReportsSection}
             onClick={() => {
-              setActiveView("all");
+              setActiveView("reports");
               setIsSidebarOpen(false);
             }}
           />
-
-          <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">Intelligence</div>
           <SidebarItem
             icon={Users}
-            label="Mediators"
-            active={activeView === "mediators"}
-            onClick={() => {
-              setActiveView("mediators");
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
-            icon={PieChart}
-            label="Analytics"
-            active={activeView === "analytics"}
-            onClick={() => {
-              setActiveView("analytics");
-              setIsSidebarOpen(false);
-            }}
-          />
-
-          <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">CRM</div>
-          <SidebarItem
-            icon={Timer}
-            label="My Day"
-            active={activeView === "android_myday"}
+            label="CRM / Network"
+            active={isCrmSection}
             onClick={() => {
               setActiveView("android_myday");
               setIsSidebarOpen(false);
             }}
           />
           <SidebarItem
-            icon={ClipboardList}
-            label="Tasks"
-            active={activeView === "android_tasks"}
-            onClick={() => {
-              setActiveView("android_tasks");
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
-            icon={Users}
-            label="Partners"
-            active={activeView === "android_partners"}
-            onClick={() => {
-              setActiveView("android_partners");
-              setIsSidebarOpen(false);
-            }}
-          />
-
-          <div className="px-4 text-xs font-bold uppercase text-slate-500 mb-2 mt-6">Reports & Tools</div>
-          {backendEnabled && isAdmin && (
-            <>
-              <SidebarItem
-                icon={History}
-                label="Daily Activity Report"
-                onClick={() => {
-                  setReportType("daily_activity");
-                  setIsSidebarOpen(false);
-                }}
-              />
-              <SidebarItem
-                icon={History}
-                label="EOD Activity Report"
-                onClick={() => {
-                  setReportType("eod");
-                  setIsSidebarOpen(false);
-                }}
-              />
-            </>
-          )}
-          <SidebarItem
-            icon={FileBarChart}
-            label="Monthly Performance"
-            onClick={() => {
-              setReportType("monthly");
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
-            icon={Calculator}
-            label="EMI Calculator"
-            onClick={() => {
-              setIsEmiOpen(true);
-              setIsSidebarOpen(false);
-            }}
-          />
-          <SidebarItem
             icon={Settings}
-            label="Data & Settings"
+            label="Settings"
+            active={activeView === "settings"}
             onClick={() => {
-              setIsSettingsOpen(true);
+              setActiveView("settings");
               setIsSidebarOpen(false);
             }}
           />
@@ -8975,238 +8877,12 @@ export default function LirasApp({ backend = null }) {
                   onManage={() => setIsSettingsOpen(true)}
                 />
               )}
-              <div className="surface p-6">
-                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                  <div>
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Dashboard</div>
-                    <div className="text-2xl font-extrabold text-slate-900 mt-2">Portfolio control panel</div>
-                    <div className="text-sm text-slate-600 mt-1">Pipeline, collections, and risk signals in one place.</div>
-                  </div>
-                  <div className="flex gap-2 self-start">
-                    <button type="button" className="btn-secondary" onClick={() => setActiveView("clearance")}>
-                      <ClipboardList size={16} /> Clearance
-                    </button>
-                    <button type="button" className="btn-primary" onClick={() => setIsAddModalOpen(true)}>
-                      <Plus size={16} /> Add lead
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setActiveView("all")}
-                    className="text-left rounded-2xl border border-slate-800 bg-slate-900 text-white p-5 hover:bg-slate-800 transition"
-                  >
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-300">Active pipeline</div>
-                    <div className="mt-3 flex items-end justify-between gap-4">
-                      <div className="text-3xl font-extrabold">{portfolioSummary.activeCount}</div>
-                      <div className="text-sm font-bold text-slate-200">{formatCurrency(portfolioSummary.activeVolume)}</div>
-                    </div>
-                    <div className="text-xs text-slate-300 mt-2">Tap to view all leads</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveView("overdue")}
-                    className="surface-solid p-5 text-left hover:ring-1 hover:ring-slate-200 transition"
-                  >
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Overdue</div>
-                    <div className="mt-3 text-3xl font-extrabold text-rose-700">{stats.overdue}</div>
-                    <div className="text-xs text-slate-500 mt-2">Past follow-up dates</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveView("today")}
-                    className="surface-solid p-5 text-left hover:ring-1 hover:ring-slate-200 transition"
-                  >
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Action today</div>
-                    <div className="mt-3 text-3xl font-extrabold text-emerald-700">{stats.today}</div>
-                    <div className="text-xs text-slate-500 mt-2">Due today (IST)</div>
-                  </button>
-                </div>
-
-                <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <button type="button" onClick={() => setActiveView("all")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Total leads</div>
-                    <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.total}</div>
-                  </button>
-                  <button type="button" onClick={() => setActiveView("renewal_watch")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Renewal watch</div>
-                    <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.renewal}</div>
-                  </button>
-                  <button type="button" onClick={() => setActiveView("watchlist")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Watchlist</div>
-                    <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.watch}</div>
-                  </button>
-                  <button type="button" onClick={() => setActiveView("stale")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Stale</div>
-                    <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.stale}</div>
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-6">
-                  <div className="surface p-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Pipeline</div>
-                        <div className="text-lg font-extrabold text-slate-900 mt-2">Pipeline overview</div>
-                        <div className="text-sm text-slate-600 mt-1">Status mix for fast scanning (counts only).</div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => setActiveView("kanban")}>
-                          <Layout size={16} /> Kanban
-                        </button>
-                        <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => setActiveView("all")}>
-                          <FileText size={16} /> Leads
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 grid grid-cols-2 md:grid-cols-3 gap-3">
-                      {pipelineStageCounts
-                        .filter((s) => ["New", "Meeting Scheduled", "Follow-Up Required", "Partner Follow-Up", "Commercial Client"].includes(s.status))
-                        .map((s) => (
-                          <div key={s.status} className="surface-solid p-4">
-                            <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">{s.status}</div>
-                            <div className="mt-2 text-2xl font-extrabold text-slate-900">{s.count}</div>
-                          </div>
-                        ))}
-                      <div className="surface-solid p-4">
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Closed</div>
-                        <div className="mt-2 text-2xl font-extrabold text-slate-900">{portfolioSummary.closedCount}</div>
-                      </div>
-                      <div className="surface-solid p-4">
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Rejected</div>
-                        <div className="mt-2 text-2xl font-extrabold text-slate-900">{portfolioSummary.rejectedCount}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="surface p-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Collections</div>
-                        <div className="text-lg font-extrabold text-slate-900 mt-2">Collections status</div>
-                        <div className="text-sm text-slate-600 mt-1">Follow-ups due, overdue, renewals, and clearance.</div>
-                      </div>
-                      <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => setActiveView("clearance")}>
-                        <ClipboardList size={16} /> Clearance
-                      </button>
-                    </div>
-
-                    <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <button type="button" onClick={() => setActiveView("today")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Due today</div>
-                        <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.today}</div>
-                        <div className="text-xs text-slate-500 mt-1">Follow-ups scheduled for today</div>
-                      </button>
-                      <button type="button" onClick={() => setActiveView("overdue")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Overdue</div>
-                        <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.overdue}</div>
-                        <div className="text-xs text-slate-500 mt-1">Past follow-up dates</div>
-                      </button>
-                      <button type="button" onClick={() => setActiveView("renewal_watch")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Renewal watch</div>
-                        <div className="mt-2 text-2xl font-extrabold text-slate-900">{stats.renewal}</div>
-                        <div className="text-xs text-slate-500 mt-1">Next 30 days follow-up</div>
-                      </button>
-                      <button type="button" onClick={() => setActiveView("clearance")} className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition">
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Clearance pending</div>
-                        <div className="mt-2 text-2xl font-extrabold text-slate-900">{dailyPending.length}</div>
-                        <div className="text-xs text-slate-500 mt-1">Leads without today update</div>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <div className="surface p-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Alerts</div>
-                        <div className="text-lg font-extrabold text-slate-900 mt-2">Risk & loose ends</div>
-                        <div className="text-sm text-slate-600 mt-1">Items that need closure today.</div>
-                      </div>
-                      <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => setActiveView("clearance")}>
-                        <ClipboardList size={16} /> Open
-                      </button>
-                    </div>
-
-                    <div className="mt-5 space-y-3">
-                      {pendingReviews.length > 0 && (
-                        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 flex items-center justify-between gap-3">
-                          <div>
-                            <div className="font-extrabold text-red-900 flex items-center gap-2">
-                              <AlertTriangle size={18} /> Past meetings pending
-                            </div>
-                            <div className="text-xs text-red-700 mt-1">{pendingReviews.length} meetings need a status update.</div>
-                          </div>
-                          <button type="button" className="btn-danger px-3 py-2 text-xs shrink-0" onClick={() => setActiveView("clearance")}>
-                            Review
-                          </button>
-                        </div>
-                      )}
-
-                      {dailyPending.length > 0 && (
-                        <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 flex items-center justify-between gap-3">
-                          <div>
-                            <div className="font-extrabold text-orange-900 flex items-center gap-2">
-                              <Clock size={18} /> EOD pending updates
-                            </div>
-                            <div className="text-xs text-orange-800 mt-1">{dailyPending.length} active leads haven’t been updated today.</div>
-                          </div>
-                          <button type="button" className="btn-primary px-3 py-2 text-xs shrink-0" onClick={() => setActiveView("clearance")}>
-                            Clear
-                          </button>
-                        </div>
-                      )}
-
-                      {stats.stale > 0 && (
-                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 flex items-center justify-between gap-3">
-                          <div>
-                            <div className="font-extrabold text-amber-900 flex items-center gap-2">
-                              <History size={18} /> Stale leads
-                            </div>
-                            <div className="text-xs text-amber-800 mt-1">
-                              {stats.stale} leads have no updates for {STALE_AFTER_DAYS}+ days.
-                            </div>
-                          </div>
-                          <button type="button" className="btn-secondary px-3 py-2 text-xs shrink-0" onClick={() => setActiveView("stale")}>
-                            Review
-                          </button>
-                        </div>
-                      )}
-
-                      {pendingReviews.length === 0 && dailyPending.length === 0 && stats.stale === 0 && (
-                        <div className="text-sm text-slate-500 italic">No urgent alerts right now.</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <EnhancedDashboardSummary leads={leads} />
-                </div>
-              </div>
-
               {newLeads.length > 0 && (
-                <div id="dashboard_new_leads" className="surface p-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Triage</div>
-                      <div className="text-lg font-extrabold text-slate-900 mt-2 flex items-center gap-2">
-                        <Zap className="text-yellow-600" size={18} /> New leads ({newLeads.length})
-                      </div>
-                      <div className="text-sm text-slate-600 mt-1">One-tap status updates. Fill details later in the lead view.</div>
-                    </div>
-                    <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => setActiveView("all")}>
-                      <FileText size={16} /> All leads
-                    </button>
-                  </div>
-
-                  <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div id="dashboard_new_leads" className="mb-2">
+                  <h3 className="font-extrabold text-slate-900 mb-3 flex items-center gap-2 text-lg">
+                    <Zap className="text-yellow-500" /> Action Required ({newLeads.length})
+                  </h3>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {newLeads.map((l) => (
                       <NewLeadTriageCard
                         key={l.id}
@@ -9221,6 +8897,138 @@ export default function LirasApp({ backend = null }) {
                   </div>
                 </div>
               )}
+
+              {pendingReviews.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex flex-col md:flex-row justify-between items-center gap-4 shadow-sm animate-slide-up">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-red-100 p-2.5 rounded-full text-red-600">
+                      <AlertTriangle size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-red-900 text-lg">Action Required: Meetings</h3>
+                      <p className="text-sm text-red-700">
+                        You have <strong>{pendingReviews.length}</strong> meetings pending a status update.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveView("clearance")}
+                    className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-transform active:scale-95 whitespace-nowrap"
+                  >
+                    Open Clearance Center
+                  </button>
+                </div>
+              )}
+
+              {dailyPending.length > 0 && (
+                <div className="bg-orange-50 border-l-4 border-orange-500 rounded-r-xl p-4 shadow-md animate-slide-up">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-extrabold text-orange-900 text-lg flex items-center gap-2">
+                        <Clock size={20} /> End of Day Clearance
+                      </h3>
+                      <p className="text-sm text-orange-800 mt-1">
+                        You have <strong>{dailyPending.length}</strong> active leads that require an update before the day ends.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView("clearance")}
+                      className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors"
+                    >
+                      Open Clearance Center
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {stats.stale > 0 && (
+                <div className="bg-amber-50 border-l-4 border-amber-500 rounded-r-xl p-4 shadow-md animate-slide-up">
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <h3 className="font-extrabold text-amber-900 text-lg flex items-center gap-2">
+                        <History size={20} /> Stale Leads
+                      </h3>
+                      <p className="text-sm text-amber-800 mt-1">
+                        You have <strong>{stats.stale}</strong> leads with no updates for {STALE_AFTER_DAYS}+ days.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView("stale")}
+                      className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors whitespace-nowrap"
+                    >
+                      Review Stale
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <button
+                  type="button"
+                  onClick={() => setActiveView("all")}
+                  className="surface-solid p-4 text-left cursor-pointer hover:shadow-md hover:border-blue-300 transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Total Leads</p>
+                      <h3 className="text-2xl font-extrabold text-slate-900 group-hover:text-blue-700">{stats.total}</h3>
+                    </div>
+                    <div className="p-2 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors">
+                      <FileText size={20} />
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveView("today")}
+                  className="surface-solid p-4 text-left cursor-pointer hover:shadow-md hover:border-emerald-300 transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Action Today</p>
+                      <h3 className="text-2xl font-extrabold text-slate-900 group-hover:text-emerald-700">{stats.today}</h3>
+                    </div>
+                    <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 group-hover:bg-emerald-100 transition-colors">
+                      <Calendar size={20} />
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveView("overdue")}
+                  className="surface-solid p-4 text-left cursor-pointer hover:shadow-md hover:border-red-300 transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Overdue</p>
+                      <h3 className="text-2xl font-extrabold text-slate-900 group-hover:text-red-700">{stats.overdue}</h3>
+                    </div>
+                    <div className="p-2 rounded-lg bg-red-50 text-red-600 group-hover:bg-red-100 transition-colors">
+                      <AlertCircle size={20} />
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveView("renewal_watch")}
+                  className="surface-solid p-4 text-left cursor-pointer hover:shadow-md hover:border-orange-300 transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Renewal Watch</p>
+                      <h3 className="text-2xl font-extrabold text-slate-900 group-hover:text-orange-700">{stats.renewal}</h3>
+                    </div>
+                    <div className="p-2 rounded-lg bg-orange-50 text-orange-600 group-hover:bg-orange-100 transition-colors">
+                      <RefreshCw size={20} />
+                    </div>
+                  </div>
+                </button>
+              </div>
+
+              <EnhancedDashboardSummary leads={leads} />
 
               <div className="grid md:grid-cols-2 gap-6">
                 <MediatorFollowUpWidget mediators={mediators} onFollowUp={handleMediatorFollowUp} />
