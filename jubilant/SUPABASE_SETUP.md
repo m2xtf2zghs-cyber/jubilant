@@ -229,6 +229,48 @@ create policy "leads: delete own or admin" on public.leads
 for delete using (owner_id = auth.uid() or public.is_admin());
 ```
 
+## 4) Underwriting (Hardcoded Rule Engine)
+
+For the new **Hardcoded Underwriting (Rule Engine + Credit & Recovery Intelligence)** feature, run:
+
+- `jubilant/UNDERWRITING_SETUP.sql`
+
+This creates:
+
+- `underwriting_applications`
+- `underwriting_documents`
+- `underwriting_transactions`
+- `underwriting_metrics`
+- `underwriting_rule_runs`
+- `underwriting_flags`
+- `underwriting_recommendations`
+- `underwriting_triggers`
+
+RLS follows the same pattern as `leads`/`mediators`:
+
+- Staff: rows where `owner_id = auth.uid()`
+- Admin: all rows via `public.is_admin()`
+
+## 5) PD (Personal Discussion) + Dynamic Doubts
+
+For the **PD + Dynamic Doubts** workflow (Underwriting → PD), run:
+
+- `jubilant/PD_SETUP.sql`
+
+This creates:
+
+- `pd_sessions`
+- `pd_answers`
+- `pd_generated_questions`
+- `pd_generated_answers`
+- `pd_attachments`
+
+RLS follows the same pattern:
+
+- Staff: rows where `owner_id = auth.uid()`
+- Admin: all rows via `public.is_admin()`
+- Waive is admin-only via `pd_generated_questions.status = 'Waived'`
+
 ## 4) Make yourself the initial admin
 
 1. Create your first user in Supabase Auth (Users → Add user).
@@ -347,6 +389,8 @@ using (
 Notes:
 - The app stores files under: `<owner_id>/<lead_id>/<file_id>-<filename>`
 - If upload fails, the attachment stays **local on the device** (IndexedDB) and can be uploaded later.
+- Underwriting PDFs are stored under: `<owner_id>/underwriting/<application_id>/<timestamp>_<filename>`
+- PD evidence uploads are stored under: `<owner_id>/pd/<pd_session_id>/<question_id>/<timestamp>_<filename>`
 
 ## 8) (Optional) Enable in-app announcements (admin banner)
 

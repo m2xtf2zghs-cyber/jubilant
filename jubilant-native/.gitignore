@@ -1,0 +1,22 @@
+.DS_Store
+.idea/
+.gradle/
+build/
+local.properties
+**/build/
+**/.kotlin/
+**/.gradle/
+
+*.iml
+
+# iOS app (out of scope for this task)
+iosApp/
+
+# Optional local secrets
+supabase.properties
+
+# Signing keys (never commit)
+keystore.properties
+*.jks
+*.keystore
+*.p12

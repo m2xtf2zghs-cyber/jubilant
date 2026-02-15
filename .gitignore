@@ -4,9 +4,25 @@
 # macOS
 .DS_Store
 
+# IDE
+.idea/
+*.iml
+
 # Local toolchains / caches
 .tools/
 .gradle/
 .local/
 .gradle-user-home/
 .npm-cache/
+
+# Build artifacts
+*.apk
+*.aab
+
+# Android/iOS signing keys & local secrets
+*.jks
+*.keystore
+*.p12
+keystore.properties
+supabase.properties
+local.properties

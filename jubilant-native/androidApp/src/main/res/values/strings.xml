@@ -1,0 +1,20 @@
+<resources>
+  <string name="app_name">JUBILANT CRM</string>
+
+  <string name="widget_brand_cd">Jubilant CRM</string>
+  <string name="widget_quick_actions_desc">Quick actions for Jubilant CRM</string>
+  <string name="widget_quick_actions_subtitle">Quick actions</string>
+  <string name="widget_action_new_lead">New Lead</string>
+  <string name="widget_action_my_day">My Day</string>
+  <string name="widget_action_eod">EOD</string>
+  <string name="widget_action_scan_doc">Scan Doc</string>
+
+  <string name="shortcut_new_lead_short">New Lead</string>
+  <string name="shortcut_new_lead_long">Create a new lead</string>
+  <string name="shortcut_my_day_short">My Day</string>
+  <string name="shortcut_my_day_long">Open todays tasks</string>
+  <string name="shortcut_eod_short">EOD</string>
+  <string name="shortcut_eod_long">Open end-of-day clearance</string>
+  <string name="shortcut_scan_doc_short">Scan Doc</string>
+  <string name="shortcut_scan_doc_long">Upload a document to a lead</string>
+</resources>

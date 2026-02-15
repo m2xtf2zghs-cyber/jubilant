@@ -1,0 +1,184 @@
+{
+  "underwritingResult": {
+    "periodStart": "2026-01-01",
+    "periodEnd": "2026-03-31",
+    "statementDays": 90,
+    "bankName": "HDFC",
+    "accountType": "CURRENT",
+    "metrics": [
+      { "key": "avg_monthly_credits", "value": 12000000, "unit": "INR", "period": "", "meta": null },
+      { "key": "bounce_return_count", "value": 2, "unit": "COUNT", "period": "", "meta": null }
+    ],
+    "creditHeatMap": [
+      { "counterparty": "ACME DISTRIBUTORS", "nature": "Receipts", "freq": 14, "avgAmt": 420000, "totalAmt": 5880000, "pctOfTotal": 47.0, "dependency": "High", "priorityLevel": "", "flexi": "" }
+    ],
+    "debitHeatMap": [
+      { "counterparty": "LENDER / PRIVATE", "nature": "Existing lender", "freq": 8, "avgAmt": 98000, "totalAmt": 784000, "pctOfTotal": 6.5, "dependency": "", "priorityLevel": "High", "flexi": "No" }
+    ],
+    "gst": {
+      "months": [
+        { "month": "2026-01", "turnover": 9500000, "filedOn": null, "daysLate": 0 },
+        { "month": "2026-02", "turnover": 10000000, "filedOn": null, "daysLate": 0 },
+        { "month": "2026-03", "turnover": 9900000, "filedOn": null, "daysLate": 3 }
+      ],
+      "avgMonthlyTurnover": 9800000,
+      "volatilityScore": 0.32,
+      "filingGapCount": 0,
+      "lateFilingCount": 1,
+      "flags": ["GST_LATE_FILINGS"],
+      "commentary": "GST avg monthly turnover ₹98,00,000. Late filings: 1."
+    },
+    "itr": {
+      "years": [
+        { "year": "AY 2024-25", "turnover": 120000000, "profit": 2800000 },
+        { "year": "AY 2023-24", "turnover": 100000000, "profit": 4000000 }
+      ],
+      "latestTurnover": 120000000,
+      "latestProfit": 2800000,
+      "latestMarginPct": 2.3333333333,
+      "yoyTurnoverPct": 20.0,
+      "yoyProfitPct": -30.0,
+      "flags": ["ITR_MARGIN_THIN", "ITR_PROFIT_DROP"],
+      "commentary": "ITR margin is thin → higher default sensitivity."
+    },
+    "crossVerification": {
+      "bankVsGstAvgDiffPct": 22.5,
+      "bankVsItrAvgDiffPct": 18.2,
+      "rows": [
+        { "month": "2026-01", "bankCredits": 12000000, "gstTurnover": 9500000, "diffPct": 26.3157894737 },
+        { "month": "2026-02", "bankCredits": 11000000, "gstTurnover": 10000000, "diffPct": 10.0 },
+        { "month": "2026-03", "bankCredits": 13000000, "gstTurnover": 9900000, "diffPct": 31.3131313131 }
+      ],
+      "mismatchFlags": ["BANK_VS_GST_MISMATCH"],
+      "commentary": "Bank vs GST mismatch elevated."
+    },
+    "privateLenderCompetition": {
+      "estimatedLenders": 3,
+      "approxMonthlyDebtLoad": 784000,
+      "weeklyCollectionsDetected": true,
+      "rolloverRecyclingSignals": 2,
+      "evidence": [
+        { "date": "2026-01-06", "narration": "RETURN INTEREST - HAND LOAN", "direction": "DEBIT", "amount": 98000 }
+      ],
+      "summary": "Multiple lender-like debits with weekly cadence."
+    },
+    "cashVelocityControl": {
+      "sameDaySpendRatio": 0.61,
+      "tPlusOneSpendRatio": 0.23,
+      "idleCashRetentionRatio": 0.16,
+      "topInflowWeekday": "Mon",
+      "topInflowMonthDays": [1, 5, 15],
+      "borrowerType": "Trader / variable inflow operator",
+      "commentary": "Control collections via inflow-aligned dates."
+    },
+    "recommendation": {
+      "recommendedExposure": 6000000,
+      "tenureMonths": 9,
+      "collectionFrequency": "Weekly",
+      "collectionAmount": 205000,
+      "upfrontDeductionPct": 0.14,
+      "upfrontDeductionAmt": 840000,
+      "pricingApr": 44.5,
+      "structure": {
+        "disbursal_mode": "Staged",
+        "stage_1_pct": 0.6,
+        "stage_2_pct": 0.4,
+        "stage_2_condition": "Collections stable for 3 weeks + triggers green",
+        "hard_stop_balance_rule": "If balance < 10% of avg weekly inflow, stop further disbursal"
+      }
+    },
+    "verdict": {
+      "riskFit": "AcceptWithControl",
+      "riskGrade": "B",
+      "score": 68,
+      "streetSummary": "Borrower survives on ACME DISTRIBUTORS inflow; align weekly collections on Mon.",
+      "recoveryLeverageSummary": "Competition + concentration → stage disbursal + upfront deduction."
+    },
+    "ruleRunLog": [
+      { "id": "R010", "name": "Top inflow concentration", "category": "Concentration", "severity": "High", "passed": false, "scoreDelta": -12, "thresholds": { "max_pct": 40 }, "evidence": { "top_credit_pct": 47 }, "reason": "Dependency high. Tighten structure." },
+      { "id": "R040", "name": "Private lender stacking", "category": "Competition", "severity": "High", "passed": false, "scoreDelta": -14, "thresholds": { "max_estimated_lenders": 1 }, "evidence": { "estimated_lenders": 3 }, "reason": "Stacking signals present." },
+      { "id": "R071", "name": "Bank vs GST mismatch", "category": "Snapshot", "severity": "High", "passed": false, "scoreDelta": -10, "thresholds": { "max_avg_abs_diff_pct": 20 }, "evidence": { "avg_abs_diff_pct": 22.5 }, "reason": "Mismatch elevated." }
+    ],
+    "aggressiveSummary": "AGGRESSIVE VERDICT: Accept with Control | Grade B | Score 68"
+  },
+  "generatedDoubts": [
+    {
+      "code": "D010_TOP1_CREDIT_CONCENTRATION",
+      "severity": "High Risk",
+      "category": "Concentration",
+      "question_text": "Top inflow source contributes ~47% of credits (ACME DISTRIBUTORS). Explain the relationship and provide contract/order proof. What happens if this inflow stops for 30 days?",
+      "answer_type": "text",
+      "required_upload_hint": "Upload contract / work order / invoice proof",
+      "source_rule_id": "R010",
+      "status": "Pending"
+    },
+    {
+      "code": "D030_PRIVATE_LENDER_STACKING",
+      "severity": "Immediate Action",
+      "category": "Competition",
+      "question_text": "We detected private-lender competition/repayment signals. List ALL lenders, outstanding, weekly/monthly commitments and next due dates.",
+      "answer_type": "text",
+      "required_upload_hint": "Upload lender list / promissory notes / repayment schedule proof",
+      "source_rule_id": "R040",
+      "status": "Pending"
+    },
+    {
+      "code": "D021_BANK_VS_GST_MISMATCH",
+      "severity": "High Risk",
+      "category": "Cross Verification",
+      "question_text": "Bank credits diverge from GST turnover by ~22.5%. Break-up: cash sales? transfers? loans? Provide supporting documents and explain the variance.",
+      "answer_type": "text",
+      "required_upload_hint": "Upload sales register / cash sales proof / transfer mapping",
+      "source_rule_id": "R071",
+      "status": "Pending"
+    }
+  ],
+  "pdSessionSaved": {
+    "pd_sessions": {
+      "id": "3f8dd5d0-3af8-4bdf-8f20-aaaaaaaaaaaa",
+      "application_id": "b0c9b9d0-0b5d-4fd7-8f20-bbbbbbbbbbbb",
+      "owner_id": "11111111-2222-3333-4444-555555555555",
+      "created_by": "11111111-2222-3333-4444-555555555555",
+      "status": "submitted",
+      "open_items_status": "pending"
+    },
+    "pd_answers": [
+      {
+        "field_key": "__pd_master_v50_json",
+        "value_json": {
+          "version": 50,
+          "decisionStatus": "Pending",
+          "inputs": {
+            "c_name": "Demo Client",
+            "c_phone": "9000000000",
+            "b_turnover": "12000000",
+            "p_amt": "6000000",
+            "p_roi": "44.5",
+            "p_ten": "9"
+          },
+          "tables": {
+            "market": [
+              { "lender": "Private Lender A", "san": "₹10,00,000", "os": "₹7,50,000", "emi": "₹1,05,000" }
+            ],
+            "monthly": [
+              { "month": "2026-01", "gst": "9500000", "bank": "12000000" }
+            ]
+          }
+        }
+      }
+    ],
+    "pd_generated_questions": [
+      { "code": "D010_TOP1_CREDIT_CONCENTRATION", "severity": "High Risk", "status": "Resolved" },
+      { "code": "D030_PRIVATE_LENDER_STACKING", "severity": "Immediate Action", "status": "Pending" },
+      { "code": "D021_BANK_VS_GST_MISMATCH", "severity": "High Risk", "status": "Pending" }
+    ],
+    "pd_generated_answers": [
+      {
+        "question_code": "D010_TOP1_CREDIT_CONCENTRATION",
+        "answer_text": "We have a signed supply contract; if paused we shift volume to marketplace B2B within 2 weeks.",
+        "attachment_path": "11111111-2222-3333-4444-555555555555/pd/3f8dd5d0-3af8-4bdf-8f20-aaaaaaaaaaaa/D010/1700000000000_contract.pdf"
+      }
+    ]
+  }
+}
+

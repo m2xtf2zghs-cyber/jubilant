@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <shortcut
+    android:shortcutId="new_lead"
+    android:enabled="true"
+    android:icon="@drawable/ic_launcher"
+    android:shortcutShortLabel="@string/shortcut_new_lead_short"
+    android:shortcutLongLabel="@string/shortcut_new_lead_long">
+    <intent
+      android:action="android.intent.action.VIEW"
+      android:targetPackage="com.jubilant.lirasnative"
+      android:targetClass="com.jubilant.lirasnative.MainActivity">
+      <extra android:name="nav_route" android:value="lead_new" />
+    </intent>
+  </shortcut>
+
+  <shortcut
+    android:shortcutId="my_day"
+    android:enabled="true"
+    android:icon="@drawable/ic_launcher"
+    android:shortcutShortLabel="@string/shortcut_my_day_short"
+    android:shortcutLongLabel="@string/shortcut_my_day_long">
+    <intent
+      android:action="android.intent.action.VIEW"
+      android:targetPackage="com.jubilant.lirasnative"
+      android:targetClass="com.jubilant.lirasnative.MainActivity">
+      <extra android:name="nav_route" android:value="my_day" />
+    </intent>
+  </shortcut>
+
+  <shortcut
+    android:shortcutId="eod"
+    android:enabled="true"
+    android:icon="@drawable/ic_launcher"
+    android:shortcutShortLabel="@string/shortcut_eod_short"
+    android:shortcutLongLabel="@string/shortcut_eod_long">
+    <intent
+      android:action="android.intent.action.VIEW"
+      android:targetPackage="com.jubilant.lirasnative"
+      android:targetClass="com.jubilant.lirasnative.MainActivity">
+      <extra android:name="nav_route" android:value="eod" />
+    </intent>
+  </shortcut>
+
+  <shortcut
+    android:shortcutId="scan_doc"
+    android:enabled="true"
+    android:icon="@drawable/ic_launcher"
+    android:shortcutShortLabel="@string/shortcut_scan_doc_short"
+    android:shortcutLongLabel="@string/shortcut_scan_doc_long">
+    <intent
+      android:action="android.intent.action.VIEW"
+      android:targetPackage="com.jubilant.lirasnative"
+      android:targetClass="com.jubilant.lirasnative.MainActivity">
+      <extra android:name="nav_route" android:value="scan_doc" />
+    </intent>
+  </shortcut>
+
+</shortcuts>

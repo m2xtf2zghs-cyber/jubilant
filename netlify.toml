@@ -1,7 +1,7 @@
 [build]
   base = "jubilant"
-  # Run a fully deterministic install + build so deploy logs show the real failure.
-  command = "node -v && npm -v && npm_config_production=false npm ci --no-audit --no-fund && npm run build"
+  # Use `npm install` (not `npm ci`) so deploys don't hard-fail when `package.json` changes before the lockfile is updated.
+  command = "node -v && npm -v && npm_config_production=false npm install --no-audit --no-fund && npm run build"
   publish = "dist"
   functions = "netlify/functions"
 

@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PD Master v50 (Auto-Pilot)</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --bg: #f9fafb;
+            --text: #111827;
+            --border: #d1d5db;
+            --accent: #10b981;
+        }
+        body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--text); padding-top: 80px; padding-bottom: 60px; }
+
+        /* HEADER */
+        .app-header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 12px 20px; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .header-brand { font-weight: 800; font-size: 1.25rem; color: #1e40af; }
+        
+        .save-btn { 
+            background: var(--primary); color: white; border: none; 
+            padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 0.9rem;
+            display: flex; align-items: center; gap: 8px; cursor: pointer;
+        }
+        .save-btn:active { transform: scale(0.98); transition: transform 0.1s; }
+
+        .preview-btn {
+            background: #eff6ff; color: var(--primary); border: none;
+            width: 40px; height: 40px; border-radius: 8px; font-size: 1.1rem;
+            display: flex; align-items: center; justify-content: center; cursor: pointer; margin-right: 8px;
+        }
+        .close-view-btn { position: fixed; top: 85px; right: 20px; z-index: 2000; background: #ef4444; color: white; border:none; padding: 8px 16px; border-radius: 8px; font-weight: bold; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        
+        /* CARDS */
+        .container { max-width: 900px; margin: 0 auto; padding: 0 15px; }
+        .card { background: #fff; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .card-header { padding: 16px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; background: #fff; cursor: pointer; transition: background 0.2s; user-select: none; }
+        .card-header.active { background: #eff6ff !important; color: var(--primary) !important; border-bottom: 1px solid #bfdbfe; }
+        .card-body { padding: 20px; display: none; background: #fff; }
+        .card-body.show { display: block; animation: fadeIn 0.3s ease; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* INPUTS */
+        .form-group { margin-bottom: 15px; }
+        .label { display: block; font-size: 0.75rem; font-weight: 700; color: #64748b; margin-bottom: 5px; text-transform: uppercase; }
+        .input, .select { width: 100%; padding: 12px; font-size: 0.95rem; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; }
+        .input:focus, .select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .input[readonly] { background-color: #f8fafc; color: #64748b; font-weight: 600; cursor: not-allowed; }
+        
+        /* AUTO-CALC HIGHLIGHTS */
+        .calc-badge { font-size: 0.7rem; padding: 4px 8px; border-radius: 6px; margin-left: 5px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; min-width: 45px;}
+        .badge-pos { background: #dcfce7; color: #166534; }
+        .badge-neg { background: #fee2e2; color: #991b1b; }
+        .badge-neu { background: #f1f5f9; color: #475569; }
+
+        /* TABLES */
+        .table-box { border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; margin-bottom: 15px; background: #fff; }
+        .clean-table { width: 100%; min-width: 600px; border-collapse: collapse; }
+        .clean-table th { background: #f8fafc; padding: 12px; text-align: left; font-size: 0.75rem; font-weight: 700; color: #475569; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        .clean-table td { border-bottom: 1px solid var(--border); padding: 0; }
+        .clean-table input { border: none; padding: 12px; width: 100%; min-width: 100px; font-size: 0.9rem; background: transparent; outline: none; }
+        .clean-table input:focus { background: #eff6ff; }
+        .btn-del { border: none; background: transparent; color: #ef4444; font-weight: bold; cursor: pointer; padding: 0 15px; }
+        
+        /* Specific Tables */
+        .const-table th { background: #fff7ed; color: #9a3412; border-bottom: 2px solid #fdba74; font-size: 0.7rem; }
+        .govt-table th { background: #f0fdf4; color: #166534; border-bottom: 2px solid #86efac; }
+        
+        /* UTILS */
+        .hidden { display: none !important; }
+        .text-primary { color: var(--primary) !important; }
+        .btn-full { width: 100%; padding: 12px; border-radius: 10px; border: none; font-weight: 600; cursor: pointer; margin-bottom: 10px; transition: 0.2s; }
+        .btn-full:hover { filter: brightness(0.95); }
+
+        /* PRINT / REPORT VIEW */
+        #resultView { display: none; background: white; margin: 20px auto; padding: 40px; max-width: 210mm; min-height: 297mm; border-radius: 0; box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
+        #resultView.visible { display: block; position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1500; overflow-y: auto; padding-top: 80px; background: #555; }
+        
+        .report-paper { background: white; padding: 40px; max-width: 210mm; margin: 0 auto; min-height: 297mm; position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); overflow: hidden; }
+        .report-header { border-bottom: 2px solid #1e40af; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; position: relative; z-index: 2; }
+        .report-title-box { flex: 1; text-align: center; }
+        .report-title { font-size: 24px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 1px; }
+        .report-meta { font-size: 12px; color: #666; margin-top: 5px; }
+        
+        .report-section { margin-bottom: 25px; position: relative; z-index: 2; }
+        .report-sec-head { background: #f1f5f9; padding: 8px 12px; font-weight: 700; font-size: 14px; border-left: 4px solid #1e40af; color: #333; margin-bottom: 10px; text-transform: uppercase; }
+        
+        .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 12px; }
+        .rep-item { display: flex; border-bottom: 1px dotted #ccc; padding-bottom: 2px; }
+        .rep-label { font-weight: 700; color: #555; width: 40%; }
+        .rep-val { font-weight: 600; color: #000; width: 60%; }
+        
+        .rep-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; }
+        .rep-table th { background: #e2e8f0; padding: 6px; text-align: left; border: 1px solid #cbd5e1; white-space: nowrap; font-size: 9px; }
+        .rep-table td { padding: 6px; border: 1px solid #cbd5e1; font-size: 9px; }
+
+        .watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 80px; color: rgba(0,0,0,0.04); font-weight: 900; pointer-events: none; white-space: nowrap; z-index: 0; user-select: none; }
+        .decision-box { border: 2px solid #10b981; background: #ecfdf5; padding: 15px; border-radius: 8px; text-align: center; margin-top: 20px; position: relative; z-index: 2; }
+        .decision-box.rejected { border-color: #ef4444; background: #fef2f2; }
+
+        /* Dark Mode */
+        body.dark { --bg: #111827; --text: #f3f4f6; --border: #374151; --primary: #60a5fa; }
+        body.dark .card, body.dark .app-header { background: #1f2937; color: var(--text); border-color: #374151; }
+        body.dark .input, body.dark .select { background: #374151; color: var(--text); border-color: #4b5563; }
+        body.dark .input[readonly] { background: #111827; }
+        body.dark .card-header { background: #1f2937; }
+        body.dark .card-header.active { background: #1e3a8a !important; color: #93c5fd !important; border-color: #1e40af; }
+        body.dark .table-box { background: #1f2937; border-color: #4b5563; }
+        body.dark .clean-table th { background: #111827; color: #d1d5db; border-color: #4b5563; }
+        body.dark .clean-table td { border-color: #4b5563; }
+        body.dark .clean-table input { color: white; }
+    </style>
+</head>
+<body>
+
+<div class="app-header no-print">
+    <div class="header-brand"><i class="fa-solid fa-calculator"></i> PD Auto-Pilot <small style="font-size:0.7rem; font-weight:400; opacity:0.7">v50</small></div>
+    <div style="display:flex">
+        <button id="themeToggle" class="preview-btn" onclick="toggleTheme()" title="Toggle Dark Mode"><i class="fa-solid fa-moon"></i></button>
+        <button class="preview-btn" onclick="toggleView()" id="viewToggle" title="Preview Report"><i class="fa-solid fa-eye"></i></button>
+        <button class="save-btn" onclick="generatePDF()">
+            <i class="fa-solid fa-file-pdf"></i> Save PDF
+        </button>
+    </div>
+</div>
+
+<button class="close-view-btn" id="closeViewBtn" onclick="toggleView()">Close Preview</button>
+
+<div class="container" id="mainContainer">
+    <div class="text-center no-print mb-3"><small class="text-muted" id="saveStatus">Auto-save enabled • Last saved just now</small></div>
+
+    <div id="pdForm" class="accordion no-print">
+        
+        <!-- 1. Client Profile -->
+        <div class="card">
+            <div class="card-header active" onclick="toggle(this)">
+                <span>1. Client Profile</span> <i class="fa-solid fa-chevron-up"></i>
+            </div>
+            <div class="card-body show">
+                <div class="form-group"><label class="label">Client Name</label><input id="c_name" class="input" placeholder="Enter Full Name"></div>
+                <div class="row g-2">
+                    <div class="col-6"><div class="form-group"><label class="label">Phone</label><input id="c_phone" type="tel" class="input"></div></div>
+                    <div class="col-6"><div class="form-group"><label class="label">Vintage (Yrs)</label><input id="c_vintage" type="number" class="input" oninput="calcRiskGrade()"></div></div>
+                </div>
+                <div class="form-group">
+                    <label class="label">Nature of Business</label>
+                    <select id="c_nature" class="select" onchange="checkBusinessNature()">
+                        <option value="">Select Business Type...</option>
+                        <option value="Retail">Retail Trade</option>
+                        <option value="Wholesale">Wholesale Trade</option>
+                        <option value="Manufacturing">Manufacturing</option>
+                        <option value="Service">Service Provider</option>
+                        <option value="Contractor">Contractor (Govt/Pvt Work Orders)</option>
+                        <option value="Real Estate">Real Estate Developer / Builder</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="label">Business Address</label>
+                    <input id="c_address" class="input" placeholder="City, State">
+                </div>
+            </div>
+        </div>
+
+        <!-- 1A. Builder Section (FULL COLUMNS) -->
+        <div class="card hidden" id="const_card">
+            <div class="card-header" style="background:#fff7ed; color:#9a3412;" onclick="toggle(this)">
+                <span>1A. Ongoing Projects (Builder Details)</span> <i class="fa-solid fa-building-user"></i>
+            </div>
+            <div class="card-body">
+                <div class="table-box">
+                    <table class="clean-table const-table">
+                        <thead>
+                            <tr>
+                                <th style="min-width:120px">Project Name</th>
+                                <th style="min-width:60px">Year</th>
+                                <th style="min-width:80px">Type</th>
+                                <th style="min-width:80px">JV/Outright</th>
+                                <th style="min-width:80px">Loan</th>
+                                <th style="min-width:100px">Stage</th>
+                                <th style="min-width:100px">Location</th>
+                                <th style="min-width:80px">Tot Area (Sqft)</th>
+                                <th style="min-width:70px">Rate/Sqft</th>
+                                <th style="min-width:60px">Tot Units</th>
+                                <th style="min-width:60px">Sold Units</th>
+                                <th style="min-width:80px">Sold Area</th>
+                                <th style="min-width:60px">Unsold Units</th>
+                                <th style="min-width:80px">Unsold Area</th>
+                                <th style="min-width:80px">Receivables (Cr)</th>
+                                <th style="min-width:40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="const_body"></tbody>
+                    </table>
+                </div>
+                <button class="btn btn-sm btn-outline-warning w-100 fw-bold" onclick="addConstRow()">+ Add Project Row</button>
+            </div>
+        </div>
+
+        <!-- 1B. Contractor Section -->
+        <div class="card hidden" id="govt_card">
+            <div class="card-header" style="background:#f0fdf4; color:#166534;" onclick="toggle(this)">
+                <span>1B. Work Orders (Contractor)</span> <i class="fa-solid fa-road"></i>
+            </div>
+            <div class="card-body">
+                <div class="table-box">
+                    <table class="clean-table govt-table">
+                        <thead><tr><th>Work Name</th><th>Dept</th><th>Value (Lakhs)</th><th>% Done</th><th>Bal (Auto)</th><th></th></tr></thead>
+                        <tbody id="govt_body"></tbody>
+                    </table>
+                </div>
+                <div class="row g-2 mt-2" style="background:#f0fdf4; padding:10px; border-radius:8px">
+                    <div class="col-8 text-end fw-bold text-success" style="align-self:center">Total Value in Hand (Lakhs):</div>
+                    <div class="col-4"><input id="govt_total_hand" class="input" style="border:none; font-weight:bold; background:transparent" readonly value="0"></div>
+                </div>
+                <button class="btn btn-sm btn-outline-success w-100 fw-bold mt-2" onclick="addGovtRow()">+ Add Work Order</button>
+            </div>
+        </div>
+
+        <!-- 2. Financials -->
+        <div class="card">
+            <div class="card-header" onclick="toggle(this)">
+                <span>2. Financial Analysis</span> <i class="fa-solid fa-chevron-down"></i>
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-end mb-2">
+                    <label class="label text-primary mb-0">ITR Analysis (Auto Growth & Margins)</label>
+                    <div id="dscr_badge" class="calc-badge badge-neu" style="font-size:0.8rem">DSCR: -</div>
+                </div>
+                
+                <div class="table-box">
+                    <table class="clean-table" id="itr_table">
+                        <thead><tr><th>Year</th><th>Sales <span style="font-size:0.6rem; color:#999">GROWTH%</span></th><th>Net Profit <span style="font-size:0.6rem; color:#999">NPM%</span></th></tr></thead>
+                        <tbody>
+                            <tr>
+                                <td><input class="itr_y" placeholder="FY-2"></td>
+                                <td><div class="d-flex"><input type="number" class="itr_s input-calc" placeholder="₹" oninput="calcFinancials()"><span class="calc-badge badge-neu" id="g1">-</span></div></td>
+                                <td><div class="d-flex"><input type="number" class="itr_p input-calc" placeholder="₹" oninput="calcFinancials()"><span class="calc-badge badge-neu" id="m1">0%</span></div></td>
+                            </tr>
+                            <tr>
+                                <td><input class="itr_y" placeholder="FY-1"></td>
+                                <td><div class="d-flex"><input type="number" class="itr_s input-calc" placeholder="₹" oninput="calcFinancials()"><span class="calc-badge badge-neu" id="g2">-</span></div></td>
+                                <td><div class="d-flex"><input type="number" class="itr_p input-calc" placeholder="₹" oninput="calcFinancials()"><span class="calc-badge badge-neu" id="m2">0%</span></div></td>
+                            </tr>
+                            <tr>
+                                <td><input class="itr_y" placeholder="Current FY"></td>
+                                <td><div class="d-flex"><input type="number" class="itr_s input-calc" placeholder="₹" oninput="calcFinancials()"><span class="calc-badge badge-neu" id="g3">-</span></div></td>
+                                <td><div class="d-flex"><input type="number" class="itr_p input-calc" placeholder="₹" oninput="calcFinancials()"><span class="calc-badge badge-neu" id="m3">0%</span></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <label class="label text-primary">Monthly Verification (Last 12 Months)</label>
+                <div class="table-box" style="max-height: 300px; overflow-y:auto;">
+                    <table class="clean-table" id="monthly_table">
+                        <thead><tr><th style="width:30%">Month</th><th>GST Sales</th><th>Bank Credits</th><th>Diff %</th></tr></thead>
+                        <tbody id="monthly_body"></tbody>
+                    </table>
+                </div>
+                <div class="row g-2 mt-2">
+                    <div class="col-6"><small>Total GST:</small> <span id="tot_gst" class="fw-bold">0</span></div>
+                    <div class="col-6"><small>Total Bank:</small> <span id="tot_bank" class="fw-bold">0</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. Assets & WC -->
+        <div class="card">
+            <div class="card-header" onclick="toggle(this)">
+                <span>3. Assets & Working Capital</span> <i class="fa-solid fa-chevron-down"></i>
+            </div>
+            <div class="card-body">
+                <div class="p-3 bg-light rounded border mb-3">
+                    <label class="label">Net Working Capital (Auto)</label>
+                    <div class="row g-2">
+                        <div class="col-4"><label class="label" style="font-size:0.65rem">Stock (+)</label><input id="stk_val" type="number" class="input input-wc" placeholder="0" oninput="calcWC()"></div>
+                        <div class="col-4"><label class="label" style="font-size:0.65rem">Debtors (+)</label><input id="debtors" type="number" class="input input-wc" placeholder="0" oninput="calcWC()"></div>
+                        <div class="col-4"><label class="label" style="font-size:0.65rem">Creditors (-)</label><input id="creditors" type="number" class="input input-wc" placeholder="0" oninput="calcWC()"></div>
+                    </div>
+                    <div class="mt-2 text-end">
+                        <small class="fw-bold text-muted">Net WC Gap:</small> 
+                        <span id="nwc_display" class="fw-bold fs-5 text-primary">₹0</span>
+                    </div>
+                </div>
+                
+                <div class="p-2 border rounded mb-3">
+                    <label class="label text-primary">Asset Details</label>
+                    
+                    <!-- House Block -->
+                    <div class="mb-3 p-2 bg-light rounded border-start border-4 border-primary">
+                        <div class="row g-2 align-items-center">
+                            <div class="col-3"><label class="label mb-0"><i class="fa-solid fa-house"></i> House</label></div>
+                            <div class="col-9">
+                                <select id="house_type" class="select" onchange="toggleAssetFields('house')">
+                                    <option value="Owned">Owned</option>
+                                    <option value="Rented">Rented</option>
+                                    <option value="Mortgaged">Mortgaged</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row g-2 mt-1 hidden" id="house_details_row">
+                            <div class="col-6" id="house_val_div">
+                                <input id="house_val" type="number" class="input asset-val" placeholder="Market Value ₹" oninput="calcLTV()">
+                            </div>
+                            <div class="col-6 hidden" id="house_loan_div">
+                                <select id="house_loan" class="select">
+                                    <option value="">Select Loan Type...</option>
+                                    <option value="Home Loan">Home Loan</option>
+                                    <option value="Term Loan/LAP">Term Loan / LAP</option>
+                                    <option value="OD/CC Limit">OD/CC Limit</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Office Block -->
+                    <div class="p-2 bg-light rounded border-start border-4 border-info">
+                        <div class="row g-2 align-items-center">
+                            <div class="col-3"><label class="label mb-0"><i class="fa-solid fa-briefcase"></i> Office</label></div>
+                            <div class="col-9">
+                                <select id="office_type" class="select" onchange="toggleAssetFields('office')">
+                                    <option value="Owned">Owned</option>
+                                    <option value="Rented">Rented</option>
+                                    <option value="Mortgaged">Mortgaged</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row g-2 mt-1 hidden" id="office_details_row">
+                            <div class="col-6" id="office_val_div">
+                                <input id="office_val" type="number" class="input asset-val" placeholder="Market Value ₹" oninput="calcLTV()">
+                            </div>
+                            <div class="col-6 hidden" id="office_loan_div">
+                                <select id="office_loan" class="select">
+                                    <option value="">Select Loan Type...</option>
+                                    <option value="Home Loan">Home Loan</option>
+                                    <option value="Term Loan/LAP">Term Loan / LAP</option>
+                                    <option value="OD/CC Limit">OD/CC Limit</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. Market Exposure -->
+        <div class="card">
+            <div class="card-header" onclick="toggle(this)">
+                <span>4. Market Exposure</span> <i class="fa-solid fa-chevron-down"></i>
+            </div>
+            <div class="card-body">
+                <div class="row g-2 mb-3 bg-primary bg-opacity-10 p-2 rounded">
+                    <div class="col-4"><label class="label">Total Borrowed</label><input class="input" id="m_tot_san" readonly style="font-weight:bold; border:none; background:transparent;"></div>
+                    <div class="col-4"><label class="label">Total Outstanding</label><input class="input" id="m_tot_out" readonly style="font-weight:bold; border:none; background:transparent;"></div>
+                    <div class="col-4"><label class="label">Total Monthly EMI</label><input class="input" id="m_tot_emi" readonly style="font-weight:bold; border:none; background:transparent;" oninput="calcDSCR()"></div>
+                </div>
+                <div class="table-box">
+                    <table class="clean-table">
+                        <thead><tr><th>Lender</th><th>Sanctioned</th><th>O/S Amt</th><th>EMI</th><th>Action</th></tr></thead>
+                        <tbody id="pf_table_body"></tbody>
+                    </table>
+                </div>
+                <button class="btn btn-sm btn-outline-primary w-100 fw-bold" onclick="addMarketRow()">+ Add Lender</button>
+            </div>
+        </div>
+
+        <!-- 5. Banking -->
+        <div class="card">
+            <div class="card-header" onclick="toggle(this)">
+                <span>5. Banking Summary</span> <i class="fa-solid fa-chevron-down"></i>
+            </div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-6"><label class="label">Avg Turnover</label><input id="b_turnover" type="number" class="input"></div>
+                    <div class="col-6"><label class="label">Total Bank EMI</label><input id="b_bank_emi" type="number" class="input"></div>
+                </div>
+                <div class="row g-2 mt-3">
+                    <div class="col-6"><label class="label">Secured Loan (Total)</label><input id="b_sec_borrowed" type="number" class="input"></div>
+                    <div class="col-6"><label class="label">Unsecured Loan (Total)</label><input id="b_unsec_borrowed" type="number" class="input"></div>
+                </div>
+                <div class="row g-2 mt-3">
+                    <div class="col-6"><label class="label">Chq Issued (6m)</label><input id="b_chq_iss" type="number" class="input"></div>
+                    <div class="col-6"><label class="label">Bounces (6m)</label><input id="b_bounce" type="number" class="input" oninput="calcRiskGrade()"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. Decision -->
+        <div class="card">
+            <div class="card-header" onclick="toggle(this)">
+                <span>6. Decision & Loan</span> <i class="fa-solid fa-chevron-down"></i>
+            </div>
+            <div class="card-body">
+                <div class="row g-2 mb-2">
+                    <div class="col-6"><label class="label">Loan Amount</label><input id="p_amt" type="number" class="input" oninput="calcLoanEMI()"></div>
+                    <div class="col-3"><label class="label">ROI %</label><input id="p_roi" type="number" class="input" oninput="calcLoanEMI()" value="10"></div>
+                    <div class="col-3"><label class="label">Tenure(M)</label><input id="p_ten" type="number" class="input" oninput="calcLoanEMI()" value="36"></div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-12">
+                        <label class="label text-success">Calculated EMI <span id="ltv_display" class="float-end text-muted" style="font-size:0.75rem">LTV: 0%</span></label>
+                        <input id="p_emi" class="input" readonly style="font-weight:bold; font-size:1.1rem; color:#166534; background:#dcfce7">
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="label">System Recommendation</label>
+                    <div id="risk_grade_box" style="padding:10px; border-radius:8px; background:#f3f4f6; font-weight:bold; text-align:center;">
+                        Grade: <span id="risk_grade_val">-</span>
+                    </div>
+                </div>
+                
+                <label class="label">PD Remarks</label><textarea id="remarks" class="input mb-3" rows="3" placeholder="Enter key observations..."></textarea>
+                
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-success flex-fill" onclick="setStatus('Approved')"><i class="fa-solid fa-check"></i> Approve</button>
+                    <button class="btn btn-outline-danger flex-fill" onclick="setStatus('Rejected')"><i class="fa-solid fa-xmark"></i> Reject</button>
+                </div>
+                
+                <hr>
+                <div class="row g-2">
+                    <div class="col-6"><button class="btn-full" style="background:#f1f5f9; color:#64748b" onclick="saveDraft()">Save Draft</button></div>
+                    <div class="col-6"><button class="btn-full" style="background:#e0f2fe; color:#0369a1" onclick="clearData()">Clear All</button></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- REPORT TEMPLATE (Hidden until generated) -->
+<div id="resultView">
+    <div class="report-paper" id="reportContent">
+        <div class="watermark">DRAFT</div>
+        
+        <div class="report-header">
+            <div class="report-title-box">
+                <div class="report-title">Credit Assessment Report</div>
+                <div class="report-meta">Generated via PD Auto-Pilot • <span id="rep_date"></span></div>
+            </div>
+        </div>
+
+        <div class="report-section">
+            <div class="report-sec-head">1. Business Profile</div>
+            <div class="report-grid">
+                <div class="rep-item"><div class="rep-label">Client Name:</div><div class="rep-val" id="rep_name"></div></div>
+                <div class="rep-item"><div class="rep-label">Vintage:</div><div class="rep-val"><span id="rep_vintage"></span> Years</div></div>
+                <div class="rep-item"><div class="rep-label">Nature:</div><div class="rep-val" id="rep_nature"></div></div>
+                <div class="rep-item"><div class="rep-label">Address:</div><div class="rep-val" id="rep_address"></div></div>
+            </div>
+            <!-- Builder/Govt Table Containers -->
+            <div id="rep_const_container" class="mt-2 hidden">
+                <div style="font-size:11px; font-weight:bold; margin-bottom:4px; border-bottom:1px solid #000">Ongoing Projects Analysis:</div>
+                <div style="overflow-x:auto">
+                    <table class="rep-table" id="rep_const_table" style="width:100%"></table>
+                </div>
+            </div>
+            <div id="rep_govt_container" class="mt-2 hidden">
+                <div style="font-size:11px; font-weight:bold; margin-bottom:4px;">Work Orders:</div>
+                <table class="rep-table" id="rep_govt_table"></table>
+            </div>
+        </div>
+
+        <div class="report-section">
+            <div class="report-sec-head">2. Financial Snapshot</div>
+            <table class="rep-table">
+                <thead><tr><th>Year</th><th>Sales (Growth %)</th><th>Profit (Margin %)</th></tr></thead>
+                <tbody id="rep_itr_body"></tbody>
+            </table>
+            <div class="mt-2" style="font-size:12px;">
+                <div style="font-weight:bold; border-bottom:1px solid #ddd; margin-bottom:4px">Banking Analysis:</div>
+                <div class="report-grid">
+                    <div class="rep-item"><div class="rep-label">Avg Turnover:</div><div class="rep-val" id="rep_b_turnover"></div></div>
+                    <div class="rep-item"><div class="rep-label">Total Bank EMI:</div><div class="rep-val" id="rep_b_bank_emi"></div></div>
+                    <div class="rep-item"><div class="rep-label">Secured Loans:</div><div class="rep-val" id="rep_b_sec"></div></div>
+                    <div class="rep-item"><div class="rep-label">Unsecured Loans:</div><div class="rep-val" id="rep_b_unsec"></div></div>
+                    <div class="rep-item"><div class="rep-label">Bounces:</div><div class="rep-val" id="rep_b_bounce"></div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="report-section">
+            <div class="report-sec-head">3. Financial Position</div>
+            <div class="report-grid">
+                <div class="rep-item"><div class="rep-label">Stock Value:</div><div class="rep-val" id="rep_stock"></div></div>
+                <div class="rep-item"><div class="rep-label">Market Obligations:</div><div class="rep-val" id="rep_obligations"></div></div>
+                <div class="rep-item"><div class="rep-label">Working Cap Gap:</div><div class="rep-val" id="rep_wc_gap"></div></div>
+                <div class="rep-item"><div class="rep-label">Properties:</div><div class="rep-val" id="rep_property"></div></div>
+            </div>
+        </div>
+
+        <div class="decision-box" id="rep_decision_box">
+            <h4 style="margin:0 0 5px 0" id="rep_status">DECISION PENDING</h4>
+            <div style="font-size:12px; margin-bottom:10px;">Recommended Loan: <span id="rep_loan"></span> @ <span id="rep_roi"></span>% for <span id="rep_ten"></span> months</div>
+            <div style="font-size:11px; margin-bottom:5px;"><strong>Risk Grade:</strong> <span id="rep_risk_grade">Pending</span> | <strong>LTV:</strong> <span id="rep_ltv">0%</span></div>
+            <div style="font-style:italic; font-size:11px; text-align:left;" id="rep_remarks"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    /* --- HOST BRIDGE (web iframe / Android WebView) --- */
+    function pdEmit(type, payload) {
+        const msg = { type, payload, source: 'PD_MASTER_V50' };
+        // Web iframe host
+        try {
+            if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+        } catch (e) {}
+        // Android WebView host (native JS interface)
+        try {
+            if (window.JubilantAndroid && typeof window.JubilantAndroid.postMessage === 'function') {
+                window.JubilantAndroid.postMessage(JSON.stringify(msg));
+            }
+        } catch (e) {}
+    }
+
+    function pdApplyDraft(data) {
+        if (!data) return;
+
+        // Inputs
+        const inputs = data.inputs || {};
+        for (let id in inputs) {
+            const el = document.getElementById(id);
+            if (el) el.value = inputs[id];
+        }
+
+        // Tables
+        const tables = data.tables || {};
+
+        // Builder projects
+        if (Array.isArray(tables.const)) {
+            document.getElementById('const_body').innerHTML = '';
+            tables.const.forEach((row) => addConstRow(row || {}));
+        }
+
+        // Contractor work orders
+        if (Array.isArray(tables.govt)) {
+            document.getElementById('govt_body').innerHTML = '';
+            tables.govt.forEach((row) => addGovtRow(row || {}));
+        }
+
+        // Market exposure lenders
+        if (Array.isArray(tables.market)) {
+            document.getElementById('pf_table_body').innerHTML = '';
+            tables.market.forEach((row) => addMarketRow(row || {}));
+        }
+
+        // Monthly GST vs Bank verification (12 rows)
+        if (Array.isArray(tables.monthly)) {
+            const rows = document.querySelectorAll('#monthly_body tr');
+            tables.monthly.forEach((m, idx) => {
+                const r = rows[idx];
+                if (!r) return;
+                const gst = r.querySelector('.gst-sale');
+                const bank = r.querySelector('.bank-cr');
+                if (gst) gst.value = m?.gst ?? '';
+                if (bank) bank.value = m?.bank ?? '';
+            });
+        }
+
+        // Decision status (no alerts)
+        if (data.decisionStatus) {
+            decisionStatus = String(data.decisionStatus || 'Pending');
+        }
+
+        // Recompute derived fields / UI
+        checkBusinessNature();
+        toggleAssetFields('house');
+        toggleAssetFields('office');
+        calcMarketTotal();
+        calcMonthly();
+        calcGovtTotal();
+        calcFinancials();
+        calcWC();
+        calcLTV();
+        calcRiskGrade();
+    }
+
+    // Host can call: iframe.contentWindow.postMessage({type:'PD_INIT', payload:{draft,prefill}}, '*')
+    function pdHostInit(payload) {
+        if (!payload) return;
+        // Pre-fill (shallow merge over current)
+        if (payload.prefill && typeof payload.prefill === 'object') {
+            pdApplyDraft({ inputs: payload.prefill, tables: {} });
+        }
+        // Full draft override
+        if (payload.draft && typeof payload.draft === 'object') {
+            pdApplyDraft(payload.draft);
+        }
+        // Notify host we applied init
+        pdEmit('PD_INIT_APPLIED', { ok: true, ts: Date.now() });
+    }
+    window.__PD_HOST_INIT__ = pdHostInit;
+    window.addEventListener('message', (event) => {
+        const msg = event?.data;
+        if (msg && msg.type === 'PD_INIT') pdHostInit(msg.payload);
+    });
+
+    /* --- INITIALIZATION --- */
+    document.addEventListener('DOMContentLoaded', () => {
+        initMonthlyTable();
+        loadDraft();
+        
+        // Initial check for Asset UI states based on default 'Owned' values
+        toggleAssetFields('house');
+        toggleAssetFields('office');
+        
+        setInterval(saveDraft, 10000); // Auto-save every 10s
+        
+        // Date for report
+        document.getElementById('rep_date').innerText = new Date().toLocaleDateString();
+
+        // Tell host we are ready (so it can send PD_INIT)
+        pdEmit('PD_READY', { version: 50 });
+    });
+
+    /* --- DOM HELPERS --- */
+    const getVal = (id) => document.getElementById(id).value;
+    const getNum = (id) => parseFloat(document.getElementById(id).value) || 0;
+    const setVal = (id, val) => document.getElementById(id).value = val;
+    const formatCurrency = (num) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(num);
+
+    /* --- UI TOGGLES --- */
+    function toggle(header) {
+        const body = header.nextElementSibling;
+        const icon = header.querySelector('.fa-solid');
+        
+        if (body.classList.contains('show')) {
+            body.classList.remove('show');
+            header.classList.remove('active');
+            if(icon) icon.className = 'fa-solid fa-chevron-down';
+        } else {
+            // Accordion style: close others
+            document.querySelectorAll('.card-body').forEach(b => b.classList.remove('show'));
+            document.querySelectorAll('.card-header').forEach(h => {
+                h.classList.remove('active');
+                const i = h.querySelector('.fa-solid');
+                if(i && (i.classList.contains('fa-chevron-up') || i.classList.contains('fa-chevron-down'))) 
+                    i.className = 'fa-solid fa-chevron-down';
+            });
+            
+            body.classList.add('show');
+            header.classList.add('active');
+            if(icon && (icon.classList.contains('fa-chevron-down') || icon.classList.contains('fa-chevron-up'))) 
+                icon.className = 'fa-solid fa-chevron-up';
+        }
+    }
+
+    function toggleTheme() {
+        document.body.classList.toggle('dark');
+        const btn = document.getElementById('themeToggle');
+        btn.innerHTML = document.body.classList.contains('dark') ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
+    }
+
+    function toggleView() {
+        const view = document.getElementById('resultView');
+        const closeBtn = document.getElementById('closeViewBtn');
+        const main = document.getElementById('mainContainer');
+        const isVisible = view.classList.contains('visible');
+        
+        if (!isVisible) {
+            prepareReport(); // Generate data before showing
+            view.classList.add('visible');
+            closeBtn.style.display = 'block';
+            main.style.display = 'none';
+        } else {
+            view.classList.remove('visible');
+            closeBtn.style.display = 'none';
+            main.style.display = 'block';
+        }
+    }
+
+    function checkBusinessNature() {
+        const nature = getVal('c_nature');
+        document.getElementById('const_card').classList.add('hidden');
+        document.getElementById('govt_card').classList.add('hidden');
+
+        if (nature === 'Real Estate') {
+            document.getElementById('const_card').classList.remove('hidden');
+        } else if (nature === 'Contractor') {
+            document.getElementById('govt_card').classList.remove('hidden');
+        }
+    }
+    
+    function toggleAssetFields(prefix) {
+        const type = document.getElementById(prefix + '_type').value;
+        const row = document.getElementById(prefix + '_details_row');
+        const valDiv = document.getElementById(prefix + '_val_div');
+        const loanDiv = document.getElementById(prefix + '_loan_div');
+        
+        if (type === 'Rented') {
+            row.classList.add('hidden');
+        } else {
+            row.classList.remove('hidden');
+            // Check for Mortgage
+            if (type === 'Mortgaged') {
+                loanDiv.classList.remove('hidden');
+                valDiv.classList.remove('col-12'); // reset grid
+                valDiv.classList.add('col-6');
+            } else {
+                loanDiv.classList.add('hidden');
+                valDiv.classList.remove('col-6');
+                valDiv.classList.add('col-12'); // full width if no loan field
+            }
+        }
+        calcLTV(); // Recalc LTV when asset status changes
+    }
+
+    /* --- DYNAMIC TABLES --- */
+    function addConstRow(data = {}) {
+        const tbody = document.getElementById('const_body');
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td><input placeholder="Name" value="${data.col1 || ''}"></td>
+            <td><input placeholder="Year" type="number" value="${data.col2 || ''}"></td>
+            <td><input placeholder="Type" value="${data.col3 || ''}"></td>
+            <td><input placeholder="JV/Own" value="${data.col4 || ''}"></td>
+            <td><input placeholder="Loan" value="${data.col5 || ''}"></td>
+            <td><input placeholder="Stage" value="${data.col6 || ''}"></td>
+            <td><input placeholder="Loc" value="${data.col7 || ''}"></td>
+            <td><input placeholder="Sqft" type="number" value="${data.col8 || ''}"></td>
+            <td><input placeholder="Rt" type="number" value="${data.col9 || ''}"></td>
+            <td><input placeholder="Unit" type="number" value="${data.col10 || ''}"></td>
+            <td><input placeholder="Sld" type="number" value="${data.col11 || ''}"></td>
+            <td><input placeholder="S.Ar" type="number" value="${data.col12 || ''}"></td>
+            <td><input placeholder="Uns" type="number" value="${data.col13 || ''}"></td>
+            <td><input placeholder="U.Ar" type="number" value="${data.col14 || ''}"></td>
+            <td><input placeholder="Cr" type="number" value="${data.col15 || ''}"></td>
+            <td style="text-align:center"><button class="btn-del" onclick="this.closest('tr').remove()">×</button></td>
+        `;
+    }
+
+    function addGovtRow(data = {}) {
+        const tbody = document.getElementById('govt_body');
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td><input placeholder="Work Name" value="${data.name || ''}"></td>
+            <td><input placeholder="Dept" value="${data.dept || ''}"></td>
+            <td><input type="number" class="wo-val" placeholder="₹" value="${data.val || ''}" oninput="calcGovtTotal()"></td>
+            <td><input type="number" class="wo-pct" placeholder="%" value="${data.pct || ''}" oninput="this.parentElement.nextElementSibling.querySelector('input').value = (this.closest('tr').querySelector('.wo-val').value * (1 - this.value/100)).toFixed(2); calcGovtTotal()"></td>
+            <td><input type="number" readonly class="wo-bal" value="${data.bal || ''}"></td>
+            <td style="text-align:center"><button class="btn-del" onclick="this.closest('tr').remove(); calcGovtTotal()">×</button></td>
+        `;
+    }
+    
+    function calcGovtTotal() {
+        let total = 0;
+        document.querySelectorAll('.wo-bal').forEach(inp => total += parseFloat(inp.value) || 0);
+        setVal('govt_total_hand', total.toFixed(2));
+    }
+
+    function addMarketRow(data = {}) {
+        const tbody = document.getElementById('pf_table_body');
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td><input placeholder="Bank/Lender" value="${data.lender || ''}"></td>
+            <td><input type="number" class="m-san" placeholder="₹" value="${data.san || ''}" oninput="calcMarketTotal()"></td>
+            <td><input type="number" class="m-os" placeholder="₹" value="${data.os || ''}" oninput="calcMarketTotal()"></td>
+            <td><input type="number" class="m-emi" placeholder="₹" value="${data.emi || ''}" oninput="calcMarketTotal()"></td>
+            <td style="text-align:center"><button class="btn-del" onclick="this.closest('tr').remove(); calcMarketTotal()">×</button></td>
+        `;
+    }
+
+    function calcMarketTotal() {
+        let san = 0, os = 0, emi = 0;
+        document.querySelectorAll('.m-san').forEach(i => san += parseFloat(i.value) || 0);
+        document.querySelectorAll('.m-os').forEach(i => os += parseFloat(i.value) || 0);
+        document.querySelectorAll('.m-emi').forEach(i => emi += parseFloat(i.value) || 0);
+        
+        setVal('m_tot_san', formatCurrency(san));
+        setVal('m_tot_out', formatCurrency(os));
+        setVal('m_tot_emi', formatCurrency(emi));
+        
+        calcDSCR(); // Update DSCR when EMI changes
+    }
+
+    function initMonthlyTable() {
+        const tbody = document.getElementById('monthly_body');
+        tbody.innerHTML = '';
+        const months = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
+        months.forEach(m => {
+            const row = tbody.insertRow();
+            row.innerHTML = `
+                <td><input readonly value="${m}" style="font-weight:bold; color:#64748b"></td>
+                <td><input type="number" class="gst-sale" oninput="calcMonthly()"></td>
+                <td><input type="number" class="bank-cr" oninput="calcMonthly()"></td>
+                <td><input readonly class="diff-pct" style="font-size:0.8rem"></td>
+            `;
+        });
+    }
+
+    function calcMonthly() {
+        let t_gst = 0, t_bank = 0;
+        document.querySelectorAll('#monthly_body tr').forEach(row => {
+            const gst = parseFloat(row.querySelector('.gst-sale').value) || 0;
+            const bank = parseFloat(row.querySelector('.bank-cr').value) || 0;
+            const diffInput = row.querySelector('.diff-pct');
+            
+            t_gst += gst;
+            t_bank += bank;
+            
+            if(gst > 0) {
+                const diff = ((bank - gst) / gst) * 100;
+                diffInput.value = diff.toFixed(1) + '%';
+                diffInput.style.color = Math.abs(diff) > 20 ? 'red' : 'green';
+            } else {
+                diffInput.value = '-';
+            }
+        });
+        document.getElementById('tot_gst').innerText = formatCurrency(t_gst);
+        document.getElementById('tot_bank').innerText = formatCurrency(t_bank);
+    }
+
+    /* --- CALCULATIONS --- */
+    function calcFinancials() {
+        const s1 = getNum('itr_table_r0_c1'); 
+        const sales = document.querySelectorAll('.itr_s');
+        const profits = document.querySelectorAll('.itr_p');
+        
+        profits.forEach((p, i) => {
+            const s = parseFloat(sales[i].value) || 0;
+            const net = parseFloat(p.value) || 0;
+            const badge = document.getElementById(`m${i+1}`);
+            if(s > 0) {
+                const margin = (net/s)*100;
+                badge.innerText = margin.toFixed(2) + '%';
+                badge.className = `calc-badge ${margin > 5 ? 'badge-pos' : 'badge-neu'}`;
+            }
+        });
+
+        for(let i=1; i<sales.length; i++) {
+            const cur = parseFloat(sales[i].value) || 0;
+            const prev = parseFloat(sales[i-1].value) || 0;
+            const badge = document.getElementById(`g${i+1}`);
+            if(prev > 0) {
+                const gr = ((cur - prev)/prev)*100;
+                badge.innerText = (gr > 0 ? '+' : '') + gr.toFixed(1) + '%';
+                badge.className = `calc-badge ${gr > 10 ? 'badge-pos' : (gr < 0 ? 'badge-neg' : 'badge-neu')}`;
+            }
+        }
+        calcDSCR(); // Update DSCR when profits change
+    }
+
+    function calcWC() {
+        const stk = getNum('stk_val');
+        const deb = getNum('debtors');
+        const cred = getNum('creditors');
+        const gap = stk + deb - cred;
+        
+        const el = document.getElementById('nwc_display');
+        el.innerText = formatCurrency(gap);
+        el.className = `fw-bold fs-5 ${gap > 0 ? 'text-primary' : 'text-danger'}`;
+        calcRiskGrade();
+    }
+
+    function calcLoanEMI() {
+        const P = getNum('p_amt');
+        const R = getNum('p_roi') / 1200;
+        const N = getNum('p_ten');
+        
+        if(P > 0 && R > 0 && N > 0) {
+            const emi = P * R * Math.pow(1+R, N) / (Math.pow(1+R, N) - 1);
+            setVal('p_emi', Math.round(emi).toLocaleString('en-IN'));
+        } else {
+            setVal('p_emi', '');
+        }
+        calcLTV();
+    }
+
+    // --- NEW AUTOMATIONS ---
+
+    function calcLTV() {
+        const loan = getNum('p_amt');
+        let assets = 0;
+        
+        // Sum house and office if NOT rented
+        const hType = getVal('house_type');
+        if(hType !== 'Rented') assets += getNum('house_val');
+        
+        const oType = getVal('office_type');
+        if(oType !== 'Rented') assets += getNum('office_val');
+        
+        const ltvDisplay = document.getElementById('ltv_display');
+        
+        if(assets > 0 && loan > 0) {
+            const ltv = (loan / assets) * 100;
+            ltvDisplay.innerText = `LTV: ${ltv.toFixed(1)}%`;
+            ltvDisplay.style.color = ltv > 80 ? 'red' : (ltv > 60 ? 'orange' : 'green');
+        } else {
+            ltvDisplay.innerText = "LTV: 0%";
+            ltvDisplay.style.color = "#999";
+        }
+    }
+
+    function calcDSCR() {
+        // Simple DSCR = Latest Net Profit / (Total Existing Annual EMI)
+        // Note: Ideally includes Depreciation and Interest, but using NP for simplicity here
+        const profits = document.querySelectorAll('.itr_p');
+        const latestProfit = parseFloat(profits[profits.length-1].value) || 0;
+        
+        // Existing EMI (Annualized)
+        let totalMonthlyEMI = 0;
+        document.querySelectorAll('.m-emi').forEach(i => totalMonthlyEMI += parseFloat(i.value) || 0);
+        
+        const annualObligation = totalMonthlyEMI * 12;
+        const badge = document.getElementById('dscr_badge');
+        
+        if(annualObligation > 0) {
+            const dscr = latestProfit / annualObligation;
+            badge.innerText = `DSCR: ${dscr.toFixed(2)}`;
+            badge.className = `calc-badge ${dscr > 1.25 ? 'badge-pos' : 'badge-neg'}`;
+        } else {
+            badge.innerText = "DSCR: -";
+            badge.className = "calc-badge badge-neu";
+        }
+    }
+
+    function calcRiskGrade() {
+        let score = 100;
+        const vintage = getNum('c_vintage');
+        const bounces = getNum('b_bounce');
+        
+        if(vintage < 3) score -= 20;
+        if(bounces > 0) score -= (bounces * 10);
+        if(bounces > 5) score -= 50; // High penalty
+        
+        // WC Gap check
+        const stk = getNum('stk_val');
+        const deb = getNum('debtors');
+        const cred = getNum('creditors');
+        if ((stk+deb-cred) < 0) score -= 15;
+
+        let grade = "A (Low Risk)";
+        let color = "#dcfce7"; // green
+        let text = "#166534";
+
+        if(score < 50) {
+            grade = "C (High Risk)";
+            color = "#fee2e2"; // red
+            text = "#991b1b";
+        } else if (score < 75) {
+            grade = "B (Moderate)";
+            color = "#ffedd5"; // orange
+            text = "#9a3412";
+        }
+
+        const box = document.getElementById('risk_grade_box');
+        const val = document.getElementById('risk_grade_val');
+        
+        box.style.backgroundColor = color;
+        box.style.color = text;
+        val.innerText = grade;
+    }
+
+    let decisionStatus = "Pending";
+    function setStatus(status) {
+        decisionStatus = status;
+        const disp = document.getElementById('statusDisplay'); // Might not exist in HTML, logic usually updates visual button state
+        // For report:
+        const box = document.getElementById('rep_decision_box');
+        const title = document.getElementById('rep_status');
+        
+        title.innerText = status.toUpperCase();
+        
+        if(status === 'Approved') {
+            box.className = 'decision-box'; // green
+            alert("Application marked as Approved");
+        } else {
+            box.className = 'decision-box rejected'; // red
+            alert("Application marked as Rejected");
+        }
+        saveDraft();
+    }
+
+    /* --- DATA MANAGEMENT --- */
+    function saveDraft() {
+        const data = {
+            version: 50,
+            decisionStatus: decisionStatus,
+            inputs: {},
+            tables: { const: [], govt: [], market: [], monthly: [] }
+        };
+        
+        // Save inputs
+        document.querySelectorAll('input:not([type=file]), select, textarea').forEach(el => {
+            if(el.id) data.inputs[el.id] = el.value;
+        });
+        
+        // Save Tables (FULL)
+        document.querySelectorAll('#const_body tr').forEach(r => {
+            const cols = r.querySelectorAll('input');
+            data.tables.const.push({
+                col1: cols[0]?.value || '',
+                col2: cols[1]?.value || '',
+                col3: cols[2]?.value || '',
+                col4: cols[3]?.value || '',
+                col5: cols[4]?.value || '',
+                col6: cols[5]?.value || '',
+                col7: cols[6]?.value || '',
+                col8: cols[7]?.value || '',
+                col9: cols[8]?.value || '',
+                col10: cols[9]?.value || '',
+                col11: cols[10]?.value || '',
+                col12: cols[11]?.value || '',
+                col13: cols[12]?.value || '',
+                col14: cols[13]?.value || '',
+                col15: cols[14]?.value || '',
+            });
+        });
+
+        document.querySelectorAll('#govt_body tr').forEach(r => {
+            const cols = r.querySelectorAll('input');
+            data.tables.govt.push({
+                name: cols[0]?.value || '',
+                dept: cols[1]?.value || '',
+                val: cols[2]?.value || '',
+                pct: cols[3]?.value || '',
+                bal: cols[4]?.value || '',
+            });
+        });
+
+        document.querySelectorAll('#pf_table_body tr').forEach(r => {
+            const cols = r.querySelectorAll('input');
+            data.tables.market.push({
+                lender: cols[0]?.value || '',
+                san: cols[1]?.value || '',
+                os: cols[2]?.value || '',
+                emi: cols[3]?.value || '',
+            });
+        });
+
+        document.querySelectorAll('#monthly_body tr').forEach(r => {
+            const gst = r.querySelector('.gst-sale')?.value || '';
+            const bank = r.querySelector('.bank-cr')?.value || '';
+            const month = r.querySelector('td input')?.value || '';
+            data.tables.monthly.push({ month, gst, bank });
+        });
+        
+        localStorage.setItem('pd_autopilot_data', JSON.stringify(data));
+        pdEmit('PD_DRAFT_CHANGE', data);
+        
+        const status = document.getElementById('saveStatus');
+        status.innerText = 'Saved ' + new Date().toLocaleTimeString();
+        setTimeout(() => status.innerText = 'Auto-save enabled', 2000);
+    }
+
+    function loadDraft() {
+        const saved = localStorage.getItem('pd_autopilot_data');
+        if(!saved) return;
+        
+        const data = JSON.parse(saved);
+        pdApplyDraft(data);
+    }
+    
+    function clearData() {
+        if(confirm('Clear all data?')) {
+            localStorage.removeItem('pd_autopilot_data');
+            pdEmit('PD_CLEARED', { ok: true, ts: Date.now() });
+            location.reload();
+        }
+    }
+
+    /* --- REPORT GENERATION --- */
+    function prepareReport() {
+        // Transfer Basic Info
+        document.getElementById('rep_name').innerText = getVal('c_name');
+        document.getElementById('rep_vintage').innerText = getVal('c_vintage');
+        document.getElementById('rep_nature').innerText = getVal('c_nature');
+        document.getElementById('rep_address').innerText = getVal('c_address');
+        
+        // Transfer Financials
+        const itrBody = document.getElementById('rep_itr_body');
+        itrBody.innerHTML = '';
+        const sales = document.querySelectorAll('.itr_s');
+        const profits = document.querySelectorAll('.itr_p');
+        const years = document.querySelectorAll('.itr_y');
+        
+        years.forEach((y, i) => {
+            if(y.value) {
+                const s = sales[i].value;
+                const p = profits[i].value;
+                const g = document.getElementById(`g${i+1}`).innerText;
+                const m = document.getElementById(`m${i+1}`).innerText;
+                
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${y.value}</td><td>${s} (${g})</td><td>${p} (${m})</td>`;
+                itrBody.appendChild(tr);
+            }
+        });
+        
+        // Transfer Banking
+        document.getElementById('rep_b_turnover').innerText = formatCurrency(getNum('b_turnover'));
+        document.getElementById('rep_b_bank_emi').innerText = formatCurrency(getNum('b_bank_emi'));
+        document.getElementById('rep_b_sec').innerText = formatCurrency(getNum('b_sec_borrowed'));
+        document.getElementById('rep_b_unsec').innerText = formatCurrency(getNum('b_unsec_borrowed'));
+        document.getElementById('rep_b_bounce').innerText = getVal('b_bounce');
+        
+        // Transfer Position
+        document.getElementById('rep_stock').innerText = formatCurrency(getNum('stk_val'));
+        
+        // Update Obligations for Report
+        const sancVal = getVal('m_tot_san') || "₹0";
+        const osVal = getVal('m_tot_out') || "₹0";
+        document.getElementById('rep_obligations').innerText = `Sanctioned: ${sancVal} | Outstanding: ${osVal}`;
+        
+        document.getElementById('rep_wc_gap').innerText = document.getElementById('nwc_display').innerText;
+        
+        // Transfer Asset Details to Report
+        let propStr = "";
+        
+        // House Logic
+        const hType = getVal('house_type');
+        propStr += `<strong>House:</strong> ${hType}`;
+        if(hType === 'Owned') {
+             propStr += ` (Value: ${formatCurrency(getNum('house_val'))})`;
+        } else if (hType === 'Mortgaged') {
+             propStr += ` (${getVal('house_loan')}) - Value: ${formatCurrency(getNum('house_val'))}`;
+        }
+        propStr += "<br>";
+        
+        // Office Logic
+        const oType = getVal('office_type');
+        propStr += `<strong>Office:</strong> ${oType}`;
+        if(oType === 'Owned') {
+             propStr += ` (Value: ${formatCurrency(getNum('office_val'))})`;
+        } else if (oType === 'Mortgaged') {
+             propStr += ` (${getVal('office_loan')}) - Value: ${formatCurrency(getNum('office_val'))}`;
+        }
+        
+        document.getElementById('rep_property').innerHTML = propStr;
+        
+        // Transfer Decision
+        document.getElementById('rep_loan').innerText = formatCurrency(getNum('p_amt'));
+        document.getElementById('rep_roi').innerText = getVal('p_roi');
+        document.getElementById('rep_ten').innerText = getVal('p_ten');
+        document.getElementById('rep_remarks').innerText = getVal('remarks');
+        
+        // Transfer Risk Data to Report
+        document.getElementById('rep_risk_grade').innerText = document.getElementById('risk_grade_val').innerText;
+        document.getElementById('rep_ltv').innerText = document.getElementById('ltv_display').innerText.replace("LTV: ", "");
+        
+        // Handle Dynamic Tables (Builder/Contractor)
+        const nature = getVal('c_nature');
+        if(nature === 'Real Estate') {
+            document.getElementById('rep_const_container').classList.remove('hidden');
+            const constRepTbl = document.getElementById('rep_const_table');
+            constRepTbl.innerHTML = `<thead>
+                <tr>
+                    <th>Project</th>
+                    <th>Yr</th>
+                    <th>Type</th>
+                    <th>JV</th>
+                    <th>Stage</th>
+                    <th>Loc</th>
+                    <th>T.Area</th>
+                    <th>Rate</th>
+                    <th>Sold</th>
+                    <th>Unsold</th>
+                    <th>Rec(Cr)</th>
+                </tr>
+            </thead><tbody></tbody>`;
+            
+            document.querySelectorAll('#const_body tr').forEach(r => {
+                const cols = r.querySelectorAll('input');
+                // Maps to: Name(0), Year(1), Type(2), JV(3), Loan(4), Stage(5), Loc(6), Area(7), Rate(8), TotUnits(9), SoldUnits(10), SoldArea(11), UnsUnit(12), UnsArea(13), Rec(14)
+                
+                // For PDF we take a selection to fit
+                constRepTbl.querySelector('tbody').insertRow().innerHTML = `
+                    <td>${cols[0].value}</td>
+                    <td>${cols[1].value}</td>
+                    <td>${cols[2].value}</td>
+                    <td>${cols[3].value}</td>
+                    <td>${cols[5].value}</td>
+                    <td>${cols[6].value}</td>
+                    <td>${cols[7].value}</td>
+                    <td>${cols[8].value}</td>
+                    <td>${cols[10].value}</td>
+                    <td>${cols[12].value}</td>
+                    <td>${cols[14].value}</td>
+                `;
+            });
+        } else {
+            document.getElementById('rep_const_container').classList.add('hidden');
+        }
+        
+        if(nature === 'Contractor') {
+            document.getElementById('rep_govt_container').classList.remove('hidden');
+            const govtRepTbl = document.getElementById('rep_govt_table');
+            govtRepTbl.innerHTML = `<thead><tr><th>Work</th><th>Dept</th><th>Value</th><th>Bal</th></tr></thead><tbody></tbody>`;
+            document.querySelectorAll('#govt_body tr').forEach(r => {
+                const cols = r.querySelectorAll('input');
+                govtRepTbl.querySelector('tbody').insertRow().innerHTML = `<td>${cols[0].value}</td><td>${cols[1].value}</td><td>${cols[2].value}</td><td>${cols[4].value}</td>`;
+            });
+        } else {
+            document.getElementById('rep_govt_container').classList.add('hidden');
+        }
+        
+        // Watermark Status
+        const wm = document.querySelector('.watermark');
+        wm.innerText = decisionStatus === 'Pending' ? 'DRAFT' : decisionStatus.toUpperCase();
+        wm.style.color = decisionStatus === 'Approved' ? 'rgba(16, 185, 129, 0.1)' : (decisionStatus === 'Rejected' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(0,0,0,0.04)');
+    }
+
+    function generatePDF() {
+        prepareReport();
+        const element = document.getElementById('reportContent');
+        
+        // Temporarily make visible for render if hidden
+        const view = document.getElementById('resultView');
+        const wasHidden = !view.classList.contains('visible');
+        if(wasHidden) {
+            view.classList.add('visible');
+            view.style.position = 'absolute'; // Prevent UI jump
+            view.style.zIndex = '-1000';
+        }
+
+        const opt = {
+            margin:       10,
+            filename:     `PD_Report_${getVal('c_name') || 'Client'}.pdf`,
+            image:        { type: 'jpeg', quality: 0.98 },
+            html2canvas:  { scale: 2 },
+            jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+
+        html2pdf().set(opt).from(element).save().then(() => {
+            if(wasHidden) {
+                view.classList.remove('visible');
+                view.style.position = '';
+                view.style.zIndex = '';
+            }
+        });
+    }
+</script>
+</body>
+</html>

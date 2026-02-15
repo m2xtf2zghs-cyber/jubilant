@@ -1,0 +1,245 @@
+{
+  "periodStart": "2026-01-01",
+  "periodEnd": "2026-03-31",
+  "statementDays": 90,
+  "bankName": "HDFC",
+  "accountType": "CURRENT",
+  "metrics": [
+    { "key": "total_credits", "value": 36000000, "unit": "INR", "period": "", "meta": null },
+    { "key": "total_debits", "value": 34500000, "unit": "INR", "period": "", "meta": null },
+    { "key": "avg_monthly_credits", "value": 12000000, "unit": "INR", "period": "", "meta": null },
+    { "key": "avg_monthly_debits", "value": 11500000, "unit": "INR", "period": "", "meta": null },
+    { "key": "avg_weekly_credits", "value": 2800000, "unit": "INR", "period": "", "meta": null },
+    { "key": "avg_usable_balance", "value": 850000, "unit": "INR", "period": "", "meta": null },
+    { "key": "min_balance", "value": 25000, "unit": "INR", "period": "", "meta": null },
+    { "key": "low_balance_days", "value": 11, "unit": "DAYS", "period": "", "meta": null },
+    { "key": "credit_volatility_score", "value": 0.78, "unit": "", "period": "", "meta": { "bucket": "High" } },
+    { "key": "penalty_charge_count", "value": 3, "unit": "COUNT", "period": "", "meta": null },
+    { "key": "bounce_return_count", "value": 2, "unit": "COUNT", "period": "", "meta": null },
+    { "key": "fixed_obligation_estimate_monthly", "value": 1450000, "unit": "INR", "period": "", "meta": null },
+    { "key": "gst_avg_monthly_turnover", "value": 9800000, "unit": "INR", "period": "", "meta": null },
+    { "key": "gst_volatility_score", "value": 0.32, "unit": "", "period": "", "meta": { "bucket": "Low" } },
+    { "key": "gst_filing_gap_count", "value": 0, "unit": "COUNT", "period": "", "meta": null },
+    { "key": "gst_late_filing_count", "value": 1, "unit": "COUNT", "period": "", "meta": null },
+    { "key": "itr_latest_turnover", "value": 120000000, "unit": "INR", "period": "", "meta": null },
+    { "key": "itr_latest_profit", "value": 2800000, "unit": "INR", "period": "", "meta": null },
+    { "key": "itr_latest_margin_pct", "value": 2.3, "unit": "PCT", "period": "", "meta": null },
+    { "key": "bank_vs_gst_avg_diff_pct", "value": 22.5, "unit": "PCT", "period": "", "meta": null },
+    { "key": "bank_vs_itr_avg_diff_pct", "value": 18.2, "unit": "PCT", "period": "", "meta": null }
+  ],
+  "creditHeatMap": [
+    {
+      "counterparty": "ACME DISTRIBUTORS",
+      "nature": "Receipts",
+      "freq": 14,
+      "avgAmt": 420000,
+      "totalAmt": 5880000,
+      "pctOfTotal": 47.0,
+      "dependency": "High",
+      "priorityLevel": "",
+      "flexi": ""
+    },
+    {
+      "counterparty": "B2B MARKETPLACE",
+      "nature": "Transfer",
+      "freq": 48,
+      "avgAmt": 68000,
+      "totalAmt": 3264000,
+      "pctOfTotal": 26.1,
+      "dependency": "Medium",
+      "priorityLevel": "",
+      "flexi": ""
+    },
+    {
+      "counterparty": "CASH DEPOSIT",
+      "nature": "Cash deposit",
+      "freq": 6,
+      "avgAmt": 185000,
+      "totalAmt": 1110000,
+      "pctOfTotal": 8.9,
+      "dependency": "Low",
+      "priorityLevel": "",
+      "flexi": ""
+    }
+  ],
+  "debitHeatMap": [
+    {
+      "counterparty": "SUPPLIER A",
+      "nature": "Supplier/ops",
+      "freq": 12,
+      "avgAmt": 310000,
+      "totalAmt": 3720000,
+      "pctOfTotal": 30.7,
+      "dependency": "",
+      "priorityLevel": "Medium",
+      "flexi": "Maybe"
+    },
+    {
+      "counterparty": "RENT",
+      "nature": "Rent",
+      "freq": 1,
+      "avgAmt": 125000,
+      "totalAmt": 125000,
+      "pctOfTotal": 1.0,
+      "dependency": "",
+      "priorityLevel": "High",
+      "flexi": "No"
+    },
+    {
+      "counterparty": "LENDER / PRIVATE",
+      "nature": "Existing lender",
+      "freq": 8,
+      "avgAmt": 98000,
+      "totalAmt": 784000,
+      "pctOfTotal": 6.5,
+      "dependency": "",
+      "priorityLevel": "High",
+      "flexi": "No"
+    }
+  ],
+  "gst": {
+    "months": [
+      { "month": "2026-01", "turnover": 9500000, "filedOn": null, "daysLate": 0 },
+      { "month": "2026-02", "turnover": 10000000, "filedOn": null, "daysLate": 0 },
+      { "month": "2026-03", "turnover": 9900000, "filedOn": null, "daysLate": 3 }
+    ],
+    "avgMonthlyTurnover": 9800000,
+    "volatilityScore": 0.32,
+    "filingGapCount": 0,
+    "lateFilingCount": 1,
+    "flags": [ "GST_LATE_FILINGS" ],
+    "commentary": "GST avg monthly turnover ₹98,00,000. Late filings: 1."
+  },
+  "itr": {
+    "years": [
+      { "year": "AY 2024-25", "turnover": 120000000, "profit": 2800000 },
+      { "year": "AY 2023-24", "turnover": 100000000, "profit": 4000000 }
+    ],
+    "latestTurnover": 120000000,
+    "latestProfit": 2800000,
+    "latestMarginPct": 2.3333333333,
+    "yoyTurnoverPct": 20.0,
+    "yoyProfitPct": -30.0,
+    "flags": [ "ITR_MARGIN_THIN", "ITR_PROFIT_DROP" ],
+    "commentary": "ITR latest turnover ₹12,00,00,000, profit ₹28,00,000 (margin 2.3%). YoY turnover 20%. YoY profit -30%. Margin is thin → higher default sensitivity to any inflow disruption."
+  },
+  "crossVerification": {
+    "bankVsGstAvgDiffPct": 22.5,
+    "bankVsItrAvgDiffPct": 18.2,
+    "rows": [
+      { "month": "2026-01", "bankCredits": 12000000, "gstTurnover": 9500000, "diffPct": 26.3157894737 },
+      { "month": "2026-02", "bankCredits": 11000000, "gstTurnover": 10000000, "diffPct": 10.0 },
+      { "month": "2026-03", "bankCredits": 13000000, "gstTurnover": 9900000, "diffPct": 31.3131313131 }
+    ],
+    "mismatchFlags": [ "BANK_VS_GST_MISMATCH" ],
+    "commentary": "Bank vs GST avg mismatch ~22.5%. Bank vs ITR avg mismatch ~18.2%. Mismatch flags: BANK_VS_GST_MISMATCH."
+  },
+  "privateLenderCompetition": {
+    "estimatedLenders": 3,
+    "approxMonthlyDebtLoad": 784000,
+    "weeklyCollectionsDetected": true,
+    "rolloverRecyclingSignals": 2,
+    "evidence": [
+      { "date": "2026-01-06", "narration": "RETURN INTEREST - HAND LOAN", "direction": "DEBIT", "amount": 98000 },
+      { "date": "2026-01-13", "narration": "LOAN INTEREST / RETURN", "direction": "DEBIT", "amount": 98000 },
+      { "date": "2026-01-20", "narration": "HANDLOAN RETURN", "direction": "DEBIT", "amount": 98000 }
+    ],
+    "summary": "Multiple lender-like debits with weekly cadence. Treat as stacked private debt unless proven otherwise."
+  },
+  "cashVelocityControl": {
+    "sameDaySpendRatio": 0.61,
+    "tPlusOneSpendRatio": 0.23,
+    "idleCashRetentionRatio": 0.16,
+    "topInflowWeekday": "Monday",
+    "topInflowMonthDays": [ 1, 5, 15, 30 ],
+    "borrowerType": "Trader / variable inflow operator",
+    "commentary": "Inflow converts to outflow quickly; control must be via collection cadence + staged disbursal + upfront deduction."
+  },
+  "triggers": [
+    {
+      "triggerType": "BALANCE_LOW",
+      "severity": "High",
+      "condition": { "balance_lt_pct_weekly_inflow": 0.08, "consecutive_days": 2 },
+      "description": "Balance < 8% of avg weekly inflow for 2 consecutive days → High Risk (cash exhaustion)."
+    },
+    {
+      "triggerType": "NARRATION_NEW_LENDER",
+      "severity": "High",
+      "condition": { "keywords": [ "hand loan", "return", "interest", "loan" ] },
+      "description": "New lender-like narration detected → stacking/recycling risk. Immediate intervention."
+    }
+  ],
+  "recommendation": {
+    "recommendedExposure": 6000000,
+    "tenureMonths": 9,
+    "collectionFrequency": "Weekly",
+    "collectionAmount": 205000,
+    "upfrontDeductionPct": 0.14,
+    "upfrontDeductionAmt": 840000,
+    "pricingApr": 44.5,
+    "structure": {
+      "disbursal_mode": "Staged",
+      "stage_1_pct": 0.6,
+      "stage_2_pct": 0.4,
+      "stage_2_condition": "Collections stable for 3 weeks + triggers green",
+      "hard_stop_balance_rule": "If balance < 10% weekly inflow, stop further disbursal and collect only",
+      "best_collection_weekday": "Mon",
+      "best_collection_month_days": [ 1, 5, 15 ],
+      "hard_stop_balance_rule": "If balance < 10% of avg weekly inflow, stop further disbursal and collect only"
+    }
+  },
+  "verdict": {
+    "riskFit": "AcceptWithControl",
+    "riskGrade": "B",
+    "score": 68,
+    "streetSummary": "Borrower survives on ACME DISTRIBUTORS inflow (~47% of credits). If disrupted, stress appears within ~10 days. Weekly collections must align on Mon. Exposure beyond ₹60,00,000 materially increases recovery risk.",
+    "recoveryLeverageSummary": "Moderate: strong inflow rhythm, but high dependence + competition signals. Control via staged disbursal + upfront + strict trigger enforcement."
+  },
+  "ruleRunLog": [
+    {
+      "id": "R001",
+      "name": "Statement window >= 30 days",
+      "category": "Snapshot",
+      "severity": "Medium",
+      "passed": true,
+      "scoreDelta": 0,
+      "thresholds": { "min_days": 30 },
+      "evidence": { "statement_days": 31 },
+      "reason": "Sufficient statement history for baseline underwriting."
+    },
+    {
+      "id": "R020",
+      "name": "Top inflow concentration <= 40%",
+      "category": "Concentration",
+      "severity": "High",
+      "passed": false,
+      "scoreDelta": -12,
+      "thresholds": { "max_pct": 40.0 },
+      "evidence": { "top_inflow_pct": 47.0, "top_inflow_counterparty": "ACME DISTRIBUTORS" },
+      "reason": "Single-source dependency is high. Reduce exposure / stage disbursal / tighten collections."
+    },
+    {
+      "id": "R050",
+      "name": "Private lender stacking signals",
+      "category": "Competition",
+      "severity": "High",
+      "passed": false,
+      "scoreDelta": -14,
+      "thresholds": { "max_estimated_lenders": 1, "max_weekly_collections": 0 },
+      "evidence": { "estimated_lenders": 3, "weekly_collections_detected": true, "signals": 2 },
+      "reason": "Competition present. Price higher + collect weekly + stage disbursal."
+    },
+    {
+      "id": "R060",
+      "name": "Liquidity stress (low balance days)",
+      "category": "Liquidity",
+      "severity": "Medium",
+      "passed": false,
+      "scoreDelta": -8,
+      "thresholds": { "max_low_balance_days": 6 },
+      "evidence": { "low_balance_days": 9 },
+      "reason": "Liquidity stress visible. Increase upfront deduction and enforce triggers."
+    }
+  ],
+  "aggressiveSummary": "AGGRESSIVE VERDICT: Accept with Control | Grade B | Score 68\nRecommended Exposure: ₹60,00,000 | Pricing: 44.5% APR | Collections: Weekly ₹2,05,000\nCash power: avg monthly credits ₹1,20,00,000. Top inflow source: ACME DISTRIBUTORS (47%). Private lenders estimated: 3. Upfront interest deduction: 14% (₹8,40,000).\nCross-check: Bank↔GST avg diff 22.5%; Bank↔ITR avg diff 18.2%; Flags: BANK_VS_GST_MISMATCH."
+}
