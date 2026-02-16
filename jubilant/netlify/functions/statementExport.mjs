@@ -1,10 +1,6 @@
 import ExcelJS from "exceljs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { existsSync } from "fs";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const TEMPLATE_FILE = "AFFAN METALS-FINAL WORKINGS- 05-02-2026.xlsx";
 
@@ -57,8 +53,7 @@ export const handler = async (event) => {
 
     const candidates = [
       path.join(process.cwd(), "fixtures", TEMPLATE_FILE),
-      path.join(__dirname, "fixtures", TEMPLATE_FILE),
-      path.join(__dirname, "..", "..", "fixtures", TEMPLATE_FILE),
+      path.join(process.cwd(), TEMPLATE_FILE),
     ];
     const templatePath = candidates.find((p) => existsSync(p));
     if (!templatePath) {

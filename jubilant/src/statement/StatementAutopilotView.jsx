@@ -18,10 +18,24 @@ const chunk = (arr, size) => {
   return out;
 };
 
+const missingTableSetupMessage = (tableName) =>
+  [
+    `Supabase table public.${tableName} is missing or not visible to the API role.`,
+    "Run jubilant/STATEMENT_AUTOPILOT_SETUP.sql in Supabase SQL Editor for the same project as VITE_SUPABASE_URL, then run: NOTIFY pgrst, 'reload schema';",
+  ].join(" ");
+
+const isMissingTableSchemaCacheError = (error, tableName) => {
+  const msg = String(error?.message || error || "").toLowerCase();
+  return msg.includes("schema cache") && msg.includes(`public.${tableName}`.toLowerCase());
+};
+
 export default function StatementAutopilotView({ backend, leads, isAdmin }) {
   const supabase = backend?.supabase;
   const user = backend?.user;
   const backendEnabled = Boolean(backend?.enabled && supabase && user);
+  const statementServiceBaseUrl = String(import.meta.env.VITE_STATEMENT_SERVICE_URL || "").replace(/\/+$/, "");
+  const statementServiceEnabled = backendEnabled && Boolean(statementServiceBaseUrl);
+  const statementBucket = String(import.meta.env.VITE_STATEMENT_BUCKET || "statements");
 
   const leadsList = useMemo(() => (Array.isArray(leads) ? leads : []).slice().sort((a, b) => (a?.name || "").localeCompare(b?.name || "")), [leads]);
   const [leadId, setLeadId] = useState(leadsList[0]?.id || "");
@@ -43,6 +57,7 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
   const [activeTab, setActiveTab] = useState("XNS");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [serverJob, setServerJob] = useState(null);
   const [approvalStatus, setApprovalStatus] = useState("DRAFT");
   const [savedVersionId, setSavedVersionId] = useState(null);
 
@@ -68,7 +83,14 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
         if (tplErr) throw tplErr;
         if (alive) setTemplates(data || []);
       } catch (e) {
-        if (alive) setError(String(e?.message || e));
+        if (alive) {
+          if (isMissingTableSchemaCacheError(e, "bank_parsing_templates")) {
+            setTemplates([]);
+            setError(missingTableSetupMessage("bank_parsing_templates"));
+            return;
+          }
+          setError(String(e?.message || e));
+        }
       }
     })();
     return () => {
@@ -203,7 +225,11 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
       setTemplates((prev) => [data, ...prev]);
       setSelectedTemplateId(data.id);
     } catch (e) {
-      setError(String(e?.message || e));
+      if (isMissingTableSchemaCacheError(e, "bank_parsing_templates")) {
+        setError(missingTableSetupMessage("bank_parsing_templates"));
+      } else {
+        setError(String(e?.message || e));
+      }
     } finally {
       setBusy(false);
     }
@@ -380,6 +406,91 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
     }
   };
 
+  const handleRunServerJob = async () => {
+    if (!statementServiceEnabled) {
+      setError("Set VITE_STATEMENT_SERVICE_URL to enable server parsing.");
+      return;
+    }
+    if (!selectedLead) {
+      setError("Select a lead first.");
+      return;
+    }
+    if (!files.length) {
+      setError("Upload at least one PDF.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setServerJob(null);
+    try {
+      const { data: statement, error: stmtErr } = await supabase
+        .from("statements")
+        .insert({
+          lead_id: selectedLead.id,
+          bank_name: parseMeta?.bankName || null,
+          account_type: parseMeta?.accountType || null,
+          account_no_masked: null,
+          created_by: user.id,
+        })
+        .select("id")
+        .single();
+      if (stmtErr) throw stmtErr;
+
+      const { data: version, error: verErr } = await supabase
+        .from("statement_versions")
+        .insert({
+          statement_id: statement.id,
+          version_no: 1,
+          status: "UPLOADED",
+          run_by: user.id,
+          run_at: new Date().toISOString(),
+          unmapped_txn_lines: 0,
+          continuity_failures: 0,
+        })
+        .select("id")
+        .single();
+      if (verErr) throw verErr;
+      setSavedVersionId(version.id);
+
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i];
+        const safeName = `${Date.now()}_${file.name || "statement.pdf"}`;
+        const storagePath = `${user.id}/statement-autopilot/${version.id}/${safeName}`;
+        const { error: uploadErr } = await supabase.storage.from(statementBucket).upload(storagePath, file, {
+          upsert: true,
+          contentType: file.type || "application/pdf",
+        });
+        if (uploadErr) throw uploadErr;
+
+        const { error: pdfErr } = await supabase.from("pdf_files").insert({
+          version_id: version.id,
+          storage_path: storagePath,
+          original_name: file.name || "statement.pdf",
+        });
+        if (pdfErr) throw pdfErr;
+      }
+
+      const resp = await fetch(`${statementServiceBaseUrl}/jobs/parse_statement/${version.id}`, { method: "POST" });
+      const bodyText = await resp.text();
+      let payload = {};
+      try {
+        payload = bodyText ? JSON.parse(bodyText) : {};
+      } catch {
+        payload = { detail: bodyText };
+      }
+      if (!resp.ok) throw new Error(payload?.detail || `Server parse job failed (${resp.status})`);
+      setServerJob({ ...payload, versionId: version.id });
+      if (payload?.status === "PARSE_FAILED") {
+        setError(`Server parse failed. Unmapped transaction lines: ${payload?.unmapped ?? "unknown"}.`);
+      }
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleExportExcel = async () => {
     if (!result) {
       setError("Run Statement Autopilot first.");
@@ -493,6 +604,11 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
           <button className="btn-primary" onClick={handleSave} disabled={busy || !result}>
             <Save size={16} /> <span className="ml-2">Save (Cloud)</span>
           </button>
+          {statementServiceEnabled && (
+            <button className="btn-primary" onClick={handleRunServerJob} disabled={busy || !files.length}>
+              <Wrench size={16} /> <span className="ml-2">Run Server Job</span>
+            </button>
+          )}
           <button className="btn-secondary" onClick={handleExportExcel} disabled={busy || !result}>
             <FileText size={16} /> <span className="ml-2">Export Excel</span>
           </button>
@@ -502,6 +618,14 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
             </span>
           )}
         </div>
+
+        {serverJob && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 text-blue-800 text-sm p-3">
+            Server job status: <strong>{serverJob.status || "UNKNOWN"}</strong>
+            {serverJob.versionId ? ` • Version: ${serverJob.versionId}` : ""}
+            {serverJob.excel_path ? ` • Excel: ${serverJob.excel_path}` : ""}
+          </div>
+        )}
       </div>
 
       {isAdmin && parseMeta?.templateMeta?.columnMap && (

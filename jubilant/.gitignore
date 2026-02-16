@@ -5,6 +5,7 @@ dist/
 .env.*
 __pycache__/
 *.pyc
+.venv/
 
 # Capacitor native projects
 /android/

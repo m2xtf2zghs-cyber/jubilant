@@ -47,3 +47,14 @@ In Android Studio: let Gradle sync, then Run.
 ## Offline Notes
 
 For true offline use, avoid CDN/script imports inside the app. Bundle all JS/CSS via Vite.
+
+## Statement Autopilot Backend (FastAPI)
+
+A backend parser/export service is included at:
+
+- `/Users/jegannathan/Documents/New project/jubilant/statement_service`
+
+Use it for strict parsing + reconciliation + template-clone Excel generation.
+Setup/run details are documented in:
+
+- `/Users/jegannathan/Documents/New project/jubilant/statement_service/README.md`

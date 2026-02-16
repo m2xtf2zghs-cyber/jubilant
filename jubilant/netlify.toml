@@ -1,0 +1,18 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "20.12.2"
+
+[functions]
+  node_bundler = "esbuild"
+
+[functions."statementExport"]
+  included_files = ["fixtures/AFFAN METALS-FINAL WORKINGS- 05-02-2026.xlsx"]
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

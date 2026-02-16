@@ -235,6 +235,10 @@ Run the Statement Autopilot schema after the core tables:
 
 - `jubilant/STATEMENT_AUTOPILOT_SETUP.sql`
 
+If you are using the new FastAPI-based Statement Autopilot service (`statement_service`), run:
+
+- `jubilant/STATEMENT_AUTOPILOT_CORE_SCHEMA.sql`
+
 This adds:
 - statement tables + strict reconciliation tables
 - `bank_parsing_templates` registry (admin template builder)
@@ -292,6 +296,25 @@ RLS follows the same pattern:
 - Staff: rows where `owner_id = auth.uid()`
 - Admin: all rows via `public.is_admin()`
 - Waive is admin-only via `pd_generated_questions.status = 'Waived'`
+
+## Troubleshooting
+
+If you see:
+
+- `Could not find the table 'public.bank_parsing_templates' in the schema cache`
+
+Then either the Statement Autopilot SQL was not run in the same Supabase project, or PostgREST has stale schema cache.
+
+Run in Supabase SQL Editor:
+
+```sql
+select to_regclass('public.bank_parsing_templates') as bank_templates_table;
+notify pgrst, 'reload schema';
+```
+
+If `bank_templates_table` is `null`, run:
+
+- `jubilant/STATEMENT_AUTOPILOT_SETUP.sql`
 
 ## 4) Make yourself the initial admin
 

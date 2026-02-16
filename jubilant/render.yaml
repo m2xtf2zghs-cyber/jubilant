@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: jubilant-statement-service
+    runtime: python
+    plan: free
+    rootDir: statement_service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: statements
+      - key: STATEMENT_SERVICE_CORS_ORIGINS
+        value: https://jubilantcrm.netlify.app

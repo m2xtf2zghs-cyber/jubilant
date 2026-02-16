@@ -330,3 +330,6 @@ create policy "collections_calendar: read own or admin" on public.collections_ca
 for select using (owner_id = auth.uid() or public.is_admin());
 create policy "collections_calendar: insert own or admin" on public.collections_calendar_suggestions
 for insert with check ((owner_id = auth.uid() and created_by = auth.uid()) or public.is_admin());
+
+-- Refresh PostgREST cache so newly created tables are visible immediately via Supabase API.
+notify pgrst, 'reload schema';
