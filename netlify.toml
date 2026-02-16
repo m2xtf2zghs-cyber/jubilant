@@ -13,3 +13,7 @@
 
 [functions]
   node_bundler = "esbuild"
+
+[[functions]]
+  name = "statementExport"
+  included_files = ["fixtures/AFFAN METALS-FINAL WORKINGS- 05-02-2026.xlsx"]

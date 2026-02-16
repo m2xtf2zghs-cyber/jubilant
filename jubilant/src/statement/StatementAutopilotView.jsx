@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { UploadCloud, RefreshCw, ShieldCheck, AlertTriangle, Save, FileText } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { UploadCloud, RefreshCw, ShieldCheck, AlertTriangle, Save, FileText, Wrench, CheckCircle2 } from "lucide-react";
 import { extractRawLines } from "./statementParser.js";
 import { runStatementAutopilot } from "./statementEngine.js";
 
@@ -28,6 +28,14 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
   const selectedLead = useMemo(() => leadsList.find((l) => l.id === leadId) || null, [leadsList, leadId]);
 
   const [files, setFiles] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("auto");
+  const selectedTemplate = useMemo(() => templates.find((t) => t.id === selectedTemplateId) || null, [templates, selectedTemplateId]);
+  const [templateDraft, setTemplateDraft] = useState({
+    bankName: "",
+    dateRegex: "",
+    columnMap: { date: "", narration: "", debit: "", credit: "", balance: "" },
+  });
   const [parseMeta, setParseMeta] = useState(null);
   const [rawLines, setRawLines] = useState([]);
   const [manualEdits, setManualEdits] = useState({});
@@ -36,6 +44,7 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [approvalStatus, setApprovalStatus] = useState("DRAFT");
+  const [savedVersionId, setSavedVersionId] = useState(null);
 
   const categoryTabMap = {
     "ODD FIG": "ODD FIG",
@@ -46,6 +55,45 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
     CONS: "CONS",
     FINAL: "FINAL",
   };
+
+  useEffect(() => {
+    if (!backendEnabled) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data, error: tplErr } = await supabase
+          .from("bank_parsing_templates")
+          .select("*")
+          .order("updated_at", { ascending: false });
+        if (tplErr) throw tplErr;
+        if (alive) setTemplates(data || []);
+      } catch (e) {
+        if (alive) setError(String(e?.message || e));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [backendEnabled, supabase]);
+
+  useEffect(() => {
+    if (!parseMeta?.templateMeta?.columnMap) return;
+    const map = parseMeta.templateMeta.columnMap || {};
+    setTemplateDraft((prev) => ({
+      ...prev,
+      bankName: parseMeta.bankName || prev.bankName,
+      columnMap: {
+        date: map.date ?? "",
+        narration: map.narration ?? "",
+        debit: map.debit ?? "",
+        credit: map.credit ?? "",
+        balance: map.balance ?? "",
+      },
+    }));
+    if (parseMeta?.templateUsed?.id) {
+      setSelectedTemplateId(parseMeta.templateUsed.id);
+    }
+  }, [parseMeta]);
 
   const handleParse = async () => {
     if (!selectedLead) {
@@ -59,7 +107,8 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
     setBusy(true);
     setError("");
     try {
-      const meta = await extractRawLines(files);
+      const availableTemplates = selectedTemplateId === "auto" ? templates : selectedTemplate ? [selectedTemplate] : [];
+      const meta = await extractRawLines(files, { templates: availableTemplates });
       setParseMeta(meta);
       setRawLines(meta.rawLines);
       setResult(null);
@@ -101,6 +150,65 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
     }
   };
 
+  const handleSaveTemplate = async () => {
+    if (!backendEnabled) {
+      setError("Supabase not configured.");
+      return;
+    }
+    if (!templateDraft.bankName) {
+      setError("Enter bank name for template.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const toNum = (value) => {
+        if (value === "" || value == null) return null;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+      };
+      const payload = {
+        owner_id: user.id,
+        created_by: user.id,
+        bank_name: templateDraft.bankName,
+        country: "IN",
+        header_keywords_json: {
+          date: ["date", "txn date", "value date"],
+          narration: ["narration", "description", "remarks", "particulars"],
+          debit: ["debit", "withdrawal", "dr"],
+          credit: ["credit", "deposit", "cr"],
+          balance: ["balance", "closing balance", "account balance"],
+        },
+        column_map_json: {
+          date: toNum(templateDraft.columnMap.date),
+          narration: toNum(templateDraft.columnMap.narration),
+          debit: toNum(templateDraft.columnMap.debit),
+          credit: toNum(templateDraft.columnMap.credit),
+          balance: toNum(templateDraft.columnMap.balance),
+        },
+        date_regex: templateDraft.dateRegex || null,
+        table_detection_strategy: "header_match",
+        statement_variants: [],
+        preferred_extractors: ["pdfjs-table", "pdfjs"],
+        row_start_rules_json: { date_required: true },
+        multiline_rules_json: { join_on_no_date: true },
+        cleanup_rules_json: { skip_headers: true },
+      };
+      const { data, error: tplErr } = await supabase
+        .from("bank_parsing_templates")
+        .insert(payload)
+        .select("*")
+        .single();
+      if (tplErr) throw tplErr;
+      setTemplates((prev) => [data, ...prev]);
+      setSelectedTemplateId(data.id);
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!backendEnabled) {
       setError("Supabase not configured.");
@@ -110,15 +218,12 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
       setError("Run Statement Autopilot first.");
       return;
     }
-    if (result?.reconciliation?.status === "PARSE_FAILED") {
-      setError("Parse failed. Resolve unmapped lines before saving.");
-      return;
-    }
     setError("");
     setBusy(true);
     try {
       const ownerId = selectedLead.ownerId;
       const createdBy = user.id;
+      const parseStatus = result?.reconciliation?.status === "PARSE_FAILED" ? "PARSE_FAILED" : approvalStatus;
 
       const { data: statement, error: stmtErr } = await supabase
         .from("statements")
@@ -139,8 +244,9 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
           statement_id: statement.id,
           owner_id: ownerId,
           created_by: createdBy,
-          status: approvalStatus,
+          status: parseStatus,
           version_no: versionNo,
+          template_id: parseMeta?.templateUsed?.id || selectedTemplate?.id || null,
           bank_name: parseMeta?.bankName || "",
           account_type: parseMeta?.accountType || "",
           period_start: result?.transactions?.[0]?.date || null,
@@ -150,6 +256,7 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
         .select("id")
         .single();
       if (verErr) throw verErr;
+      setSavedVersionId(version.id);
 
       const pdfFileIds = {};
       for (let i = 0; i < files.length; i += 1) {
@@ -226,6 +333,76 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
         const { error: txErr } = await supabase.from("transactions").insert(batch);
         if (txErr) throw txErr;
       }
+
+      if (result?.monthlyAggregates?.length) {
+        const aggPayload = result.monthlyAggregates.map((m) => ({
+          statement_version_id: version.id,
+          owner_id: ownerId,
+          created_by: createdBy,
+          month: m.month,
+          metrics_json: m,
+        }));
+        for (const batch of chunk(aggPayload, 200)) {
+          const { error: aggErr } = await supabase.from("aggregates_monthly").insert(batch);
+          if (aggErr) throw aggErr;
+        }
+      }
+
+      const pivotPayload = [
+        { pivot_type: "CREDIT_HEAT", rows_json: result.creditHeat },
+        { pivot_type: "DEBIT_HEAT", rows_json: result.debitHeat },
+      ].map((p) => ({
+        statement_version_id: version.id,
+        owner_id: ownerId,
+        created_by: createdBy,
+        pivot_type: p.pivot_type,
+        rows_json: p.rows_json,
+      }));
+      for (const batch of chunk(pivotPayload, 100)) {
+        const { error: pivotErr } = await supabase.from("pivots").insert(batch);
+        if (pivotErr) throw pivotErr;
+      }
+
+      if (result?.reconciliation?.status === "PARSE_FAILED" || result?.reconciliation?.continuityFailures?.length) {
+        const { error: recErr } = await supabase.from("reconciliation_failures").insert({
+          statement_version_id: version.id,
+          owner_id: ownerId,
+          created_by: createdBy,
+          unmapped_line_ids: result?.reconciliation?.unmappedLineIds || [],
+          continuity_failures: result?.reconciliation?.continuityFailures || [],
+        });
+        if (recErr) throw recErr;
+      }
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (!result) {
+      setError("Run Statement Autopilot first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const resp = await fetch("/.netlify/functions/statementExport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report: result }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "Statement_Autopilot.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
     } catch (e) {
       setError(String(e?.message || e));
     } finally {
@@ -270,6 +447,31 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
           </div>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">Parsing Template</label>
+            <select className="w-full mt-1 border rounded-lg p-2" value={selectedTemplateId} onChange={(e) => setSelectedTemplateId(e.target.value)}>
+              <option value="auto">Auto detect</option>
+              {templates.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>
+                  {tpl.bank_name} {tpl.country ? `(${tpl.country})` : ""}
+                </option>
+              ))}
+            </select>
+            {parseMeta?.templateUsed?.bank_name && (
+              <div className="text-xs text-slate-500 mt-1">
+                Detected template: <strong>{parseMeta.templateUsed.bank_name}</strong>
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">Bank Detected</label>
+            <div className="mt-1 border rounded-lg p-2 text-sm text-slate-700">
+              {parseMeta?.bankName || "—"} {parseMeta?.accountType ? `• ${parseMeta.accountType}` : ""}
+            </div>
+          </div>
+        </div>
+
         <div className="flex flex-wrap gap-3 items-center">
           <label className="btn-secondary cursor-pointer">
             <UploadCloud size={16} />
@@ -291,8 +493,64 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
           <button className="btn-primary" onClick={handleSave} disabled={busy || !result}>
             <Save size={16} /> <span className="ml-2">Save (Cloud)</span>
           </button>
+          <button className="btn-secondary" onClick={handleExportExcel} disabled={busy || !result}>
+            <FileText size={16} /> <span className="ml-2">Export Excel</span>
+          </button>
+          {savedVersionId && (
+            <span className="text-xs text-emerald-700 flex items-center gap-1">
+              <CheckCircle2 size={14} /> Saved #{savedVersionId.slice(0, 6)}
+            </span>
+          )}
         </div>
       </div>
+
+      {isAdmin && parseMeta?.templateMeta?.columnMap && (
+        <div className="surface p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Wrench size={18} className="text-slate-500" />
+            <h3 className="font-bold text-slate-900">Template Builder (Admin)</h3>
+          </div>
+          <p className="text-sm text-slate-500">Map column X positions to reuse this bank format later.</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">Bank Name</label>
+              <input
+                className="w-full mt-1 border rounded-lg p-2"
+                value={templateDraft.bankName}
+                onChange={(e) => setTemplateDraft((prev) => ({ ...prev, bankName: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">Date Regex (optional)</label>
+              <input
+                className="w-full mt-1 border rounded-lg p-2"
+                value={templateDraft.dateRegex}
+                onChange={(e) => setTemplateDraft((prev) => ({ ...prev, dateRegex: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-5">
+            {["date", "narration", "debit", "credit", "balance"].map((key) => (
+              <div key={key}>
+                <label className="text-xs font-bold text-slate-500 uppercase">{key} X</label>
+                <input
+                  className="w-full mt-1 border rounded-lg p-2"
+                  value={templateDraft.columnMap[key] ?? ""}
+                  onChange={(e) =>
+                    setTemplateDraft((prev) => ({
+                      ...prev,
+                      columnMap: { ...prev.columnMap, [key]: e.target.value },
+                    }))
+                  }
+                />
+              </div>
+            ))}
+          </div>
+          <button className="btn-primary" onClick={handleSaveTemplate} disabled={busy || !templateDraft.bankName}>
+            Save Template
+          </button>
+        </div>
+      )}
 
       {result && (
         <div className="grid gap-6 lg:grid-cols-2">

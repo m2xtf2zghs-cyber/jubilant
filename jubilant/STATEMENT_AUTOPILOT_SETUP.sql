@@ -19,6 +19,7 @@ create table if not exists public.statement_versions (
   created_by uuid not null references auth.users(id) on delete restrict,
   status text not null default 'DRAFT',
   version_no int not null default 1,
+  template_id uuid,
   bank_name text,
   account_type text,
   period_start date,
@@ -37,6 +38,27 @@ create table if not exists public.pdf_files (
   file_name text,
   meta_json jsonb,
   created_at timestamptz not null default now()
+);
+
+-- Bank parsing templates (template registry)
+create table if not exists public.bank_parsing_templates (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  created_by uuid not null references auth.users(id) on delete restrict,
+  bank_name text not null,
+  country text not null default 'IN',
+  statement_variants jsonb not null default '[]'::jsonb,
+  header_keywords_json jsonb not null default '{}'::jsonb,
+  date_regex text,
+  amount_regex text,
+  table_detection_strategy text not null default 'header_match',
+  column_map_json jsonb not null default '{}'::jsonb,
+  row_start_rules_json jsonb not null default '{}'::jsonb,
+  multiline_rules_json jsonb not null default '{}'::jsonb,
+  cleanup_rules_json jsonb not null default '{}'::jsonb,
+  preferred_extractors jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 -- Raw statement lines (STRICT capture)
@@ -197,6 +219,9 @@ create table if not exists public.audit_events (
 alter table public.raw_statement_lines
   add column if not exists pdf_file_id uuid references public.pdf_files(id) on delete set null;
 
+alter table public.statement_versions
+  add column if not exists template_id uuid references public.bank_parsing_templates(id) on delete set null;
+
 -- RLS
 alter table public.statements enable row level security;
 alter table public.statement_versions enable row level security;
@@ -213,6 +238,7 @@ alter table public.manual_mapping_sessions enable row level security;
 alter table public.manual_mapping_actions enable row level security;
 alter table public.collections_calendar_suggestions enable row level security;
 alter table public.audit_events enable row level security;
+alter table public.bank_parsing_templates enable row level security;
 
 -- Policies: owner or admin
 create policy "statements: read own or admin" on public.statements
@@ -238,6 +264,14 @@ for insert with check ((owner_id = auth.uid() and created_by = auth.uid()) or pu
 
 create policy "raw_statement_lines: read own or admin" on public.raw_statement_lines
 for select using (owner_id = auth.uid() or public.is_admin());
+
+create policy "bank_templates: read own or admin" on public.bank_parsing_templates
+for select using (owner_id = auth.uid() or public.is_admin());
+create policy "bank_templates: insert own or admin" on public.bank_parsing_templates
+for insert with check ((owner_id = auth.uid() and created_by = auth.uid()) or public.is_admin());
+create policy "bank_templates: update own or admin" on public.bank_parsing_templates
+for update using (owner_id = auth.uid() or public.is_admin())
+with check (owner_id = auth.uid() or public.is_admin());
 create policy "raw_statement_lines: insert own or admin" on public.raw_statement_lines
 for insert with check ((owner_id = auth.uid() and created_by = auth.uid()) or public.is_admin());
 

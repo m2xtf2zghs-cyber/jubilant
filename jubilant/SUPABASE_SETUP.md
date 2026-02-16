@@ -229,6 +229,17 @@ create policy "leads: delete own or admin" on public.leads
 for delete using (owner_id = auth.uid() or public.is_admin());
 ```
 
+## 4) Statement Autopilot schema
+
+Run the Statement Autopilot schema after the core tables:
+
+- `jubilant/STATEMENT_AUTOPILOT_SETUP.sql`
+
+This adds:
+- statement tables + strict reconciliation tables
+- `bank_parsing_templates` registry (admin template builder)
+- manual mapping + audit tables
+
 ## 4) Underwriting (Hardcoded Rule Engine)
 
 For the new **Hardcoded Underwriting (Rule Engine + Credit & Recovery Intelligence)** feature, run:
