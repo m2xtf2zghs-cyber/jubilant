@@ -48,8 +48,10 @@ import android.widget.Toast
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.outlined.MoreVert
 import com.jubilant.lirasnative.di.LeadsRepository
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -106,7 +108,8 @@ fun KanbanScreen(
     if (moving.contains(id)) return
     moving = moving + id
     scope.launch {
-      val result = runCatching { leadsRepository.updateLead(id, LeadUpdate(status = newStatus)) }
+      val patch = LeadUpdate(status = newStatus)
+      val result = runCatching { leadsRepository.updateLead(id, patch) }
       moving = moving - id
       result
         .onSuccess {
@@ -114,7 +117,9 @@ fun KanbanScreen(
           Toast.makeText(context, "Moved to $newStatus", Toast.LENGTH_SHORT).show()
         }
         .onFailure {
-          Toast.makeText(context, it.message ?: "Move failed.", Toast.LENGTH_LONG).show()
+          RetryQueueStore.enqueueLeadUpdate(context.applicationContext, id, patch)
+          RetrySyncScheduler.enqueueNow(context.applicationContext)
+          Toast.makeText(context, "Queued — will sync when online.", Toast.LENGTH_LONG).show()
         }
     }
   }

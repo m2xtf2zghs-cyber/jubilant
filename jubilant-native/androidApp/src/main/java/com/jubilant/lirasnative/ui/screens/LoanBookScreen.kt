@@ -1,5 +1,6 @@
 package com.jubilant.lirasnative.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.jubilant.lirasnative.di.LeadsRepository
 import com.jubilant.lirasnative.shared.supabase.Lead
@@ -40,6 +42,8 @@ import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
 import com.jubilant.lirasnative.shared.supabase.LoanDetails
 import com.jubilant.lirasnative.shared.supabase.Mediator
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.isoToKolkataDate
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTicker
 import com.jubilant.lirasnative.ui.util.showDatePicker
@@ -55,6 +59,7 @@ fun LoanBookScreen(
   modifier: Modifier = Modifier,
 ) {
   val scope = rememberCoroutineScope()
+  val ctx = LocalContext.current
   val today by rememberKolkataDateTicker()
   var start by remember { mutableStateOf(today.withDayOfMonth(1)) }
   var end by remember { mutableStateOf(today) }
@@ -253,7 +258,20 @@ fun LoanBookScreen(
               result.onSuccess {
                 editing = null
               }.onFailure { ex ->
-                editError = ex.message ?: "Update failed."
+                val current = editLead.loanDetails ?: LoanDetails()
+                val updatedDetails = current.copy(commissionAmount = next)
+                val now = java.time.Instant.now().toString()
+                val note = LeadNote(text = "[TERMS]: Commission updated to ₹$next", date = now)
+
+                RetryQueueStore.enqueueLeadUpdate(
+                  ctx.applicationContext,
+                  editLead.id,
+                  LeadUpdate(loanDetails = updatedDetails),
+                )
+                RetryQueueStore.enqueueLeadAppendNote(ctx.applicationContext, editLead.id, note)
+                RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+                Toast.makeText(ctx, "Saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+                editing = null
               }
               if (result.isSuccess) load()
               editBusy = false

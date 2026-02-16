@@ -1,11 +1,8 @@
 package com.jubilant.lirasnative.reminders
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.CoroutineWorker
@@ -18,7 +15,7 @@ class EodReminderWorker(
   params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
   override suspend fun doWork(): Result {
-    ensureChannel()
+    ReminderNotifications.ensureChannel(appContext)
 
     val intent =
       Intent(appContext, MainActivity::class.java).apply {
@@ -34,7 +31,7 @@ class EodReminderWorker(
       )
 
     val notification =
-      NotificationCompat.Builder(appContext, CHANNEL_ID)
+      NotificationCompat.Builder(appContext, ReminderNotifications.CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_launcher)
         .setContentTitle("Jubilant Capital • End of Day")
         .setContentText("Review pending updates and export your daily report.")
@@ -47,27 +44,7 @@ class EodReminderWorker(
     return Result.success()
   }
 
-  private fun ensureChannel() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    val existing = nm.getNotificationChannel(CHANNEL_ID)
-    if (existing != null) return
-
-    val channel =
-      NotificationChannel(
-        CHANNEL_ID,
-        "Reminders",
-        NotificationManager.IMPORTANCE_DEFAULT,
-      ).apply {
-        description = "Daily reminders for follow-ups and end-of-day clearance."
-      }
-
-    nm.createNotificationChannel(channel)
-  }
-
   companion object {
-    const val CHANNEL_ID = "reminders"
     const val NOTIFICATION_ID = 1001
   }
 }
-

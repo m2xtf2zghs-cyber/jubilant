@@ -1,5 +1,6 @@
 package com.jubilant.lirasnative.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -49,8 +50,10 @@ import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
 import com.jubilant.lirasnative.shared.supabase.LoanDetails
 import com.jubilant.lirasnative.shared.supabase.Mediator
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
 import com.jubilant.lirasnative.ui.util.LoanFrequency
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.calculateInterestRatePercent
 import com.jubilant.lirasnative.ui.util.followUpAt50PctTerm
 import com.jubilant.lirasnative.ui.util.formatTenureShort
@@ -141,77 +144,95 @@ fun LeadFormScreen(
           null
         }
 
+      val patch =
+        LeadUpdate(
+          name = n,
+          phone = phone.trim().takeIf { it.isNotBlank() },
+          company = company.trim().takeIf { it.isNotBlank() },
+          location = location.trim().takeIf { it.isNotBlank() },
+          loanAmount = amt,
+          mediatorId = mediatorId,
+        )
+
       val result =
-        if (leadId == null) {
-          val now = java.time.Instant.now().toString()
-          if (entryType == LeadEntryType.Renewal) {
-            val given = principal.trim().toLongOrNull() ?: 0L
-            val i = interest.trim().toLongOrNull() ?: 0L
-            val c = commission.trim().toLongOrNull() ?: 0L
-            val m = tenureMonths.trim().toIntOrNull()?.coerceAtLeast(1) ?: 12
-            val p = (given + i).coerceAtLeast(0L)
-            val rateValue = calculateInterestRatePercent(given = given.toDouble(), interest = i.toDouble(), weeks = m.toDouble(), frequency = frequency)
-            val rate = String.format("%.2f", rateValue)
+        runCatching {
+          if (leadId == null) {
+            val now = java.time.Instant.now().toString()
+            if (entryType == LeadEntryType.Renewal) {
+              val given = principal.trim().toLongOrNull() ?: 0L
+              val i = interest.trim().toLongOrNull() ?: 0L
+              val c = commission.trim().toLongOrNull() ?: 0L
+              val m = tenureMonths.trim().toIntOrNull()?.coerceAtLeast(1) ?: 12
+              val p = (given + i).coerceAtLeast(0L)
+              val rateValue =
+                calculateInterestRatePercent(
+                  given = given.toDouble(),
+                  interest = i.toDouble(),
+                  weeks = m.toDouble(),
+                  frequency = frequency,
+                )
+              val rate = String.format("%.2f", rateValue)
 
-            val payIso = paymentDate.atStartOfDay(KOLKATA_ZONE).toInstant().toString()
-            val fuDate = followUpAt50PctTerm(paymentDate, m, frequency)
-            val fuIso = fuDate.atStartOfDay(KOLKATA_ZONE).toInstant().toString()
-            val note =
-              "[RENEWAL ADDED]: Given ₹$given. Upfront Interest ₹$i. Principal ₹$p. Net Cash Out ₹$p. Payment date: $paymentDate. Terms: ${formatTenureShort(m, frequency)} (${frequency.label}) @ $rate% rate. Comm: ₹$c. Follow-up set for 50% term."
+              val payIso = paymentDate.atStartOfDay(KOLKATA_ZONE).toInstant().toString()
+              val fuDate = followUpAt50PctTerm(paymentDate, m, frequency)
+              val fuIso = fuDate.atStartOfDay(KOLKATA_ZONE).toInstant().toString()
+              val note =
+                "[RENEWAL ADDED]: Given ₹$given. Upfront Interest ₹$i. Principal ₹$p. Net Cash Out ₹$p. Payment date: $paymentDate. Terms: ${formatTenureShort(m, frequency)} (${frequency.label}) @ $rate% rate. Comm: ₹$c. Follow-up set for 50% term."
 
-            leadsRepository.createLead(
-              LeadCreateInput(
-                name = n,
-                phone = phone.trim().takeIf { it.isNotBlank() },
-                company = company.trim().takeIf { it.isNotBlank() },
-                location = location.trim().takeIf { it.isNotBlank() },
-                status = "Payment Done",
-                loanAmount = p,
-                nextFollowUp = fuIso,
-                mediatorId = mediatorId,
-                loanDetails =
-                  LoanDetails(
-                    principal = p,
-                    interest = i,
-                    // Business rule: Net cash out is Principal (= Given + Upfront interest).
-                    netDisbursed = p,
-                    tenure = m,
-                    frequency = frequency.label,
-                    rate = rate,
-                    paymentDate = payIso,
-                    commissionAmount = c,
-                  ),
-                notes = listOf(LeadNote(text = note, date = now)),
-              ),
-            )
+              leadsRepository.createLead(
+                LeadCreateInput(
+                  name = n,
+                  phone = phone.trim().takeIf { it.isNotBlank() },
+                  company = company.trim().takeIf { it.isNotBlank() },
+                  location = location.trim().takeIf { it.isNotBlank() },
+                  status = "Payment Done",
+                  loanAmount = p,
+                  nextFollowUp = fuIso,
+                  mediatorId = mediatorId,
+                  loanDetails =
+                    LoanDetails(
+                      principal = p,
+                      interest = i,
+                      // Business rule: Net cash out is Principal (= Given + Upfront interest).
+                      netDisbursed = p,
+                      tenure = m,
+                      frequency = frequency.label,
+                      rate = rate,
+                      paymentDate = payIso,
+                      commissionAmount = c,
+                    ),
+                  notes = listOf(LeadNote(text = note, date = now)),
+                ),
+              )
+            } else {
+              leadsRepository.createLead(
+                LeadCreateInput(
+                  name = n,
+                  phone = phone.trim().takeIf { it.isNotBlank() },
+                  company = company.trim().takeIf { it.isNotBlank() },
+                  location = location.trim().takeIf { it.isNotBlank() },
+                  status = "New",
+                  loanAmount = amt,
+                  nextFollowUp = nextFollowUp,
+                  mediatorId = mediatorId,
+                  notes = listOf(LeadNote(text = "Lead created", date = now)),
+                ),
+              )
+            }
           } else {
-            leadsRepository.createLead(
-              LeadCreateInput(
-                name = n,
-                phone = phone.trim().takeIf { it.isNotBlank() },
-                company = company.trim().takeIf { it.isNotBlank() },
-                location = location.trim().takeIf { it.isNotBlank() },
-                status = "New",
-                loanAmount = amt,
-                nextFollowUp = nextFollowUp,
-                mediatorId = mediatorId,
-                notes = listOf(LeadNote(text = "Lead created", date = now)),
-              ),
-            )
+            leadsRepository.updateLead(leadId, patch)
           }
-        } else {
-          leadsRepository.updateLead(
-            leadId,
-            LeadUpdate(
-              name = n,
-              phone = phone.trim().takeIf { it.isNotBlank() },
-              company = company.trim().takeIf { it.isNotBlank() },
-              location = location.trim().takeIf { it.isNotBlank() },
-              loanAmount = amt,
-              mediatorId = mediatorId,
-            ),
-          )
         }
+          .onFailure { ex ->
+            if (leadId != null) {
+              RetryQueueStore.enqueueLeadUpdate(context.applicationContext, leadId, patch)
+              RetrySyncScheduler.enqueueNow(context.applicationContext)
+              Toast.makeText(context, "Saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+            } else {
+              error = ex.message ?: "Couldn’t save lead."
+            }
+          }
+          .getOrNull()
 
       if (result != null) {
         onSaved(result)

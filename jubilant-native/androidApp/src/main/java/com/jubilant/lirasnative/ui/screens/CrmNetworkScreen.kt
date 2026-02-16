@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Call
@@ -48,6 +49,8 @@ import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.Mediator
 import com.jubilant.lirasnative.shared.supabase.MediatorFollowUpEntry
 import com.jubilant.lirasnative.shared.supabase.MediatorUpdate
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
 import com.jubilant.lirasnative.ui.util.isoToKolkataDate
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTicker
@@ -63,6 +66,18 @@ private enum class CrmTab(
   Tasks("Tasks"),
   Activities("Activities"),
 }
+
+private enum class ActivityChipKind {
+  Lead,
+  Mediator,
+}
+
+private data class ActivityChipData(
+  val key: String,
+  val kind: ActivityChipKind,
+  val id: String,
+  val label: String,
+)
 
 @Composable
 fun CrmNetworkScreen(
@@ -124,12 +139,15 @@ fun CrmNetworkScreen(
 
     scope.launch {
       runCatching {
-        mediatorsRepository.updateMediator(
-          m.id,
-          MediatorUpdate(followUpHistory = nextHistory.takeLast(400)),
-        )
+        val patch = MediatorUpdate(followUpHistory = nextHistory.takeLast(400))
+        mediatorsRepository.updateMediator(m.id, patch)
       }
-        .onFailure { Toast.makeText(ctx, it.message ?: "Update failed.", Toast.LENGTH_LONG).show() }
+        .onFailure {
+          val patch = MediatorUpdate(followUpHistory = nextHistory.takeLast(400))
+          RetryQueueStore.enqueueMediatorUpdate(ctx.applicationContext, m.id, patch)
+          RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+          Toast.makeText(ctx, "Queued — will sync when online.", Toast.LENGTH_LONG).show()
+        }
         .onSuccess { onMutated() }
     }
   }
@@ -154,8 +172,11 @@ fun CrmNetworkScreen(
           )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-          CrmTab.entries.forEach { t ->
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          modifier = Modifier.fillMaxWidth().height(42.dp),
+        ) {
+          items(CrmTab.entries, key = { it.name }) { t ->
             FilterChip(
               selected = tab == t,
               onClick = { tab = t },
@@ -329,55 +350,98 @@ private fun ActivitiesPanel(
       mediators.filter { it.followUpHistory.any { h -> h.date == todayKey } }.take(24)
     }
 
+  fun keywordForConnect(typeRaw: String?): String {
+    val t = typeRaw?.trim()?.lowercase().orEmpty()
+    return when (t) {
+      "call" -> "CALL"
+      "whatsapp" -> "WA"
+      "meeting" -> "MEET"
+      else -> t.uppercase().ifBlank { "DONE" }
+    }
+  }
+
+  val chips =
+    remember(newToday, updatedToday, partnersDone, todayKey) {
+      buildList {
+        newToday.forEach { l ->
+          add(
+            ActivityChipData(
+              key = "new:${l.id}",
+              kind = ActivityChipKind.Lead,
+              id = l.id,
+              label = "NEW ${l.name}",
+            ),
+          )
+        }
+        updatedToday.forEach { l ->
+          val status = (l.status ?: "").trim()
+          val suffix = if (status.isBlank()) "" else " • ${status.take(18)}"
+          add(
+            ActivityChipData(
+              key = "upd:${l.id}",
+              kind = ActivityChipKind.Lead,
+              id = l.id,
+              label = "UPD ${l.name}$suffix",
+            ),
+          )
+        }
+        partnersDone.forEach { m ->
+          val typeKeyword = keywordForConnect(m.followUpHistory.lastOrNull { it.date == todayKey }?.type)
+          add(
+            ActivityChipData(
+              key = "p:${m.id}",
+              kind = ActivityChipKind.Mediator,
+              id = m.id,
+              label = "$typeKeyword ${m.name}",
+            ),
+          )
+        }
+      }.take(80)
+    }
+
   Card(
     modifier = modifier.fillMaxSize(),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
   ) {
-    Column(modifier = Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
       Text("Today’s activity", style = MaterialTheme.typography.titleMedium)
+      Text(
+        "Tap a keyword to open the related lead/partner.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
 
-      Text("Leads created", style = MaterialTheme.typography.titleSmall)
-      if (newToday.isEmpty()) {
-        Text("No new leads today.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      if (chips.isEmpty()) {
+        Text("No activity recorded today.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
       } else {
-        newToday.forEachIndexed { idx, l ->
-          if (idx > 0) Spacer(Modifier.height(8.dp))
-          LeadMiniRow(lead = l, onClick = { onLeadClick(l.id) })
-        }
-      }
-
-      Spacer(Modifier.height(6.dp))
-
-      Text("Leads updated", style = MaterialTheme.typography.titleSmall)
-      if (updatedToday.isEmpty()) {
-        Text("No lead updates today.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-      } else {
-        updatedToday.forEachIndexed { idx, l ->
-          if (idx > 0) Spacer(Modifier.height(8.dp))
-          LeadMiniRow(lead = l, onClick = { onLeadClick(l.id) })
-        }
-      }
-
-      Spacer(Modifier.height(6.dp))
-
-      Text("Partner connects", style = MaterialTheme.typography.titleSmall)
-      if (partnersDone.isEmpty()) {
-        Text("No partner connect logs today.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-      } else {
-        partnersDone.forEachIndexed { idx, m ->
-          if (idx > 0) Spacer(Modifier.height(8.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Text(m.name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-              m.followUpHistory.lastOrNull { it.date == todayKey }?.type ?: "",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.fillMaxWidth().height(44.dp),
+        ) {
+          items(chips, key = { it.key }) { item ->
+            FilterChip(
+              selected = false,
+              onClick = {
+                when (item.kind) {
+                  ActivityChipKind.Lead -> onLeadClick(item.id)
+                  ActivityChipKind.Mediator -> onMediatorClick(item.id)
+                }
+              },
+              label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+              modifier = Modifier.height(36.dp),
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                  labelColor = MaterialTheme.colorScheme.onBackground,
+                ),
+              border =
+                FilterChipDefaults.filterChipBorder(
+                  enabled = true,
+                  selected = false,
+                  borderColor = MaterialTheme.colorScheme.outlineVariant,
+                ),
             )
           }
         }

@@ -21,6 +21,7 @@ import com.jubilant.lirasnative.ui.util.KEY_LAST_BIOMETRIC_AUTH_AT_MS
 import com.jubilant.lirasnative.ui.util.PREFS_NAME
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTimeTicker
 import com.jubilant.lirasnative.ui.theme.JubilantNativeTheme
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import java.time.LocalTime
 
 class MainActivity : FragmentActivity() {
@@ -30,6 +31,10 @@ class MainActivity : FragmentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
     super.onCreate(savedInstanceState)
+    runCatching {
+      // Initialize PDFBox resources once for the whole app (used by Underwriting PDF parsing).
+      PDFBoxResourceLoader.init(applicationContext)
+    }
     navTargetRoute = intent?.getStringExtra(EXTRA_NAV_ROUTE)
     applyPrivacyFlags()
     setContent {

@@ -8,6 +8,7 @@ import { getFunctionsBaseUrl, setFunctionsBaseUrl } from "./backend/functionsBas
 import { BRAND, BrandMark, ReportBrandHeader } from "./brand/Brand.jsx";
 import AndroidCrm from "./android/AndroidCrm.jsx";
 import UnderwritingView from "./underwriting/UnderwritingView.jsx";
+import StatementAutopilotView from "./statement/StatementAutopilotView.jsx";
 import PdView from "./pd/PdView.jsx";
 import {
   Activity,
@@ -8412,7 +8413,7 @@ export default function LirasApp({ backend = null }) {
   const isCrmSection =
     ["android_myday", "android_tasks", "android_partners", "mediators"].includes(activeView) || Boolean(activeMediatorForProfile);
   const isReportsSection = ["reports", "analytics"].includes(activeView);
-  const isUnderwritingSection = activeView === "underwriting" || activeView === "pd";
+  const isUnderwritingSection = ["underwriting", "statement_autopilot", "pd"].includes(activeView);
   const isSettingsSection = activeView === "settings";
   const collectionsBadge = clearanceCount > 0 ? clearanceCount : stats.overdue > 0 ? stats.overdue : undefined;
 
@@ -8695,31 +8696,51 @@ export default function LirasApp({ backend = null }) {
             </div>
           )}
 
-          {activeView === "underwriting" && (
-            <UnderwritingView
-              backend={backend}
-              leads={leads}
-              onProceedToPd={(appId, leadId) => {
-                setPdApplicationId(String(appId));
-                setPdLeadId(String(leadId));
-                setActiveView("pd");
-                setIsSidebarOpen(false);
-              }}
-            />
-          )}
-
-          {activeView === "pd" && pdApplicationId && (
-            <PdView
-              backend={backend}
-              applicationId={pdApplicationId}
-              lead={leads.find((l) => String(l.id) === String(pdLeadId)) || null}
-              isAdmin={isAdmin}
-              onBack={() => {
-                setActiveView("underwriting");
-                setPdApplicationId(null);
-                setPdLeadId(null);
-              }}
-            />
+          {isUnderwritingSection && (
+            <div className="h-full flex flex-col overflow-hidden">
+              <SectionTabs
+                value={activeView}
+                tabs={[
+                  { value: "underwriting", label: "Underwriting" },
+                  { value: "statement_autopilot", label: "Statement Autopilot" },
+                  { value: "pd", label: "PD" },
+                ]}
+                onChange={(next) => {
+                  setActiveView(next);
+                  setIsSidebarOpen(false);
+                }}
+              />
+              <div className="flex-1 overflow-y-auto">
+                {activeView === "underwriting" && (
+                  <UnderwritingView
+                    backend={backend}
+                    leads={leads}
+                    onProceedToPd={(appId, leadId) => {
+                      setPdApplicationId(String(appId));
+                      setPdLeadId(String(leadId));
+                      setActiveView("pd");
+                      setIsSidebarOpen(false);
+                    }}
+                  />
+                )}
+                {activeView === "statement_autopilot" && (
+                  <StatementAutopilotView backend={backend} leads={leads} isAdmin={isAdmin} />
+                )}
+                {activeView === "pd" && pdApplicationId && (
+                  <PdView
+                    backend={backend}
+                    applicationId={pdApplicationId}
+                    lead={leads.find((l) => String(l.id) === String(pdLeadId)) || null}
+                    isAdmin={isAdmin}
+                    onBack={() => {
+                      setActiveView("underwriting");
+                      setPdApplicationId(null);
+                      setPdLeadId(null);
+                    }}
+                  />
+                )}
+              </div>
+            </div>
           )}
 
           {activeView === "clearance" && (

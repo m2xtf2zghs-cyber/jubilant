@@ -10,6 +10,9 @@ import com.jubilant.lirasnative.shared.supabase.UnderwritingDocumentRow
 class UnderwritingRepository(
   private val supabase: SupabaseClient,
 ) {
+  suspend fun listRecentApplications(limit: Int = 200): List<UnderwritingApplicationListItem> =
+    supabase.listUnderwritingApplicationsAll(limit = limit)
+
   suspend fun listApplications(leadId: String, limit: Int = 50): List<UnderwritingApplicationListItem> =
     supabase.listUnderwritingApplications(leadId = leadId, limit = limit)
 

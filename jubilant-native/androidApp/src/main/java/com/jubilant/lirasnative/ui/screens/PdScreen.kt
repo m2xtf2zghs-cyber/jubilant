@@ -60,17 +60,23 @@ import com.jubilant.lirasnative.shared.supabase.PdGeneratedQuestionRow
 import com.jubilant.lirasnative.shared.supabase.PdGeneratedQuestionUpsertInput
 import com.jubilant.lirasnative.shared.supabase.PdSessionRow
 import com.jubilant.lirasnative.shared.underwriting.UnderwritingResult
+import com.jubilant.lirasnative.ui.components.PipelineStage
+import com.jubilant.lirasnative.ui.components.StatusPipelineBar
 import com.jubilant.lirasnative.ui.theme.Danger500
 import com.jubilant.lirasnative.ui.theme.Gold500
 import com.jubilant.lirasnative.ui.theme.Success500
 import com.jubilant.lirasnative.ui.util.PdLocalStore
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import java.net.URLConnection
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -203,7 +209,7 @@ fun PdScreen(
             category = q.category,
             questionText = q.questionText,
             answerType = pdAnswerTypeToDb(q.answerType),
-            optionsJson = q.options,
+            optionsJson = q.options.takeIf { it.isNotEmpty() }?.let { opts -> JsonArray(opts.map { JsonPrimitive(it) }) },
             evidenceJson = q.evidence,
             sourceRuleId = q.sourceRuleId,
             status = "Pending",
@@ -356,6 +362,20 @@ fun PdScreen(
       }
     }
 
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+      Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Workflow", style = MaterialTheme.typography.titleMedium)
+        val stage =
+          if (pdSession?.status.equals("completed", ignoreCase = true)) PipelineStage.Approval else PipelineStage.PD
+        StatusPipelineBar(current = stage)
+      }
+    }
+
     if (error != null) {
       Card(
         modifier = Modifier.fillMaxWidth(),
@@ -497,6 +517,14 @@ fun PdScreen(
                         questions = questions.map { row -> if (row.id == q.id) row.copy(status = "Resolved") else row }
                       }
                     }.onFailure { ex ->
+                      RetryQueueStore.enqueuePdDoubtAnswer(
+                        context.applicationContext,
+                        ownerId = ownerId,
+                        questionId = q.id,
+                        answerText = next,
+                        markResolved = next.trim().isNotEmpty(),
+                      )
+                      RetrySyncScheduler.enqueueNow(context.applicationContext)
                       statusMsg = "Saved locally (offline)."
                       error = ex.message ?: "Couldn’t sync answer."
                     }
@@ -600,6 +628,8 @@ fun PdScreen(
                 runCatching { pdRepository.upsertMasterDraft(ownerId = ownerId, pdSessionId = sess.id, draft = draft) }
                   .onSuccess { statusMsg = "Draft saved" }
                   .onFailure { ex ->
+                    RetryQueueStore.enqueuePdMasterDraft(context.applicationContext, ownerId = ownerId, pdSessionId = sess.id, draft = draft)
+                    RetrySyncScheduler.enqueueNow(context.applicationContext)
                     statusMsg = "Saved locally"
                     error = ex.message ?: "Couldn’t sync PD draft."
                   }

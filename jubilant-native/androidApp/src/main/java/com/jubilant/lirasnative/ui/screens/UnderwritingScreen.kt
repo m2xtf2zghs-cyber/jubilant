@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jubilant.lirasnative.di.LeadsRepository
 import com.jubilant.lirasnative.di.UnderwritingRepository
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
@@ -68,9 +69,11 @@ import com.jubilant.lirasnative.shared.underwriting.UwGstMonth
 import com.jubilant.lirasnative.shared.underwriting.UwItrYear
 import com.jubilant.lirasnative.ui.util.BankPdfParseResult
 import com.jubilant.lirasnative.ui.util.parseBankStatementPdfs
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import java.io.File
 import java.net.URLConnection
 import java.time.Instant
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -140,6 +143,13 @@ fun UnderwritingScreen(
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val scroll = rememberScrollState()
+  var error by remember { mutableStateOf<String?>(null) }
+  val errorHandler =
+    remember {
+      CoroutineExceptionHandler { _, throwable ->
+        error = throwable.message ?: "Unexpected error"
+      }
+    }
 
   val actor = remember(session.userId, session.myProfile) { session.myProfile?.email ?: session.userId ?: "unknown" }
 
@@ -165,7 +175,6 @@ fun UnderwritingScreen(
 
   var runs by remember { mutableStateOf<List<UnderwritingApplicationListItem>>(emptyList()) }
   var loading by remember { mutableStateOf(false) }
-  var error by remember { mutableStateOf<String?>(null) }
 
   fun resolveDisplayName(uri: Uri): String {
     val cr = context.contentResolver
@@ -192,7 +201,7 @@ fun UnderwritingScreen(
 
   fun refreshRuns() {
     val lead = selectedLead ?: return
-    scope.launch {
+    scope.launch(errorHandler) {
       loading = true
       error = null
       runCatching { underwritingRepository.listApplications(leadId = lead.id, limit = 50) }
@@ -203,20 +212,26 @@ fun UnderwritingScreen(
   }
 
   fun appendNote(leadId: String, noteText: String) {
-    scope.launch {
+    scope.launch(errorHandler) {
+      val now = Instant.now().toString()
+      val note = LeadNote(text = noteText, date = now, byUser = actor)
       runCatching {
         val lead = leadsRepository.getLead(leadId)
-        val now = Instant.now().toString()
-        val nextNotes = (lead.notes + LeadNote(text = noteText, date = now, byUser = actor)).takeLast(500)
+        val nextNotes = (lead.notes + note).takeLast(500)
         leadsRepository.updateLead(leadId, LeadUpdate(notes = nextNotes))
       }
+        .onFailure {
+          RetryQueueStore.enqueueLeadAppendNote(context.applicationContext, leadId, note)
+          RetrySyncScheduler.enqueueNow(context.applicationContext)
+          Toast.makeText(context, "Saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+        }
     }
   }
 
   val pickPdfs =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
       if (uris.isEmpty()) return@rememberLauncherForActivityResult
-      scope.launch {
+      scope.launch(errorHandler) {
         runCatching {
           uris.forEach { uri ->
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -233,7 +248,7 @@ fun UnderwritingScreen(
   val pickGstPdfs =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
       if (uris.isEmpty()) return@rememberLauncherForActivityResult
-      scope.launch {
+      scope.launch(errorHandler) {
         runCatching {
           uris.forEach { uri ->
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -248,7 +263,7 @@ fun UnderwritingScreen(
   val pickItrPdfs =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
       if (uris.isEmpty()) return@rememberLauncherForActivityResult
-      scope.launch {
+      scope.launch(errorHandler) {
         runCatching {
           uris.forEach { uri ->
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -625,7 +640,7 @@ fun UnderwritingScreen(
           Button(
             onClick = {
               if (selectedUris.isEmpty()) return@Button
-              scope.launch {
+              scope.launch(errorHandler) {
                 loading = true
                 error = null
                 runCatching {
@@ -633,7 +648,7 @@ fun UnderwritingScreen(
                     selectedUris.map { uri ->
                       context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Couldn’t read PDF.")
                     }
-                  parseBankStatementPdfs(pdfBytes)
+                  parseBankStatementPdfs(pdfBytes, context)
                 }.onSuccess { meta ->
                   parseMeta = meta
                   result = null
@@ -655,7 +670,7 @@ fun UnderwritingScreen(
           Button(
             onClick = {
               val meta = parseMeta ?: return@Button
-              scope.launch {
+              scope.launch(errorHandler) {
                 loading = true
                 error = null
                 runCatching {
@@ -1084,7 +1099,7 @@ fun UnderwritingScreen(
                 return@Button
               }
 
-              scope.launch {
+              scope.launch(errorHandler) {
                 loading = true
                 error = null
                 runCatching {

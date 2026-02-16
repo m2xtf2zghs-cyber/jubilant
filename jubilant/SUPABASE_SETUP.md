@@ -238,6 +238,17 @@ For the new **Hardcoded Underwriting (Rule Engine + Credit & Recovery Intelligen
 This creates:
 
 - `underwriting_applications`
+
+## 5) Statement Autopilot (Strict Reconciliation)
+
+For the new **Statement Autopilot** pipeline, run:
+
+- `jubilant/STATEMENT_AUTOPILOT_SETUP.sql`
+
+This creates:
+
+- `statements`, `statement_versions`, `raw_statement_lines`, `transactions`
+- Supporting tables for pivots, risk items, approvals, audit, and manual mapping
 - `underwriting_documents`
 - `underwriting_transactions`
 - `underwriting_metrics`
@@ -430,3 +441,19 @@ drop policy if exists "announcements: admin delete" on public.announcements;
 create policy "announcements: admin delete" on public.announcements
 for delete using (public.is_admin());
 ```
+
+## 4) Storage bucket (required)
+
+Create a **private** storage bucket named `liras-attachments`.
+
+This bucket is used for:
+- Lead attachments
+- PD attachments
+- Underwriting docs
+- Statement Autopilot PDF uploads
+
+Supabase Dashboard → **Storage** → **Create bucket**:
+- Name: `liras-attachments`
+- Public: **Off**
+
+If you see “Bucket not found” errors in the app, this bucket is missing.

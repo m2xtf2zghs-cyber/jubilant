@@ -18,6 +18,10 @@ import kotlinx.serialization.json.JsonElement
 class PdRepository(
   private val supabase: SupabaseClient,
 ) {
+  suspend fun listSessions(limit: Int = 200): List<PdSessionRow> = supabase.listPdSessions(limit = limit)
+
+  suspend fun getSessionByApplicationId(applicationId: String): PdSessionRow? = supabase.getPdSessionByApplicationId(applicationId = applicationId)
+
   suspend fun getOrCreateSession(applicationId: String, ownerId: String): PdSessionRow =
     supabase.getOrCreatePdSession(PdSessionCreateInput(ownerId = ownerId, applicationId = applicationId))
 
@@ -40,6 +44,14 @@ class PdRepository(
 
   suspend fun listQuestions(pdSessionId: String, limit: Int = 500): List<PdGeneratedQuestionRow> =
     supabase.listPdGeneratedQuestions(pdSessionId = pdSessionId, limit = limit)
+
+  suspend fun listQuestionsForSessions(
+    pdSessionIds: List<String>,
+    severity: String? = null,
+    statuses: List<String> = emptyList(),
+    limit: Int = 500,
+  ): List<PdGeneratedQuestionRow> =
+    supabase.listPdGeneratedQuestionsForSessions(pdSessionIds = pdSessionIds, severity = severity, statuses = statuses, limit = limit)
 
   suspend fun upsertQuestionsIgnoreDuplicates(rows: List<PdGeneratedQuestionUpsertInput>) {
     supabase.upsertPdGeneratedQuestionsIgnoreDuplicates(rows)

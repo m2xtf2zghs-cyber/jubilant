@@ -40,13 +40,17 @@ fun RemindersScreen(
   val prefs = remember { context.getSharedPreferences("liras_native_prefs", Context.MODE_PRIVATE) }
 
   var eodEnabled by remember { mutableStateOf(prefs.getBoolean(KEY_EOD_ENABLED, false)) }
+  var morningEnabled by remember { mutableStateOf(prefs.getBoolean(KEY_MORNING_ENABLED, false)) }
+  var meetingEnabled by remember { mutableStateOf(prefs.getBoolean(KEY_MEETING_ENABLED, false)) }
   var permissionDenied by remember { mutableStateOf(false) }
 
   val requestPermission =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       permissionDenied = !granted
       if (granted) {
-        ReminderScheduler.scheduleDailyEodReminder(context)
+        if (eodEnabled) ReminderScheduler.scheduleDailyEodReminder(context)
+        if (morningEnabled) ReminderScheduler.scheduleDailyMorningActions(context)
+        if (meetingEnabled) ReminderScheduler.scheduleUpcomingMeetingsWatcher(context)
       }
     }
 
@@ -64,6 +68,40 @@ fun RemindersScreen(
       ReminderScheduler.scheduleDailyEodReminder(context)
     } else {
       ReminderScheduler.cancelDailyEodReminder(context)
+    }
+  }
+
+  LaunchedEffect(morningEnabled) {
+    prefs.edit().putBoolean(KEY_MORNING_ENABLED, morningEnabled).apply()
+    if (morningEnabled) {
+      if (Build.VERSION.SDK_INT >= 33) {
+        val granted =
+          ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+          requestPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+          return@LaunchedEffect
+        }
+      }
+      ReminderScheduler.scheduleDailyMorningActions(context)
+    } else {
+      ReminderScheduler.cancelDailyMorningActions(context)
+    }
+  }
+
+  LaunchedEffect(meetingEnabled) {
+    prefs.edit().putBoolean(KEY_MEETING_ENABLED, meetingEnabled).apply()
+    if (meetingEnabled) {
+      if (Build.VERSION.SDK_INT >= 33) {
+        val granted =
+          ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+          requestPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+          return@LaunchedEffect
+        }
+      }
+      ReminderScheduler.scheduleUpcomingMeetingsWatcher(context)
+    } else {
+      ReminderScheduler.cancelUpcomingMeetingsWatcher(context)
     }
   }
 
@@ -99,18 +137,55 @@ fun RemindersScreen(
           Spacer(Modifier.width(8.dp))
           Switch(checked = eodEnabled, onCheckedChange = { eodEnabled = it })
         }
+      }
+    }
 
-        if (permissionDenied) {
-          Text(
-            "Notifications permission denied. Enable it in Android Settings → Apps → Jubilant Native → Notifications.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-          )
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+    ) {
+      Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Morning action summary", style = MaterialTheme.typography.titleMedium)
+            Text("Runs once per day (targets 9:00 AM).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          }
+          Spacer(Modifier.width(8.dp))
+          Switch(checked = morningEnabled, onCheckedChange = { morningEnabled = it })
         }
       }
+    }
+
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+    ) {
+      Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Upcoming action reminders", style = MaterialTheme.typography.titleMedium)
+            Text("Alerts for meetings and follow-ups within ~45 minutes.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          }
+          Spacer(Modifier.width(8.dp))
+          Switch(checked = meetingEnabled, onCheckedChange = { meetingEnabled = it })
+        }
+      }
+    }
+
+    if (permissionDenied) {
+      Text(
+        "Notifications permission denied. Enable it in Android Settings → Apps → Jubilant Native → Notifications.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+      )
     }
   }
 }
 
 private const val KEY_EOD_ENABLED = "eod_reminder_enabled"
-
+private const val KEY_MORNING_ENABLED = "morning_reminder_enabled"
+private const val KEY_MEETING_ENABLED = "meeting_reminder_enabled"

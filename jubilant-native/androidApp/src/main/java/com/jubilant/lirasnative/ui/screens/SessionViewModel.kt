@@ -17,8 +17,17 @@ data class SessionState(
   val profiles: List<Profile> = emptyList(),
   val error: String? = null,
 ) {
+  val role: String
+    get() = (myProfile?.role ?: "").trim().lowercase()
+
   val isAdmin: Boolean
-    get() = (myProfile?.role ?: "").equals("admin", ignoreCase = true)
+    get() = role == "admin"
+
+  val isOwner: Boolean
+    get() = role == "owner"
+
+  val isStaff: Boolean
+    get() = role == "staff"
 }
 
 class SessionViewModel(
@@ -65,4 +74,3 @@ class SessionViewModel(
       }
   }
 }
-

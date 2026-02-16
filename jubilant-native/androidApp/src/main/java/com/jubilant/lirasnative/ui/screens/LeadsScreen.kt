@@ -22,8 +22,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.DashboardCustomize
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Today
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Card
@@ -33,6 +37,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -78,6 +83,9 @@ fun LeadsTab(
   onQueryChange: (String) -> Unit,
   onLeadClick: (id: String) -> Unit,
   onCreateLead: () -> Unit,
+  onOpenKanban: () -> Unit,
+  onOpenCalendar: () -> Unit,
+  onUploadDoc: (leadId: String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var filter by rememberSaveable { mutableStateOf(LeadsFilter.All) }
@@ -200,6 +208,66 @@ fun LeadsTab(
       )
     }
 
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+      Text("View:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      FilterChip(
+        selected = true,
+        onClick = {},
+        label = { Text("List") },
+        colors =
+          FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
+            selectedContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
+            selectedLabelColor = MaterialTheme.colorScheme.onBackground,
+          ),
+        border =
+          FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = true,
+            borderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
+            selectedBorderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
+          ),
+      )
+      FilterChip(
+        selected = false,
+        onClick = onOpenKanban,
+        label = { Text("Kanban") },
+        leadingIcon = { Icon(Icons.Outlined.DashboardCustomize, contentDescription = null) },
+        colors =
+          FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            selectedContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
+            selectedLabelColor = MaterialTheme.colorScheme.onBackground,
+          ),
+        border =
+          FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = false,
+            borderColor = MaterialTheme.colorScheme.outlineVariant,
+            selectedBorderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
+          ),
+      )
+      FilterChip(
+        selected = false,
+        onClick = onOpenCalendar,
+        label = { Text("Calendar") },
+        leadingIcon = { Icon(Icons.Outlined.Today, contentDescription = null) },
+        colors =
+          FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            selectedContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
+            selectedLabelColor = MaterialTheme.colorScheme.onBackground,
+          ),
+        border =
+          FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = false,
+            borderColor = MaterialTheme.colorScheme.outlineVariant,
+            selectedBorderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
+          ),
+      )
+    }
+
     OutlinedTextField(
       value = query,
       onValueChange = onQueryChange,
@@ -231,6 +299,7 @@ fun LeadsTab(
           lead = lead,
           mediator = lead.mediatorId?.let { mediatorsById[it] },
           onClick = { onLeadClick(lead.id) },
+          onUploadDoc = { onUploadDoc(lead.id) },
         )
       }
     }
@@ -304,6 +373,7 @@ private fun LeadCard(
   lead: LeadSummary,
   mediator: Mediator?,
   onClick: () -> Unit,
+  onUploadDoc: () -> Unit,
 ) {
   val ctx = LocalContext.current
   val stripe = statusStripeColor(lead.status)
@@ -313,7 +383,7 @@ private fun LeadCard(
     modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth()) {
       Box(modifier = Modifier.width(4.dp).fillMaxHeight().background(stripe))
@@ -361,6 +431,14 @@ private fun LeadCard(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
+          val updated = (lead.updatedAt ?: lead.createdAt).orEmpty().let { it.takeIf { it.isNotBlank() }?.let(::formatShortDate).orEmpty() }
+          if (updated.isNotBlank()) {
+            Text(
+              text = "Updated: $updated",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
         }
 
         val status = (lead.status ?: "").trim()
@@ -371,26 +449,34 @@ private fun LeadCard(
           val clientPhone = lead.phone?.filter { it.isDigit() }.orEmpty()
           val mediatorPhone = mediator?.phone?.filter { it.isDigit() }.orEmpty()
 
-          Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            TextButton(
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            IconButton(
               onClick = {
-                if (clientPhone.isBlank()) return@TextButton
+                if (clientPhone.isBlank()) return@IconButton
+                runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clientPhone"))) }
+                  .onFailure { Toast.makeText(ctx, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
+              },
+              enabled = clientPhone.isNotBlank(),
+            ) {
+              Icon(Icons.Outlined.Call, contentDescription = "Call client")
+            }
+
+            IconButton(
+              onClick = {
+                if (clientPhone.isBlank()) return@IconButton
                 val msg = "Hello ${lead.name}, regarding your loan requirement: Any updates for us today?"
                 val url = "https://wa.me/$clientPhone?text=${Uri.encode(msg)}"
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                   .onFailure { Toast.makeText(ctx, "Couldn’t open WhatsApp.", Toast.LENGTH_SHORT).show() }
               },
               enabled = clientPhone.isNotBlank(),
-              modifier = Modifier.weight(1f),
             ) {
-              Icon(Icons.Outlined.Chat, contentDescription = null)
-              Spacer(Modifier.width(6.dp))
-              Text("Ask Client")
+              Icon(Icons.Outlined.Chat, contentDescription = "WhatsApp client")
             }
 
-            TextButton(
+            IconButton(
               onClick = {
-                if (mediatorPhone.isBlank()) return@TextButton
+                if (mediatorPhone.isBlank()) return@IconButton
                 val mediatorName = mediator?.name ?: "Partner"
                 val msg = "Hello $mediatorName, regarding your client ${lead.name}: Is there any update on the requirement today?"
                 val url = "https://wa.me/$mediatorPhone?text=${Uri.encode(msg)}"
@@ -398,11 +484,14 @@ private fun LeadCard(
                   .onFailure { Toast.makeText(ctx, "Couldn’t open WhatsApp.", Toast.LENGTH_SHORT).show() }
               },
               enabled = mediatorPhone.isNotBlank(),
-              modifier = Modifier.weight(1f),
             ) {
-              Icon(Icons.Outlined.Groups, contentDescription = null)
-              Spacer(Modifier.width(6.dp))
-              Text("Ask Partner")
+              Icon(Icons.Outlined.Groups, contentDescription = "WhatsApp partner")
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            IconButton(onClick = onUploadDoc) {
+              Icon(Icons.Outlined.UploadFile, contentDescription = "Upload document")
             }
           }
         }

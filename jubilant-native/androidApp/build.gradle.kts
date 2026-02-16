@@ -5,6 +5,7 @@ import java.util.Properties
 plugins {
   id("com.android.application")
   kotlin("android")
+  kotlin("plugin.serialization")
 }
 
 android {
@@ -15,8 +16,8 @@ android {
     applicationId = "com.jubilant.lirasnative"
     minSdk = 24
     targetSdk = 34
-    versionCode = 3
-    versionName = "0.1.2"
+    versionCode = 7
+    versionName = "0.1.6"
   }
 
   buildFeatures {

@@ -1,6 +1,8 @@
 package com.jubilant.lirasnative.ui.util
 
+import android.content.Context
 import com.jubilant.lirasnative.shared.underwriting.UwTransaction
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import kotlinx.coroutines.Dispatchers
@@ -126,12 +128,19 @@ private fun parseLinesToTransactions(lines: List<String>): List<UwTransaction> {
   return out
 }
 
-suspend fun parseBankStatementPdfs(pdfBytes: List<ByteArray>): BankPdfParseResult =
+suspend fun parseBankStatementPdfs(
+  pdfBytes: List<ByteArray>,
+  context: Context? = null,
+): BankPdfParseResult =
   withContext(Dispatchers.Default) {
     require(pdfBytes.isNotEmpty()) { "Please select at least one PDF." }
 
     val combinedTextSb = StringBuilder()
     val allLines = mutableListOf<String>()
+
+    runCatching {
+      context?.applicationContext?.let { PDFBoxResourceLoader.init(it) }
+    }
 
     for (bytes in pdfBytes) {
       PDDocument.load(ByteArrayInputStream(bytes)).use { doc ->
@@ -158,4 +167,3 @@ suspend fun parseBankStatementPdfs(pdfBytes: List<ByteArray>): BankPdfParseResul
       rawTextSnippet = combinedText.take(4000),
     )
   }
-

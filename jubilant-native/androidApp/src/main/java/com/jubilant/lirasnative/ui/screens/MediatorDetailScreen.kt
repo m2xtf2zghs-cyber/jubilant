@@ -2,6 +2,7 @@ package com.jubilant.lirasnative.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -54,6 +55,8 @@ import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.Mediator
 import com.jubilant.lirasnative.shared.supabase.MediatorFollowUpEntry
 import com.jubilant.lirasnative.shared.supabase.MediatorUpdate
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -135,7 +138,13 @@ fun MediatorDetailScreen(
           MediatorUpdate(followUpHistory = nextHistory),
         )
       }
-        .onFailure { error = it.message ?: "Update failed." }
+        .onFailure {
+          val patch = MediatorUpdate(followUpHistory = nextHistory)
+          RetryQueueStore.enqueueMediatorUpdate(context.applicationContext, mediator.id, patch)
+          RetrySyncScheduler.enqueueNow(context.applicationContext)
+          error = null
+          Toast.makeText(context, "Queued — will sync when online.", Toast.LENGTH_LONG).show()
+        }
         .onSuccess { onMutated() }
       busy = false
     }
@@ -461,7 +470,17 @@ fun MediatorDetailScreen(
                     ),
                   )
                 }
-                  .onFailure { error = it.message ?: "Update failed." }
+                  .onFailure {
+                    val patch =
+                      MediatorUpdate(
+                        name = nextName,
+                        phone = editPhone.trim().takeIf { it.isNotBlank() },
+                      )
+                    RetryQueueStore.enqueueMediatorUpdate(context.applicationContext, mediator.id, patch)
+                    RetrySyncScheduler.enqueueNow(context.applicationContext)
+                    error = null
+                    Toast.makeText(context, "Queued — will sync when online.", Toast.LENGTH_LONG).show()
+                  }
                   .onSuccess {
                     showEdit = false
                     onMutated()

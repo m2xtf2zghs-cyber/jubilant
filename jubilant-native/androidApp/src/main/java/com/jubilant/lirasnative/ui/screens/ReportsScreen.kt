@@ -58,6 +58,8 @@ private enum class ReportType(
 fun ReportsScreen(
   leadsRepository: LeadsRepository,
   mediators: List<Mediator>,
+  onOpenLoanBook: () -> Unit,
+  onOpenAnalytics: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val scope = rememberCoroutineScope()
@@ -109,6 +111,26 @@ fun ReportsScreen(
   val topMediators = remember(filtered, mediators) { computeTopMediators(filtered, mediatorNames) }
 
   Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+      Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Business views", style = MaterialTheme.typography.titleMedium)
+        Text(
+          "Operational screens and summaries.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+          OutlinedButton(onClick = onOpenLoanBook, modifier = Modifier.weight(1f)) { Text("Loan book") }
+          OutlinedButton(onClick = onOpenAnalytics, modifier = Modifier.weight(1f)) { Text("Analytics") }
+        }
+      }
+    }
+
     error?.takeIf { it.isNotBlank() }?.let { msg ->
       Card(
         modifier = Modifier.fillMaxWidth(),

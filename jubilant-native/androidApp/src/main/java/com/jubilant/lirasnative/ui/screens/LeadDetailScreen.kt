@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.CalendarContract
 import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -49,6 +51,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
@@ -58,6 +62,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +71,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.jubilant.lirasnative.di.LeadsRepository
+import com.jubilant.lirasnative.di.PdRepository
+import com.jubilant.lirasnative.di.UnderwritingRepository
 import com.jubilant.lirasnative.shared.supabase.Lead
 import com.jubilant.lirasnative.shared.supabase.LeadDocuments
 import com.jubilant.lirasnative.shared.supabase.LeadNote
@@ -74,6 +81,9 @@ import com.jubilant.lirasnative.shared.supabase.LoanDetails
 import com.jubilant.lirasnative.shared.supabase.Mediator
 import com.jubilant.lirasnative.shared.supabase.RejectionDetails
 import com.jubilant.lirasnative.shared.supabase.StorageObject
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.ui.components.PipelineStage
+import com.jubilant.lirasnative.ui.components.StatusPipelineBar
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
 import com.jubilant.lirasnative.ui.util.PdfSection
 import com.jubilant.lirasnative.ui.util.LoanFrequency
@@ -85,6 +95,7 @@ import com.jubilant.lirasnative.ui.util.frequencyTenureLabel
 import com.jubilant.lirasnative.ui.util.isoToKolkataLocalDateTime
 import com.jubilant.lirasnative.ui.util.nowKolkataDate
 import com.jubilant.lirasnative.ui.util.parseLoanFrequency
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.sharePdf
 import com.jubilant.lirasnative.ui.util.showDatePicker
 import com.jubilant.lirasnative.ui.util.showTimePicker
@@ -101,6 +112,8 @@ import kotlinx.coroutines.launch
 fun LeadDetailScreen(
   leadId: String,
   leadsRepository: LeadsRepository,
+  underwritingRepository: UnderwritingRepository,
+  pdRepository: PdRepository,
   mediators: List<Mediator>,
   session: SessionState,
   onEdit: () -> Unit,
@@ -132,6 +145,11 @@ fun LeadDetailScreen(
   var attachmentsBusy by remember { mutableStateOf(false) }
   var attachmentsError by remember { mutableStateOf<String?>(null) }
 
+  var pipelineBusy by remember { mutableStateOf(false) }
+  var pipelineError by remember { mutableStateOf<String?>(null) }
+  var latestUwAppId by remember { mutableStateOf<String?>(null) }
+  var pdStatus by remember { mutableStateOf<String?>(null) }
+
   LaunchedEffect(leadId) {
     loading = true
     error = null
@@ -140,6 +158,20 @@ fun LeadDetailScreen(
         .onFailure { error = it.message ?: "Couldn’t load lead." }
         .getOrNull()
     loading = false
+
+    pipelineBusy = true
+    pipelineError = null
+    latestUwAppId =
+      runCatching { underwritingRepository.listApplications(leadId = leadId, limit = 1).firstOrNull()?.id }
+        .onFailure { pipelineError = it.message ?: "Couldn’t load underwriting status." }
+        .getOrNull()
+    pdStatus =
+      latestUwAppId
+        ?.takeIf { it.isNotBlank() }
+        ?.let { appId ->
+          runCatching { pdRepository.getSessionByApplicationId(applicationId = appId)?.status }.getOrNull()
+        }
+    pipelineBusy = false
 
     attachmentsLoading = true
     attachmentsError = null
@@ -153,16 +185,57 @@ fun LeadDetailScreen(
 
   fun update(patch: LeadUpdate, successToast: String? = null) {
     val current = lead ?: return
+    val optimistic =
+      current.copy(
+        ownerId = patch.ownerId ?: current.ownerId,
+        name = patch.name ?: current.name,
+        phone = patch.phone ?: current.phone,
+        company = patch.company ?: current.company,
+        location = patch.location ?: current.location,
+        status = patch.status ?: current.status,
+        loanAmount = patch.loanAmount ?: current.loanAmount,
+        nextFollowUp = patch.nextFollowUp ?: current.nextFollowUp,
+        mediatorId = patch.mediatorId ?: current.mediatorId,
+        isHighPotential = patch.isHighPotential ?: current.isHighPotential,
+        assignedStaff = patch.assignedStaff ?: current.assignedStaff,
+        documents = patch.documents ?: current.documents,
+        notes = patch.notes ?: current.notes,
+        loanDetails = patch.loanDetails ?: current.loanDetails,
+        rejectionDetails = patch.rejectionDetails ?: current.rejectionDetails,
+      )
+    // Optimistic UI: keep local state in sync with user edits, even if network fails.
+    lead = optimistic
     scope.launch {
       busy = true
       error = null
       val updated =
         runCatching { leadsRepository.updateLead(current.id, patch) }
-          .onFailure { error = it.message ?: "Update failed." }
+          .onFailure { ex ->
+            // Queue for retry (online-first with offline safety).
+            val appCtx = context.applicationContext
+            val patchNoNotes = patch.copy(notes = null)
+            if (patchNoNotes != LeadUpdate()) {
+              RetryQueueStore.enqueueLeadUpdate(appCtx, current.id, patchNoNotes)
+            }
+
+            val appendedNotes =
+              patch.notes
+                ?.filterNot { n ->
+                  current.notes.any { it.date == n.date && it.text == n.text && (it.byUser ?: "") == (n.byUser ?: "") }
+                }
+                .orEmpty()
+            appendedNotes.forEach { note -> RetryQueueStore.enqueueLeadAppendNote(appCtx, current.id, note) }
+
+            RetrySyncScheduler.enqueueNow(appCtx)
+            Toast.makeText(context, "Saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+          }
           .getOrNull()
       if (updated != null) {
         lead = updated
         onMutated()
+        successToast?.takeIf { it.isNotBlank() }?.let {
+          Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+        }
       }
       busy = false
     }
@@ -336,9 +409,22 @@ fun LeadDetailScreen(
       }
     }
 
-  val scroll = rememberScrollState()
+  val pipelineStage =
+    remember(l.status, latestUwAppId, pdStatus) {
+      computePipelineStage(
+        leadStatus = l.status,
+        hasUnderwriting = !latestUwAppId.isNullOrBlank(),
+        pdStarted = !pdStatus.isNullOrBlank(),
+        pdCompleted = pdStatus?.equals("completed", ignoreCase = true) == true,
+      )
+    }
+
+  var selectedTab by rememberSaveable { mutableStateOf(0) }
+  val leadScroll = rememberScrollState()
+  val auditScroll = rememberScrollState()
+
   Column(
-    modifier = Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = 16.dp, vertical = 12.dp),
+    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     error?.let { ErrorCard(message = it) }
@@ -372,114 +458,149 @@ fun LeadDetailScreen(
       },
     )
 
-    if (session.isAdmin) {
-      val profilesById = remember(session.profiles) { session.profiles.associateBy { it.userId } }
-      val ownerProfile = l.ownerId?.let { profilesById[it] }
-      val ownerLabel =
-        ownerProfile?.fullName?.takeIf { it.isNotBlank() }
-          ?: ownerProfile?.email?.takeIf { it.isNotBlank() }
-          ?: l.assignedStaff?.takeIf { it.isNotBlank() }
-          ?: (l.ownerId?.takeIf { it.isNotBlank() } ?: "Unassigned")
+    TabRow(selectedTabIndex = selectedTab) {
+      Tab(
+        selected = selectedTab == 0,
+        onClick = { selectedTab = 0 },
+        text = { Text("Lead") },
+      )
+      Tab(
+        selected = selectedTab == 1,
+        onClick = { selectedTab = 1 },
+        text = { Text("Audit") },
+      )
+    }
 
-      Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    if (selectedTab == 0) {
+      Column(
+        modifier = Modifier.fillMaxWidth().weight(1f, fill = true).verticalScroll(leadScroll),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-          Text("Assigned to", style = MaterialTheme.typography.titleMedium)
-
-          Column {
-            OutlinedTextField(
-              value = ownerLabel,
-              onValueChange = {},
-              readOnly = true,
-              modifier = Modifier.fillMaxWidth(),
-              trailingIcon = {
-                IconButton(onClick = { assignExpanded = !assignExpanded }) {
-                  Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
-                }
-              },
-              colors =
-                TextFieldDefaults.colors(
-                  unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                  focusedContainerColor = MaterialTheme.colorScheme.surface,
-                  focusedIndicatorColor = MaterialTheme.colorScheme.secondary,
-                  unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant,
-                  focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                  unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                  focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                  unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-            )
-
-            DropdownMenu(expanded = assignExpanded, onDismissRequest = { assignExpanded = false }) {
-              val myId = session.userId
-              if (!myId.isNullOrBlank()) {
-                DropdownMenuItem(
-                  text = { Text("Assign to me") },
-                  onClick = {
-                    assignExpanded = false
-                    val now = java.time.Instant.now().toString()
-                    val me = profilesById[myId]
-                    val meLabel =
-                      me?.fullName?.takeIf { it.isNotBlank() }
-                        ?: me?.email?.takeIf { it.isNotBlank() }
-                        ?: "Me"
-                    val note = "[ASSIGNED]: $meLabel"
-                    update(
-                      LeadUpdate(
-                        ownerId = myId,
-                        assignedStaff = meLabel,
-                        notes = (l.notes + LeadNote(text = note, date = now, byUser = actor)).takeLast(500),
-                      ),
-                    )
-                  },
-                )
-                Divider()
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+          Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+              Text("Workflow", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+              if (pipelineBusy) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
               }
+            }
+            StatusPipelineBar(current = pipelineStage)
+            pipelineError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+          }
+        }
 
-              val options =
-                session.profiles
-                  .filter { p -> myId.isNullOrBlank() || p.userId != myId }
-                  .sortedBy { (it.fullName ?: it.email ?: it.userId).lowercase() }
+        if (session.isAdmin) {
+          val profilesById = remember(session.profiles) { session.profiles.associateBy { it.userId } }
+          val ownerProfile = l.ownerId?.let { profilesById[it] }
+          val ownerLabel =
+            ownerProfile?.fullName?.takeIf { it.isNotBlank() }
+              ?: ownerProfile?.email?.takeIf { it.isNotBlank() }
+              ?: l.assignedStaff?.takeIf { it.isNotBlank() }
+              ?: (l.ownerId?.takeIf { it.isNotBlank() } ?: "Unassigned")
 
-              if (options.isEmpty()) {
-                DropdownMenuItem(
-                  text = { Text("No staff profiles found") },
-                  onClick = { assignExpanded = false },
+          Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+          ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+              Text("Assigned to", style = MaterialTheme.typography.titleMedium)
+
+              Column {
+                OutlinedTextField(
+                  value = ownerLabel,
+                  onValueChange = {},
+                  readOnly = true,
+                  modifier = Modifier.fillMaxWidth(),
+                  trailingIcon = {
+                    IconButton(onClick = { assignExpanded = !assignExpanded }) {
+                      Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
+                    }
+                  },
+                  colors =
+                    TextFieldDefaults.colors(
+                      unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                      focusedContainerColor = MaterialTheme.colorScheme.surface,
+                      focusedIndicatorColor = MaterialTheme.colorScheme.secondary,
+                      unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant,
+                      focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                      unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                      focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                      unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
                 )
-              } else {
-                options.forEach { p ->
-                  val label =
-                    p.fullName?.takeIf { it.isNotBlank() }
-                      ?: p.email?.takeIf { it.isNotBlank() }
-                      ?: p.userId
-                  val role =
-                    p.role?.takeIf { it.isNotBlank() }
-                      ?: "staff"
-                  DropdownMenuItem(
-                    text = { Text("$label • $role") },
-                    onClick = {
-                      assignExpanded = false
-                      val now = java.time.Instant.now().toString()
-                      val note = "[ASSIGNED]: $label"
-                      update(
-                        LeadUpdate(
-                          ownerId = p.userId,
-                          assignedStaff = label,
-                          notes = (l.notes + LeadNote(text = note, date = now, byUser = actor)).takeLast(500),
-                        ),
+
+                DropdownMenu(expanded = assignExpanded, onDismissRequest = { assignExpanded = false }) {
+                  val myId = session.userId
+                  if (!myId.isNullOrBlank()) {
+                    DropdownMenuItem(
+                      text = { Text("Assign to me") },
+                      onClick = {
+                        assignExpanded = false
+                        val now = java.time.Instant.now().toString()
+                        val me = profilesById[myId]
+                        val meLabel =
+                          me?.fullName?.takeIf { it.isNotBlank() }
+                            ?: me?.email?.takeIf { it.isNotBlank() }
+                            ?: "Me"
+                        val note = "[ASSIGNED]: $meLabel"
+                        update(
+                          LeadUpdate(
+                            ownerId = myId,
+                            assignedStaff = meLabel,
+                            notes = (l.notes + LeadNote(text = note, date = now, byUser = actor)).takeLast(500),
+                          ),
+                        )
+                      },
+                    )
+                    Divider()
+                  }
+
+                  val options =
+                    session.profiles
+                      .filter { p -> myId.isNullOrBlank() || p.userId != myId }
+                      .sortedBy { (it.fullName ?: it.email ?: it.userId).lowercase() }
+
+                  if (options.isEmpty()) {
+                    DropdownMenuItem(
+                      text = { Text("No staff profiles found") },
+                      onClick = { assignExpanded = false },
+                    )
+                  } else {
+                    options.forEach { p ->
+                      val label =
+                        p.fullName?.takeIf { it.isNotBlank() }
+                          ?: p.email?.takeIf { it.isNotBlank() }
+                          ?: p.userId
+                      val role =
+                        p.role?.takeIf { it.isNotBlank() }
+                          ?: "staff"
+                      DropdownMenuItem(
+                        text = { Text("$label • $role") },
+                        onClick = {
+                          assignExpanded = false
+                          val now = java.time.Instant.now().toString()
+                          val note = "[ASSIGNED]: $label"
+                          update(
+                            LeadUpdate(
+                              ownerId = p.userId,
+                              assignedStaff = label,
+                              notes = (l.notes + LeadNote(text = note, date = now, byUser = actor)).takeLast(500),
+                            ),
+                          )
+                        },
                       )
-                    },
-                  )
+                    }
+                  }
                 }
               }
             }
           }
         }
-      }
-    }
 
     StatusFollowUpCard(
       lead = l,
@@ -694,6 +815,79 @@ fun LeadDetailScreen(
     }
 
     Spacer(Modifier.height(4.dp))
+      }
+    } else {
+      Card(
+        modifier = Modifier.fillMaxWidth().weight(1f, fill = true),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+      ) {
+        Column(modifier = Modifier.fillMaxWidth().verticalScroll(auditScroll).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text("Audit trail", style = MaterialTheme.typography.titleMedium)
+          Text(
+            "Read-only history for internal tracking (based on lead notes + system milestones).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+
+          val createdLabel =
+            l.createdAt?.let { isoToKolkataLocalDateTime(it)?.toString() ?: it }
+              ?.takeIf { it.isNotBlank() }
+          if (createdLabel != null) {
+            Card(
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+              elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+              Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Created", style = MaterialTheme.typography.labelLarge)
+                Text(createdLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val who = (l.createdBy ?: l.ownerId).orEmpty().ifBlank { "—" }
+                Text("By: $who", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+              }
+            }
+          }
+
+          if (!latestUwAppId.isNullOrBlank()) {
+            Card(
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+              elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+              Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Underwriting", style = MaterialTheme.typography.labelLarge)
+                Text("Latest UW: ${latestUwAppId!!.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                pdStatus?.takeIf { it.isNotBlank() }?.let { Text("PD: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+              }
+            }
+          }
+
+          val reversed = remember(l.notes) { l.notes.asReversed().take(250) }
+          if (reversed.isEmpty()) {
+            Text("No activity yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          } else {
+            reversed.forEach { n ->
+              val whenLabel = isoToKolkataLocalDateTime(n.date)?.toString() ?: n.date
+              val who = n.byUser?.takeIf { it.isNotBlank() } ?: "system"
+              Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+              ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                  Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(who, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    Text(whenLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                  }
+                  Text(n.text, style = MaterialTheme.typography.bodyMedium)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   if (showDelete) {
@@ -1815,4 +2009,19 @@ private fun RejectDialog(
     },
     dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
   )
+}
+
+private fun computePipelineStage(
+  leadStatus: String?,
+  hasUnderwriting: Boolean,
+  pdStarted: Boolean,
+  pdCompleted: Boolean,
+): PipelineStage {
+  val s = leadStatus?.trim().orEmpty()
+  val isLoan = s == "Payment Done" || s == "Deal Closed"
+  if (isLoan) return PipelineStage.Loan
+  if (pdCompleted) return PipelineStage.Approval
+  if (pdStarted) return PipelineStage.PD
+  if (hasUnderwriting) return PipelineStage.Underwriting
+  return PipelineStage.Lead
 }

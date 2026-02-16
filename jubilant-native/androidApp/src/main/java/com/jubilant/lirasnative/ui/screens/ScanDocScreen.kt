@@ -47,6 +47,8 @@ import com.jubilant.lirasnative.di.LeadsRepository
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import java.net.URLConnection
 import java.time.Instant
 import kotlinx.coroutines.launch
@@ -57,6 +59,7 @@ fun ScanDocScreen(
   leads: List<LeadSummary>,
   leadsRepository: LeadsRepository,
   session: SessionState,
+  initialLeadId: String? = null,
   onMutated: () -> Unit,
   onLeadClick: (id: String) -> Unit,
   modifier: Modifier = Modifier,
@@ -69,7 +72,7 @@ fun ScanDocScreen(
   var query by remember { mutableStateOf("") }
   var busy by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
-  var selectedLeadId by remember { mutableStateOf<String?>(null) }
+  var selectedLeadId by remember(initialLeadId) { mutableStateOf<String?>(initialLeadId) }
 
   fun resolveDisplayName(uri: Uri): String {
     val cr = context.contentResolver
@@ -90,13 +93,18 @@ fun ScanDocScreen(
 
   fun appendNote(leadId: String, noteText: String) {
     scope.launch {
+      val now = Instant.now().toString()
+      val note = LeadNote(text = noteText, date = now, byUser = actor)
       runCatching {
         val lead = leadsRepository.getLead(leadId)
-        val now = Instant.now().toString()
-        val nextNotes = (lead.notes + LeadNote(text = noteText, date = now, byUser = actor)).takeLast(500)
+        val nextNotes = (lead.notes + note).takeLast(500)
         leadsRepository.updateLead(leadId, LeadUpdate(notes = nextNotes))
       }.onSuccess { onMutated() }
-        .onFailure { Toast.makeText(context, it.message ?: "Couldn’t log action.", Toast.LENGTH_LONG).show() }
+        .onFailure {
+          RetryQueueStore.enqueueLeadAppendNote(context.applicationContext, leadId, note)
+          RetrySyncScheduler.enqueueNow(context.applicationContext)
+          Toast.makeText(context, "Saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+        }
     }
   }
 
@@ -127,6 +135,13 @@ fun ScanDocScreen(
         busy = false
       }
     }
+
+  androidx.compose.runtime.LaunchedEffect(initialLeadId) {
+    if (initialLeadId.isNullOrBlank()) return@LaunchedEffect
+    // Auto-open document picker for the chosen lead (quick action flow).
+    selectedLeadId = initialLeadId
+    pickDoc.launch(arrayOf("application/pdf", "image/*"))
+  }
 
   val filtered =
     remember(leads, query) {

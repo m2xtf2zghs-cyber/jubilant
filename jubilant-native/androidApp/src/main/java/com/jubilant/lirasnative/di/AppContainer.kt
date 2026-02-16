@@ -21,4 +21,5 @@ class AppContainer(context: Context) {
   val profilesRepository = ProfilesRepository(supabaseClient)
   val underwritingRepository = UnderwritingRepository(supabaseClient)
   val pdRepository = PdRepository(supabaseClient)
+  val statementRepository = StatementRepository(supabaseClient)
 }

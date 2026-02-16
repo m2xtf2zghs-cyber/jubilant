@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.Button
@@ -75,6 +76,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -90,6 +92,7 @@ import com.jubilant.lirasnative.di.MediatorsRepository
 import com.jubilant.lirasnative.di.PdRepository
 import com.jubilant.lirasnative.di.ProfilesRepository
 import com.jubilant.lirasnative.di.UnderwritingRepository
+import com.jubilant.lirasnative.di.StatementRepository
 import com.jubilant.lirasnative.R
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
@@ -98,20 +101,30 @@ import com.jubilant.lirasnative.shared.supabase.Mediator
 import com.jubilant.lirasnative.shared.supabase.MediatorFollowUpEntry
 import com.jubilant.lirasnative.shared.supabase.MediatorUpdate
 import com.jubilant.lirasnative.ui.components.BankingBackground
+import com.jubilant.lirasnative.ui.components.SafeScreen
 import com.jubilant.lirasnative.ui.components.BrandHeader
 import com.jubilant.lirasnative.ui.components.BrandMark
+import com.jubilant.lirasnative.ui.components.NetworkStatusBanner
 import com.jubilant.lirasnative.ui.theme.Blue500
 import com.jubilant.lirasnative.ui.theme.Danger500
 import com.jubilant.lirasnative.ui.theme.Gold500
 import com.jubilant.lirasnative.ui.theme.Navy950
 import com.jubilant.lirasnative.ui.theme.Success500
+import com.jubilant.lirasnative.ui.util.HomeModeStore
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
+import com.jubilant.lirasnative.ui.util.MediatorsCacheStore
+import com.jubilant.lirasnative.ui.util.NetworkStatus
 import com.jubilant.lirasnative.ui.util.isoToKolkataDate
 import com.jubilant.lirasnative.ui.util.isoToKolkataLocalDateTime
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTicker
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTimeTicker
+import com.jubilant.lirasnative.ui.util.LeadsCacheStore
+import com.jubilant.lirasnative.ui.util.rememberNetworkStatus
+import com.jubilant.lirasnative.ui.util.rememberRetryQueueCount
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.showDatePicker
 import com.jubilant.lirasnative.ui.util.showTimePicker
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -127,9 +140,11 @@ private enum class MainDest(
 ) {
   Home("dashboard", "Home"),
   Leads("leads", "Leads"),
-  Collections("collections", "Collections"),
+  Crm("crm_network", "CRM"),
   More("more", "More"),
 }
+
+private const val COLLECTIONS_ROUTE: String = "collections"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,10 +154,12 @@ fun HomeScreen(
   profilesRepository: ProfilesRepository,
   underwritingRepository: UnderwritingRepository,
   pdRepository: PdRepository,
+  statementRepository: StatementRepository,
   onSignOut: () -> Unit,
   navTargetRoute: String?,
   onNavTargetHandled: () -> Unit,
 ) {
+  val context = LocalContext.current
   val leadsVm: LeadsViewModel = viewModel(factory = LeadsViewModel.factory(leadsRepository))
   val leadsState by leadsVm.state.collectAsState()
 
@@ -151,6 +168,23 @@ fun HomeScreen(
 
   val sessionVm: SessionViewModel = viewModel(factory = SessionViewModel.factory(profilesRepository))
   val sessionState by sessionVm.state.collectAsState()
+
+  val networkStatus: NetworkStatus = rememberNetworkStatus()
+
+  var adminOwnerModeEnabled by rememberSaveable(sessionState.userId) { mutableStateOf(false) }
+  LaunchedEffect(sessionState.isAdmin, sessionState.userId) {
+    adminOwnerModeEnabled =
+      if (sessionState.isAdmin) HomeModeStore.isAdminOwnerModeEnabled(context.applicationContext) else false
+  }
+
+  var cachedLeads by remember { mutableStateOf(LeadsCacheStore.load(context.applicationContext)) }
+  var cachedMediators by remember { mutableStateOf(MediatorsCacheStore.load(context.applicationContext)) }
+
+  val leadsUi = if (leadsState.leads.isNotEmpty()) leadsState.leads else cachedLeads
+  val mediatorsUi = if (mediatorsState.mediators.isNotEmpty()) mediatorsState.mediators else cachedMediators
+
+  val leadsStateUi = remember(leadsState, leadsUi) { leadsState.copy(leads = leadsUi) }
+  val mediatorsStateUi = remember(mediatorsState, mediatorsUi) { mediatorsState.copy(mediators = mediatorsUi) }
 
   var leadsQuery by rememberSaveable { mutableStateOf("") }
 
@@ -161,8 +195,9 @@ fun HomeScreen(
   val isMainRoute =
     route == MainDest.Home.route ||
       route == MainDest.Leads.route ||
-      route == MainDest.Collections.route ||
+      route == MainDest.Crm.route ||
       route == MainDest.More.route ||
+      route == COLLECTIONS_ROUTE ||
       route.isBlank()
 
   val title =
@@ -173,8 +208,10 @@ fun HomeScreen(
       route == "mediator_new" -> "Add mediator"
       route.startsWith("mediator/") -> "Mediator"
       route.startsWith("pd/") -> "PD"
+      route == "pd" -> "PD"
+      route == "statement_autopilot" -> "Statement Autopilot"
       route == MainDest.Leads.route -> MainDest.Leads.label
-      route == MainDest.Collections.route -> MainDest.Collections.label
+      route == COLLECTIONS_ROUTE -> "Collections"
       route == MainDest.More.route -> MainDest.More.label
       route == "kanban" -> "Kanban"
       route == "calendar" -> "Calendar"
@@ -210,6 +247,20 @@ fun HomeScreen(
     sessionVm.refresh()
     leadsVm.refresh()
     mediatorsVm.refresh()
+  }
+
+  LaunchedEffect(leadsState.leads) {
+    if (leadsState.leads.isNotEmpty()) {
+      cachedLeads = leadsState.leads
+      LeadsCacheStore.save(context.applicationContext, leadsState.leads)
+    }
+  }
+
+  LaunchedEffect(mediatorsState.mediators) {
+    if (mediatorsState.mediators.isNotEmpty()) {
+      cachedMediators = mediatorsState.mediators
+      MediatorsCacheStore.save(context.applicationContext, mediatorsState.mediators)
+    }
   }
 
   fun refreshAll() {
@@ -249,8 +300,22 @@ fun HomeScreen(
           },
           actions = {
             if (isMainRoute) {
+              IconButton(onClick = { nav.navigate("search") }) {
+                Icon(Icons.Outlined.Search, contentDescription = "Search")
+              }
               IconButton(onClick = { refreshAll() }) {
                 Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
+              }
+              if (sessionState.isAdmin) {
+                TextButton(
+                  onClick = {
+                    val next = !adminOwnerModeEnabled
+                    adminOwnerModeEnabled = next
+                    HomeModeStore.setAdminOwnerModeEnabled(context.applicationContext, next)
+                  },
+                ) {
+                  Text(if (adminOwnerModeEnabled) "Admin" else "Owner")
+                }
               }
             }
             IconButton(onClick = onSignOut) {
@@ -272,42 +337,105 @@ fun HomeScreen(
         }
       },
     ) { padding ->
-      Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-        NavHost(
-          navController = nav,
-          startDestination = MainDest.Home.route,
-        ) {
+      Column(modifier = Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        val lastUpdatedAtMs =
+          remember(leadsState.leads) {
+            LeadsCacheStore.lastUpdatedAtMs(context.applicationContext)
+          }
+        val pendingSyncCount = rememberRetryQueueCount()
+        val lastUpdatedLabel =
+          remember(lastUpdatedAtMs) {
+            lastUpdatedAtMs?.let { formatRelativeTimeLabel(it) }
+          }
+
+        NetworkStatusBanner(
+          status = networkStatus,
+          lastUpdatedLabel = lastUpdatedLabel,
+          pendingSyncCount = pendingSyncCount,
+          onSyncNow =
+            if (pendingSyncCount > 0) {
+              {
+                RetrySyncScheduler.enqueueNow(context.applicationContext)
+                refreshAll()
+              }
+            } else {
+              null
+            },
+          modifier = Modifier.padding(horizontal = 16.dp),
+        )
+
+        Box(modifier = Modifier.weight(1f, fill = true)) {
+          NavHost(
+            navController = nav,
+            startDestination = MainDest.Home.route,
+          ) {
           composable(MainDest.Home.route) {
-            DashboardTab(
-              state = leadsState,
-              leadsRepository = leadsRepository,
-              mediators = mediatorsState.mediators,
-              mediatorsRepository = mediatorsRepository,
-              session = sessionState,
-              onLeadClick = { id -> nav.navigate("lead/$id") },
-              onOpenEod = { nav.navigate("eod") },
-              onMutated = {
-                leadsVm.refresh()
-                mediatorsVm.refresh()
-              },
-              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
-            )
+            if (sessionState.isStaff) {
+              MyDayScreen(
+                leads = leadsUi,
+                leadsRepository = leadsRepository,
+                underwritingRepository = underwritingRepository,
+                pdRepository = pdRepository,
+                session = sessionState,
+                onMutated = { leadsVm.refresh() },
+                onLeadClick = { id -> nav.navigate("lead/$id") },
+                onOpenSearch = { nav.navigate("search") },
+                onOpenCollections = { nav.navigate(COLLECTIONS_ROUTE) },
+                onOpenUploads = { nav.navigate("scan_doc") },
+                onOpenPdWorklist = { tab -> nav.navigate("pd_worklist?tab=${tab.name}") },
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            } else if (sessionState.isAdmin && !adminOwnerModeEnabled) {
+              AdminHomeScreen(
+                leads = leadsUi,
+                underwritingRepository = underwritingRepository,
+                pdRepository = pdRepository,
+                ownerModeEnabled = adminOwnerModeEnabled,
+                onToggleOwnerMode = { next ->
+                  adminOwnerModeEnabled = next
+                  HomeModeStore.setAdminOwnerModeEnabled(context.applicationContext, next)
+                },
+                onOpenUnderwriting = { nav.navigate("underwriting") },
+                onOpenPdWorklist = { nav.navigate("pd_worklist") },
+                onOpenReports = { nav.navigate("reports") },
+                onOpenAdminTools = { nav.navigate("admin_access") },
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            } else {
+              DashboardTab(
+                state = leadsStateUi,
+                leadsRepository = leadsRepository,
+                mediators = mediatorsUi,
+                mediatorsRepository = mediatorsRepository,
+                session = sessionState,
+                onLeadClick = { id -> nav.navigate("lead/$id") },
+                onOpenEod = { nav.navigate("eod") },
+                onMutated = {
+                  leadsVm.refresh()
+                  mediatorsVm.refresh()
+                },
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            }
           }
           composable(MainDest.Leads.route) {
             LeadsTab(
-              state = leadsState,
+              state = leadsStateUi,
               session = sessionState,
-              mediators = mediatorsState.mediators,
+              mediators = mediatorsUi,
               query = leadsQuery,
               onQueryChange = { leadsQuery = it },
               onLeadClick = { id -> nav.navigate("lead/$id") },
               onCreateLead = { nav.navigate("lead_new") },
+              onOpenKanban = { nav.navigate("kanban") },
+              onOpenCalendar = { nav.navigate("calendar") },
+              onUploadDoc = { id -> nav.navigate("scan_doc/$id") },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
-          composable(MainDest.Collections.route) {
+          composable(COLLECTIONS_ROUTE) {
             CollectionsTab(
-              leads = leadsState.leads,
+              leads = leadsUi,
               session = sessionState,
               onLeadClick = { id -> nav.navigate("lead/$id") },
               onOpenEod = { nav.navigate("eod") },
@@ -317,19 +445,11 @@ fun HomeScreen(
           composable(MainDest.More.route) {
             MoreTab(
               session = sessionState,
-              onOpenKanban = { nav.navigate("kanban") },
-              onOpenCalendar = { nav.navigate("calendar") },
-              onOpenLoanBook = { nav.navigate("loan_book") },
-              onOpenAnalytics = { nav.navigate("analytics") },
-              onOpenReports = { nav.navigate("reports") },
               onOpenUnderwriting = { nav.navigate("underwriting") },
-              onOpenEod = { nav.navigate("eod") },
-              onOpenCalculator = { nav.navigate("calculator") },
-              onOpenDataTools = { nav.navigate("data_tools") },
-              onOpenMyDay = { nav.navigate("my_day") },
-              onOpenReminders = { nav.navigate("reminders") },
-              onOpenScanDoc = { nav.navigate("scan_doc") },
-              onOpenSecurity = { nav.navigate("security") },
+              onOpenStatementAutopilot = { nav.navigate("statement_autopilot") },
+              onOpenPd = { nav.navigate("pd") },
+              onOpenCollections = { nav.navigate(COLLECTIONS_ROUTE) },
+              onOpenReports = { nav.navigate("reports") },
               onOpenAdminAccess = { nav.navigate("admin_access") },
               onOpenCrmNetwork = { nav.navigate("crm_network") },
               onOpenSettings = { nav.navigate("settings") },
@@ -337,11 +457,48 @@ fun HomeScreen(
             )
           }
 
+          composable("pd") {
+            PdHubScreen(
+              onOpenUnderwriting = { nav.navigate("underwriting") },
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+          }
+
+          composable(
+            route = "pd_worklist?tab={tab}",
+            arguments = listOf(navArgument("tab") { nullable = true }),
+          ) { entry ->
+            val tabName = entry.arguments?.getString("tab")?.trim().orEmpty()
+            val initial =
+              PdWorklistTab.entries.firstOrNull { it.name.equals(tabName, ignoreCase = true) }
+                ?: PdWorklistTab.PdPending
+            PdWorklistScreen(
+              leads = leadsUi,
+              underwritingRepository = underwritingRepository,
+              pdRepository = pdRepository,
+              initialTab = initial,
+              onOpenPd = { appId, leadId -> nav.navigate("pd/$appId/$leadId") },
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+          }
+
+          composable("search") {
+            GlobalSearchScreen(
+              leads = leadsUi,
+              mediators = mediatorsUi,
+              leadsRepository = leadsRepository,
+              session = sessionState,
+              onOpenLead = { id -> nav.navigate("lead/$id") },
+              onOpenMediator = { id -> nav.navigate("mediator/$id") },
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+          }
+
           composable("crm_network") {
             CrmNetworkScreen(
-              leads = leadsState.leads,
+              leads = leadsUi,
               leadsRepository = leadsRepository,
-              mediatorsState = mediatorsState,
+              mediatorsState = mediatorsStateUi,
               mediatorsRepository = mediatorsRepository,
               session = sessionState,
               onLeadClick = { id -> nav.navigate("lead/$id") },
@@ -417,19 +574,34 @@ fun HomeScreen(
             ReportsScreen(
               leadsRepository = leadsRepository,
               mediators = mediatorsState.mediators,
+              onOpenLoanBook = { nav.navigate("loan_book") },
+              onOpenAnalytics = { nav.navigate("analytics") },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
 
           composable("underwriting") {
-            UnderwritingScreen(
-              leads = leadsState.leads,
-              leadsRepository = leadsRepository,
-              underwritingRepository = underwritingRepository,
-              session = sessionState,
-              onProceedToPd = { appId, leadId -> nav.navigate("pd/$appId/$leadId") },
-              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
-            )
+            SafeScreen(screenName = "Underwriting") {
+              UnderwritingScreen(
+                leads = leadsState.leads,
+                leadsRepository = leadsRepository,
+                underwritingRepository = underwritingRepository,
+                session = sessionState,
+                onProceedToPd = { appId, leadId -> nav.navigate("pd/$appId/$leadId") },
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            }
+          }
+
+          composable("statement_autopilot") {
+            SafeScreen(screenName = "Statement Autopilot") {
+              StatementAutopilotScreen(
+                leads = leadsState.leads,
+                statementRepository = statementRepository,
+                session = sessionState,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            }
           }
 
           composable("pd/{applicationId}/{leadId}") { entry ->
@@ -476,6 +648,20 @@ fun HomeScreen(
               leads = leadsState.leads,
               leadsRepository = leadsRepository,
               session = sessionState,
+              initialLeadId = null,
+              onMutated = { leadsVm.refresh() },
+              onLeadClick = { id -> nav.navigate("lead/$id") },
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+          }
+
+          composable("scan_doc/{leadId}") { entry ->
+            val leadId = entry.arguments?.getString("leadId").orEmpty()
+            ScanDocScreen(
+              leads = leadsState.leads,
+              leadsRepository = leadsRepository,
+              session = sessionState,
+              initialLeadId = leadId,
               onMutated = { leadsVm.refresh() },
               onLeadClick = { id -> nav.navigate("lead/$id") },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -532,6 +718,8 @@ fun HomeScreen(
             LeadDetailScreen(
               leadId = id,
               leadsRepository = leadsRepository,
+              underwritingRepository = underwritingRepository,
+              pdRepository = pdRepository,
               mediators = mediatorsState.mediators,
               session = sessionState,
               onEdit = { nav.navigate("lead_edit/$id") },
@@ -598,6 +786,7 @@ fun HomeScreen(
     }
   }
 }
+}
 
 @Composable
 private fun BottomBar(nav: NavHostController) {
@@ -641,15 +830,15 @@ private fun BottomBar(nav: NavHostController) {
       colors = itemColors,
     )
     NavigationBarItem(
-      selected = route == MainDest.Collections.route,
-      onClick = { navigateTo(MainDest.Collections) },
-      icon = { Icon(Icons.Outlined.FactCheck, contentDescription = null) },
-      label = { Text(MainDest.Collections.label, style = MaterialTheme.typography.labelSmall) },
+      selected = route == MainDest.Crm.route,
+      onClick = { navigateTo(MainDest.Crm) },
+      icon = { Icon(Icons.Outlined.Group, contentDescription = null) },
+      label = { Text(MainDest.Crm.label, style = MaterialTheme.typography.labelSmall) },
       alwaysShowLabel = true,
       colors = itemColors,
     )
     NavigationBarItem(
-      selected = route == MainDest.More.route,
+      selected = route == MainDest.More.route || route == COLLECTIONS_ROUTE,
       onClick = { navigateTo(MainDest.More) },
       icon = { Icon(Icons.Outlined.Menu, contentDescription = null) },
       label = { Text(MainDest.More.label, style = MaterialTheme.typography.labelSmall) },
@@ -683,6 +872,10 @@ private fun DashboardTab(
   }
 
   val metrics = remember(state.leads) { computeMetrics(state.leads) }
+  val activeLoans =
+    remember(state.leads) {
+      state.leads.count { (it.status ?: "").trim() == "Payment Done" }
+    }
   val scroll = rememberScrollState()
   val ctx = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -934,10 +1127,13 @@ private fun DashboardTab(
           }
 
           if (changed) {
-            mediatorsRepository.updateMediator(
-              mediator.id,
-              MediatorUpdate(followUpHistory = nextHistory.takeLast(400)),
-            )
+            val patch = MediatorUpdate(followUpHistory = nextHistory.takeLast(400))
+            runCatching {
+              mediatorsRepository.updateMediator(mediator.id, patch)
+            }.onFailure {
+              RetryQueueStore.enqueueMediatorUpdate(ctx.applicationContext, mediator.id, patch)
+              RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+            }
             updated++
           }
         }
@@ -1000,8 +1196,11 @@ private fun DashboardTab(
         )
       }
         .onFailure {
-          partnerError = it.message ?: "Partner connect update failed."
-          Toast.makeText(ctx, partnerError, Toast.LENGTH_LONG).show()
+          val patch = MediatorUpdate(followUpHistory = nextHistory)
+          RetryQueueStore.enqueueMediatorUpdate(ctx.applicationContext, m.id, patch)
+          RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+          partnerError = null
+          Toast.makeText(ctx, "Queued — will sync when online.", Toast.LENGTH_LONG).show()
         }
         .onSuccess { onMutated() }
       partnerBusyId = null
@@ -1021,26 +1220,26 @@ private fun DashboardTab(
       triageBusyId = lead.id
       triageError = null
 
+      val note =
+        LeadNote(
+          text = noteText,
+          date = Instant.now().toString(),
+          byUser = actor,
+        )
+      val patchNoNotes = LeadUpdate(status = nextStatus, nextFollowUp = nextFollowUp)
+
       runCatching {
         val full = leadsRepository.getLead(lead.id)
-        val note =
-          LeadNote(
-            text = noteText,
-            date = Instant.now().toString(),
-            byUser = actor,
-          )
         val nextNotes = (full.notes + note).takeLast(500)
-        leadsRepository.updateLead(
-          lead.id,
-          LeadUpdate(
-            status = nextStatus,
-            nextFollowUp = nextFollowUp,
-            notes = nextNotes,
-          ),
-        )
+        leadsRepository.updateLead(lead.id, patchNoNotes.copy(notes = nextNotes))
       }
         .onSuccess { onMutated() }
-        .onFailure { triageError = it.message ?: "Triage update failed." }
+        .onFailure { ex ->
+          RetryQueueStore.enqueueLeadUpdate(ctx.applicationContext, lead.id, patchNoNotes)
+          RetryQueueStore.enqueueLeadAppendNote(ctx.applicationContext, lead.id, note)
+          RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+          Toast.makeText(ctx, "Queued — will sync when online.", Toast.LENGTH_LONG).show()
+        }
 
       triageBusyId = null
     }
@@ -1075,7 +1274,19 @@ private fun DashboardTab(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              "Active pipeline",
+              "Active loans",
+              style = MaterialTheme.typography.labelMedium,
+              color = Color.White.copy(alpha = 0.72f),
+            )
+            Text(
+              activeLoans.toString(),
+              style = MaterialTheme.typography.headlineLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
+              color = Color.White,
+            )
+          }
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              "Pipeline",
               style = MaterialTheme.typography.labelMedium,
               color = Color.White.copy(alpha = 0.72f),
             )
@@ -1099,7 +1310,7 @@ private fun DashboardTab(
           }
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              "Today action",
+              "Today",
               style = MaterialTheme.typography.labelMedium,
               color = Color.White.copy(alpha = 0.72f),
             )
@@ -1819,4 +2030,21 @@ private fun computeMetrics(leads: List<LeadSummary>): DashboardMetrics {
 
 private fun parseLocalDate(raw: String?): LocalDate? {
   return isoToKolkataDate(raw)
+}
+
+private fun formatRelativeTimeLabel(atMs: Long, nowMs: Long = System.currentTimeMillis()): String {
+  val diffMs = (nowMs - atMs).coerceAtLeast(0L)
+  val diffSec = diffMs / 1_000L
+  if (diffSec < 10L) return "just now"
+  if (diffSec < 60L) return "${diffSec}s ago"
+  val diffMin = diffSec / 60L
+  if (diffMin < 60L) return "${diffMin}m ago"
+  val diffHr = diffMin / 60L
+  if (diffHr < 24L) return "${diffHr}h ago"
+  val diffDays = diffHr / 24L
+  if (diffDays < 7L) return "${diffDays}d ago"
+  val diffWeeks = diffDays / 7L
+  if (diffWeeks < 8L) return "${diffWeeks}w ago"
+  val diffMonths = diffDays / 30L
+  return "${diffMonths}mo ago"
 }

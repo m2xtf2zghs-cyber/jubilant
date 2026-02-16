@@ -20,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.FactCheck
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -28,19 +30,27 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.jubilant.lirasnative.di.PdRepository
+import com.jubilant.lirasnative.di.UnderwritingRepository
 import com.jubilant.lirasnative.di.LeadsRepository
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
+import com.jubilant.lirasnative.ui.components.ActionTile
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.isoToKolkataDate
 import com.jubilant.lirasnative.ui.util.isoToKolkataLocalDateTime
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTicker
@@ -52,9 +62,15 @@ import kotlinx.coroutines.launch
 fun MyDayScreen(
   leads: List<LeadSummary>,
   leadsRepository: LeadsRepository,
+  underwritingRepository: UnderwritingRepository? = null,
+  pdRepository: PdRepository? = null,
   session: SessionState,
   onMutated: () -> Unit,
   onLeadClick: (id: String) -> Unit,
+  onOpenSearch: (() -> Unit)? = null,
+  onOpenCollections: (() -> Unit)? = null,
+  onOpenUploads: (() -> Unit)? = null,
+  onOpenPdWorklist: ((tab: PdWorklistTab) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val ctx = LocalContext.current
@@ -64,16 +80,19 @@ fun MyDayScreen(
 
   fun appendNote(leadId: String, noteText: String) {
     scope.launch {
+      val now = Instant.now().toString()
+      val note = LeadNote(text = noteText, date = now, byUser = actor)
       runCatching {
         val lead = leadsRepository.getLead(leadId)
-        val now = Instant.now().toString()
-        val nextNotes =
-          (lead.notes + LeadNote(text = noteText, date = now, byUser = actor))
-            .takeLast(500)
+        val nextNotes = (lead.notes + note).takeLast(500)
         leadsRepository.updateLead(leadId, LeadUpdate(notes = nextNotes))
       }
         .onSuccess { onMutated() }
-        .onFailure { Toast.makeText(ctx, it.message ?: "Couldn’t log action.", Toast.LENGTH_LONG).show() }
+        .onFailure { ex ->
+          RetryQueueStore.enqueueLeadAppendNote(ctx.applicationContext, leadId, note)
+          RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+          Toast.makeText(ctx, "Saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+        }
     }
   }
 
@@ -120,12 +139,115 @@ fun MyDayScreen(
         )
     }
 
+  var pdPendingCount by remember { mutableStateOf<Int?>(null) }
+  var criticalDoubtsCount by remember { mutableStateOf<Int?>(null) }
+  var workError by remember { mutableStateOf<String?>(null) }
+
+  LaunchedEffect(underwritingRepository, pdRepository, leads, today) {
+    val uw = underwritingRepository ?: return@LaunchedEffect
+    val pd = pdRepository ?: return@LaunchedEffect
+    pdPendingCount = null
+    criticalDoubtsCount = null
+    workError = null
+
+    runCatching {
+      val apps = uw.listRecentApplications(limit = 250).filter { !it.leadId.isNullOrBlank() }
+      val sessions = pd.listSessions(limit = 500)
+      val byAppId = sessions.associateBy { it.applicationId }
+      val pending = apps.count { a -> byAppId[a.id]?.status?.equals("completed", ignoreCase = true) != true }
+      val critical =
+        if (sessions.isEmpty()) 0 else {
+          pd.listQuestionsForSessions(
+            pdSessionIds = sessions.map { it.id },
+            severity = "Immediate Action",
+            statuses = listOf("Pending"),
+            limit = 500,
+          ).size
+        }
+      pending to critical
+    }
+      .onSuccess { (pending, critical) ->
+        pdPendingCount = pending
+        criticalDoubtsCount = critical
+      }
+      .onFailure { ex ->
+        // Don't block the screen; this is an enhancement panel.
+        workError = ex.message ?: "Couldn’t load PD queues."
+      }
+  }
+
   val scroll = rememberScrollState()
   Column(modifier = modifier.verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
       StatMini(label = "Overdue", value = overdue.size.toString(), modifier = Modifier.weight(1f))
       StatMini(label = "Due today", value = dueToday.size.toString(), modifier = Modifier.weight(1f))
       StatMini(label = "Meetings", value = meetingsToday.size.toString(), modifier = Modifier.weight(1f))
+    }
+
+    if (onOpenSearch != null) {
+      ActionTile(
+        label = "Global search",
+        subtitle = "Leads, loans, mediators, and notes",
+        icon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+        onClick = onOpenSearch,
+      )
+    }
+
+    if (onOpenCollections != null) {
+      ActionTile(
+        label = "Follow-ups due today",
+        subtitle = "${dueToday.size} due today • ${overdue.size} overdue",
+        icon = { Icon(Icons.Outlined.CalendarMonth, contentDescription = null) },
+        onClick = onOpenCollections,
+      )
+    }
+
+    if (onOpenPdWorklist != null || onOpenUploads != null) {
+      if (onOpenPdWorklist != null && (pdPendingCount != null || criticalDoubtsCount != null)) {
+        val pdPendingLabel = (pdPendingCount ?: 0).toString()
+        ActionTile(
+          label = "PD pending",
+          subtitle = "$pdPendingLabel underwriting run(s) need PD",
+          icon = { Icon(Icons.Outlined.FactCheck, contentDescription = null) },
+          onClick = { onOpenPdWorklist(PdWorklistTab.PdPending) },
+        )
+
+        val crit = (criticalDoubtsCount ?: 0).toString()
+        ActionTile(
+          label = "Doubts: Immediate Action",
+          subtitle = "$crit critical doubt(s) pending",
+          icon = { Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+          onClick = { onOpenPdWorklist(PdWorklistTab.CriticalDoubts) },
+        )
+      }
+
+      if (onOpenUploads != null) {
+        val bankPending =
+          actionable.count { it.documents?.bank != true }
+        if (bankPending > 0) {
+          ActionTile(
+            label = "Uploads pending",
+            subtitle = "$bankPending lead(s) missing bank statement flag",
+            icon = { Icon(Icons.Outlined.CalendarMonth, contentDescription = null) },
+            onClick = onOpenUploads,
+          )
+        }
+      }
+
+      if (!workError.isNullOrBlank()) {
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.10f)),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.25f)),
+          elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+          Text(
+            workError!!,
+            modifier = Modifier.padding(12.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+          )
+        }
+      }
     }
 
     SectionCard(

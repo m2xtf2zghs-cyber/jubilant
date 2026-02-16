@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-  <!-- Internal distribution only (NOT Play Store). -->
+  <!-- Internal builds only: enables call-log automation for mediator engagement. -->
   <uses-permission android:name="android.permission.READ_CALL_LOG" />
-
 </manifest>
 

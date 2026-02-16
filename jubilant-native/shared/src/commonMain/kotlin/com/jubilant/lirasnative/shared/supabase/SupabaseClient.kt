@@ -534,6 +534,28 @@ class SupabaseClient(
   }
 
   @Throws(Exception::class)
+  suspend fun listUnderwritingApplicationsAll(limit: Int = 200): List<UnderwritingApplicationListItem> {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply {
+        appendPathSegments("rest", "v1", "underwriting_applications")
+        parameters.append(
+          "select",
+          "id,lead_id,created_at,status,period_start,period_end,bank_name,account_type,requested_exposure,aggressive_summary",
+        )
+        parameters.append("order", "created_at.desc")
+        parameters.append("limit", limit.toString())
+      }.buildString()
+
+      http.get(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        accept(ContentType.Application.Json)
+      }.body()
+    }
+  }
+
+  @Throws(Exception::class)
   suspend fun getUnderwritingApplication(id: String): UnderwritingApplicationRow {
     require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
     return withValidAccessToken { token ->
@@ -672,6 +694,239 @@ class SupabaseClient(
     return path
   }
 
+  // ---- Statement Autopilot ----
+
+  @Throws(Exception::class)
+  suspend fun createStatement(input: StatementCreateInput): StatementRow {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    val userId = requireUserId()
+
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "statements") }.buildString()
+      val body =
+        buildJsonObject {
+          put("owner_id", input.ownerId)
+          put("created_by", userId)
+          input.leadId?.let { put("lead_id", it) }
+          input.accountId?.let { put("account_id", it) }
+        }
+
+      val created: List<StatementRow> =
+        http.post(url) {
+          header("apikey", config.anonKey)
+          header("Authorization", "Bearer $token")
+          header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+          header("Prefer", "return=representation")
+          accept(ContentType.Application.Json)
+          setBody(body)
+        }.body()
+
+      created.firstOrNull() ?: error("Create statement failed.")
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun createStatementVersion(input: StatementVersionCreateInput): StatementVersionRow {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    val userId = requireUserId()
+
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "statement_versions") }.buildString()
+      val body =
+        buildJsonObject {
+          put("statement_id", input.statementId)
+          put("owner_id", input.ownerId)
+          put("created_by", userId)
+          put("status", input.status)
+          put("version_no", input.versionNo)
+          input.bankName?.let { put("bank_name", it) }
+          input.accountType?.let { put("account_type", it) }
+          input.periodStart?.let { put("period_start", it) }
+          input.periodEnd?.let { put("period_end", it) }
+          input.reportJson?.let { put("report_json", it) }
+        }
+
+      val created: List<StatementVersionRow> =
+        http.post(url) {
+          header("apikey", config.anonKey)
+          header("Authorization", "Bearer $token")
+          header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+          header("Prefer", "return=representation")
+          accept(ContentType.Application.Json)
+          setBody(body)
+        }.body()
+
+      created.firstOrNull() ?: error("Create statement version failed.")
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun createPdfFile(input: PdfFileCreateInput): PdfFileRow {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    val userId = requireUserId()
+
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "pdf_files") }.buildString()
+      val body =
+        buildJsonObject {
+          put("statement_version_id", input.statementVersionId)
+          put("owner_id", input.ownerId)
+          put("created_by", userId)
+          put("storage_path", input.storagePath)
+          input.fileName?.let { put("file_name", it) }
+          input.metaJson?.let { put("meta_json", it) }
+        }
+
+      val created: List<PdfFileRow> =
+        http.post(url) {
+          header("apikey", config.anonKey)
+          header("Authorization", "Bearer $token")
+          header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+          header("Prefer", "return=representation")
+          accept(ContentType.Application.Json)
+          setBody(body)
+        }.body()
+
+      created.firstOrNull() ?: error("Create pdf file failed.")
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun uploadStatementPdf(
+    ownerId: String,
+    statementVersionId: String,
+    fileName: String,
+    bytes: ByteArray,
+    contentType: String,
+  ): String {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    if (bytes.isEmpty()) throw IOException("Empty file.")
+
+    val safeName = sanitizeFileName(fileName)
+    val path = "${ownerId.trim()}/statements/$statementVersionId/${currentMillis()}_$safeName"
+
+    withValidAccessToken { token ->
+      val url = "${baseUrl}/storage/v1/object/${attachmentsBucket}/${path}"
+      http.post(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        header("x-upsert", "true")
+        header(HttpHeaders.ContentType, contentType)
+        setBody(bytes)
+      }
+    }
+
+    return path
+  }
+
+  @Throws(Exception::class)
+  suspend fun updateStatementVersionStatus(versionId: String, status: String): StatementVersionRow {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply {
+        appendPathSegments("rest", "v1", "statement_versions")
+        parameters.append("id", "eq.$versionId")
+      }.buildString()
+
+      val body =
+        buildJsonObject {
+          put("status", status)
+        }
+
+      val updated: List<StatementVersionRow> =
+        http.patch(url) {
+          header("apikey", config.anonKey)
+          header("Authorization", "Bearer $token")
+          header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+          header("Prefer", "return=representation")
+          accept(ContentType.Application.Json)
+          setBody(body)
+        }.body()
+
+      updated.firstOrNull() ?: error("Update statement version failed.")
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun insertRawStatementLines(input: List<RawStatementLineCreateInput>) {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    if (input.isEmpty()) return
+    val userId = requireUserId()
+
+    withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "raw_statement_lines") }.buildString()
+
+      val body =
+        input.map { row ->
+        buildJsonObject {
+          put("statement_version_id", row.versionId)
+          put("owner_id", row.ownerId)
+          put("created_by", userId)
+          row.pdfFileId?.let { put("pdf_file_id", it) }
+          put("page_no", row.pageNo)
+          put("row_no", row.rowNo)
+          put("raw_row_text", row.rawRowText)
+            row.rawDateText?.let { put("raw_date_text", it) }
+            row.rawNarrationText?.let { put("raw_narration_text", it) }
+            row.rawDrText?.let { put("raw_dr_text", it) }
+            row.rawCrText?.let { put("raw_cr_text", it) }
+            row.rawBalanceText?.let { put("raw_balance_text", it) }
+            put("raw_line_type", row.rawLineType)
+            row.extractionMethod?.let { put("extraction_method", it) }
+            row.bboxJson?.let { put("bbox_json", it) }
+          }
+        }
+
+      http.post(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+        accept(ContentType.Application.Json)
+        setBody(body)
+      }
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun insertStatementTransactions(input: List<TransactionCreateInput>) {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    if (input.isEmpty()) return
+    val userId = requireUserId()
+
+    withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "transactions") }.buildString()
+
+      val body =
+        input.map { row ->
+        buildJsonObject {
+          put("statement_version_id", row.versionId)
+          put("owner_id", row.ownerId)
+          put("created_by", userId)
+            put("raw_line_ids", DefaultJson.encodeToJsonElement(row.rawLineIds))
+            put("date", row.date)
+            put("month", row.month)
+            put("narration", row.narration)
+            put("dr", row.dr)
+            put("cr", row.cr)
+            row.balance?.let { put("balance", it) }
+            put("counterparty_norm", row.counterpartyNorm)
+            put("txn_type", row.txnType)
+            put("category", row.category)
+            row.flagsJson?.let { put("flags_json", it) }
+            put("transaction_uid", row.transactionUid)
+          }
+        }
+
+      http.post(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+        accept(ContentType.Application.Json)
+        setBody(body)
+      }
+    }
+  }
+
   // ---- PD (Personal Discussion) + Dynamic Doubts ----
 
   @Throws(Exception::class)
@@ -693,6 +948,25 @@ class SupabaseClient(
         }.body()
 
       items.firstOrNull()
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun listPdSessions(limit: Int = 200): List<PdSessionRow> {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply {
+        appendPathSegments("rest", "v1", "pd_sessions")
+        parameters.append("select", "*")
+        parameters.append("order", "updated_at.desc")
+        parameters.append("limit", limit.toString())
+      }.buildString()
+
+      http.get(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        accept(ContentType.Application.Json)
+      }.body()
     }
   }
 
@@ -834,6 +1108,35 @@ class SupabaseClient(
         parameters.append("select", "*")
         parameters.append("pd_session_id", "eq.$pdSessionId")
         parameters.append("order", "created_at.asc")
+        parameters.append("limit", limit.toString())
+      }.buildString()
+
+      http.get(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        accept(ContentType.Application.Json)
+      }.body()
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun listPdGeneratedQuestionsForSessions(
+    pdSessionIds: List<String>,
+    severity: String? = null,
+    statuses: List<String> = emptyList(),
+    limit: Int = 500,
+  ): List<PdGeneratedQuestionRow> {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    if (pdSessionIds.isEmpty()) return emptyList()
+
+    return withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply {
+        appendPathSegments("rest", "v1", "pd_generated_questions")
+        parameters.append("select", "*")
+        parameters.append("pd_session_id", "in.(${pdSessionIds.joinToString(",")})")
+        severity?.takeIf { it.isNotBlank() }?.let { parameters.append("severity", "eq.$it") }
+        if (statuses.isNotEmpty()) parameters.append("status", "in.(${statuses.joinToString(",")})")
+        parameters.append("order", "updated_at.desc")
         parameters.append("limit", limit.toString())
       }.buildString()
 
