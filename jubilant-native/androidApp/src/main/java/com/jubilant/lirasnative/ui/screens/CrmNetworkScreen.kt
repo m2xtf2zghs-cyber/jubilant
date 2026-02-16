@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -27,6 +28,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,7 +43,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jubilant.lirasnative.di.LeadsRepository
@@ -95,6 +99,7 @@ fun CrmNetworkScreen(
   modifier: Modifier = Modifier,
 ) {
   val ctx = LocalContext.current
+  val haptics = LocalHapticFeedback.current
   val scope = rememberCoroutineScope()
   val today by rememberKolkataDateTicker()
   val todayKey = remember(today) { today.toString() }
@@ -181,7 +186,10 @@ fun CrmNetworkScreen(
           items(CrmTab.entries, key = { it.name }) { t ->
             FilterChip(
               selected = tab == t,
-              onClick = { tab = t },
+              onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                tab = t
+              },
               label = { Text(t.label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
               colors =
                 FilterChipDefaults.filterChipColors(
@@ -208,11 +216,13 @@ fun CrmNetworkScreen(
           mediators = mediatorsState.mediators,
           todayKey = todayKey,
           onCall = { m ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             val phone = m.phone.orEmpty()
             if (phone.isNotBlank()) openDial(phone)
             setPartnerConnect(m, "call")
           },
           onWhatsApp = { m ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             val phone = m.phone.orEmpty()
             if (phone.isNotBlank()) {
               val msg =
@@ -221,8 +231,14 @@ fun CrmNetworkScreen(
             }
             setPartnerConnect(m, "whatsapp")
           },
-          onMeeting = { m -> setPartnerConnect(m, "meeting") },
-          onUndo = { m -> setPartnerConnect(m, null) },
+          onMeeting = { m ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            setPartnerConnect(m, "meeting")
+          },
+          onUndo = { m ->
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            setPartnerConnect(m, null)
+          },
           onOpenMediator = { onMediatorClick(it) },
           modifier = Modifier.weight(1f, fill = true),
         )
@@ -275,6 +291,8 @@ private fun PartnerConnectList(
   onOpenMediator: (id: String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val sortedMediators = remember(mediators) { mediators.sortedBy { it.name.lowercase() } }
+
   Card(
     modifier = modifier.fillMaxSize(),
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -288,30 +306,69 @@ private fun PartnerConnectList(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(mediators.sortedBy { it.name.lowercase() }) { m ->
+      LazyColumn {
+        itemsIndexed(sortedMediators, key = { _, m -> m.id }) { index, m ->
           val todayEntry = m.followUpHistory.lastOrNull { it.date == todayKey }
           val isDone = todayEntry != null
-          Card(
-            modifier = Modifier.fillMaxWidth().clickable { onOpenMediator(m.id) },
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+          Column(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .clickable { onOpenMediator(m.id) }
+                .padding(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             Row(
-              modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+              modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-              Column(modifier = Modifier.weight(1f)) {
-                Text(m.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val meta =
-                  if (isDone) "${todayEntry?.time ?: "--"} • ${todayEntry?.type ?: ""}"
-                  else "Total connects: ${m.followUpHistory.size}"
-                Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  Text(
+                    m.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                  )
+                  PartnerConnectStatePill(
+                    label = if (isDone) "Done" else "Pending",
+                    done = isDone,
+                  )
+                }
+
+                val phoneLabel = m.phone?.trim().takeIf { !it.isNullOrBlank() } ?: "No phone"
+                Text(
+                  "$phoneLabel • Total connects ${m.followUpHistory.size}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                val todayLabel =
+                  if (isDone) {
+                    val type = todayEntry?.type?.trim().orEmpty().ifBlank { "touchpoint" }
+                    "Today: ${type.uppercase()} at ${todayEntry?.time ?: "--"}"
+                  } else {
+                    "No engagement logged for today"
+                  }
+                Text(
+                  todayLabel,
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
               }
+            }
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
               if (isDone) {
-                IconButton(onClick = { onUndo(m) }) { Icon(Icons.Outlined.Undo, contentDescription = "Undo") }
+                IconButton(onClick = { onUndo(m) }) {
+                  Icon(Icons.Outlined.Undo, contentDescription = "Undo")
+                }
               } else {
                 IconButton(onClick = { onCall(m) }, enabled = !m.phone.isNullOrBlank()) {
                   Icon(Icons.Outlined.Call, contentDescription = "Call")
@@ -319,13 +376,45 @@ private fun PartnerConnectList(
                 IconButton(onClick = { onWhatsApp(m) }, enabled = !m.phone.isNullOrBlank()) {
                   Icon(Icons.Outlined.Chat, contentDescription = "WhatsApp")
                 }
-                IconButton(onClick = { onMeeting(m) }) { Icon(Icons.Outlined.MeetingRoom, contentDescription = "Meeting") }
+                IconButton(onClick = { onMeeting(m) }) {
+                  Icon(Icons.Outlined.MeetingRoom, contentDescription = "Meeting")
+                }
               }
+              Spacer(Modifier.weight(1f))
+              Text(
+                "Open",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.secondary,
+              )
             }
+          }
+
+          if (index < sortedMediators.lastIndex) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
           }
         }
       }
     }
+  }
+}
+
+@Composable
+private fun PartnerConnectStatePill(
+  label: String,
+  done: Boolean,
+) {
+  val tint = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+  Card(
+    colors = CardDefaults.cardColors(containerColor = tint.copy(alpha = 0.14f)),
+    border = BorderStroke(1.dp, tint.copy(alpha = 0.35f)),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+  ) {
+    Text(
+      label,
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+      style = MaterialTheme.typography.labelSmall,
+      color = tint,
+    )
   }
 }
 

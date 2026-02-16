@@ -36,6 +36,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -43,9 +44,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -57,7 +61,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import com.jubilant.lirasnative.di.LeadsRepository
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
@@ -103,6 +109,7 @@ fun LeadsTab(
 ) {
   var filter by rememberSaveable { mutableStateOf(LeadsFilter.All) }
   val context = LocalContext.current
+  val haptics = LocalHapticFeedback.current
   val scope = rememberCoroutineScope()
   val actor = session.myProfile?.email ?: session.userId ?: "unknown"
   var actionBusyLeadId by remember { mutableStateOf<String?>(null) }
@@ -140,8 +147,20 @@ fun LeadsTab(
   val mediatorsById = remember(mediators) { mediators.associateBy { it.id } }
   val leadsById = remember(state.leads) { state.leads.associateBy { it.id } }
 
+  fun swipeCall(lead: LeadSummary) {
+    val digits = lead.phone?.filter { it.isDigit() }.orEmpty()
+    if (digits.isBlank()) {
+      Toast.makeText(context, "No phone number available.", Toast.LENGTH_SHORT).show()
+      return
+    }
+    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits"))) }
+      .onFailure { Toast.makeText(context, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
+  }
+
   fun markDone(lead: LeadSummary) {
     if (actionBusyLeadId != null) return
+    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     actionBusyLeadId = lead.id
     actionError = null
     scope.launch {
@@ -167,6 +186,7 @@ fun LeadsTab(
   fun saveQuickNote(leadId: String, rawText: String) {
     val text = rawText.trim()
     if (text.isBlank() || actionBusyLeadId != null) return
+    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     actionBusyLeadId = leadId
     actionError = null
     scope.launch {
@@ -389,21 +409,35 @@ fun LeadsTab(
       modifier = Modifier.weight(1f, fill = true),
     ) {
       items(scopedLeads) { lead ->
-        LeadCard(
-          lead = lead,
-          mediator = lead.mediatorId?.let { mediatorsById[it] },
-          onClick = { onLeadClick(lead.id) },
-          onUploadDoc = { onUploadDoc(lead.id) },
-          onAddNote = {
+        LeadSwipeRow(
+          enabled = actionBusyLeadId == null,
+          onSwipeCall = { swipeCall(lead) },
+          onSwipeAddNote = {
             if (actionBusyLeadId == null) {
+              haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
               noteLeadId = lead.id
               noteDraft = ""
               actionError = null
             }
           },
-          onMarkDone = { markDone(lead) },
-          busy = actionBusyLeadId == lead.id,
-        )
+        ) {
+          LeadCard(
+            lead = lead,
+            mediator = lead.mediatorId?.let { mediatorsById[it] },
+            onClick = { onLeadClick(lead.id) },
+            onUploadDoc = { onUploadDoc(lead.id) },
+            onAddNote = {
+              if (actionBusyLeadId == null) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                noteLeadId = lead.id
+                noteDraft = ""
+                actionError = null
+              }
+            },
+            onMarkDone = { markDone(lead) },
+            busy = actionBusyLeadId == lead.id,
+          )
+        }
       }
     }
 
@@ -469,6 +503,83 @@ fun LeadsTab(
       },
     )
   }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LeadSwipeRow(
+  enabled: Boolean,
+  onSwipeCall: () -> Unit,
+  onSwipeAddNote: () -> Unit,
+  content: @Composable () -> Unit,
+) {
+  val dismissState =
+    rememberSwipeToDismissBoxState(
+      confirmValueChange = { value ->
+        when (value) {
+          SwipeToDismissBoxValue.StartToEnd -> {
+            onSwipeCall()
+            false
+          }
+          SwipeToDismissBoxValue.EndToStart -> {
+            onSwipeAddNote()
+            false
+          }
+          SwipeToDismissBoxValue.Settled -> true
+        }
+      },
+    )
+
+  SwipeToDismissBox(
+    state = dismissState,
+    enableDismissFromStartToEnd = enabled,
+    enableDismissFromEndToStart = enabled,
+    backgroundContent = {
+      val direction = dismissState.dismissDirection
+      val bg =
+        when (direction) {
+          SwipeToDismissBoxValue.StartToEnd -> Success500.copy(alpha = 0.16f)
+          SwipeToDismissBoxValue.EndToStart -> Blue500.copy(alpha = 0.16f)
+          SwipeToDismissBoxValue.Settled -> Color.Transparent
+        }
+      val fg =
+        when (direction) {
+          SwipeToDismissBoxValue.StartToEnd -> Success500
+          SwipeToDismissBoxValue.EndToStart -> Blue500
+          SwipeToDismissBoxValue.Settled -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
+      val label =
+        when (direction) {
+          SwipeToDismissBoxValue.StartToEnd -> "Call"
+          SwipeToDismissBoxValue.EndToStart -> "Add note"
+          SwipeToDismissBoxValue.Settled -> ""
+        }
+      val icon =
+        when (direction) {
+          SwipeToDismissBoxValue.StartToEnd -> Icons.Outlined.Call
+          SwipeToDismissBoxValue.EndToStart -> Icons.Outlined.NoteAdd
+          SwipeToDismissBoxValue.Settled -> null
+        }
+
+      Row(
+        modifier = Modifier.fillMaxSize().background(bg).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement =
+          when (direction) {
+            SwipeToDismissBoxValue.StartToEnd -> Arrangement.Start
+            SwipeToDismissBoxValue.EndToStart -> Arrangement.End
+            SwipeToDismissBoxValue.Settled -> Arrangement.Start
+          },
+      ) {
+        if (icon != null) {
+          Icon(icon, contentDescription = null, tint = fg)
+          Spacer(Modifier.width(8.dp))
+          Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
+        }
+      }
+    },
+    content = { content() },
+  )
 }
 
 @Composable
