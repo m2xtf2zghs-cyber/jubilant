@@ -290,9 +290,10 @@ fun UnderwritingScreen(
     detailsTab = "Summary"
     runs = emptyList()
     error = null
-    if (selectedLeadId != null) {
+    val leadId = selectedLeadId
+    if (leadId != null) {
       refreshRuns()
-      val cached = loadUwCache(context, selectedLeadId!!)
+      val cached = loadUwCache(context, leadId)
       if (cached != null) result = cached
     }
   }
@@ -718,8 +719,7 @@ fun UnderwritingScreen(
       }
     }
 
-    if (parseMeta != null) {
-      val meta = parseMeta!!
+    parseMeta?.let { meta ->
       Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -749,8 +749,7 @@ fun UnderwritingScreen(
       }
     }
 
-    if (result != null) {
-      val r = result!!
+    result?.let { r ->
       val tabs = listOf("Summary", "GST", "ITR", "Cross")
       val tabIndex = (tabs.indexOf(detailsTab)).let { if (it < 0) 0 else it }
       val topGstFlags = r.ruleRunLog.filter { it.id.startsWith("GST-") && !it.passed }.take(3)
@@ -1022,7 +1021,8 @@ fun UnderwritingScreen(
               }
 
               if (r.credibility != null) {
-                val cred = r.credibility!!
+                val cred = r.credibility
+                  ?: return@let
                 Card(
                   modifier = Modifier.fillMaxWidth(),
                   colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

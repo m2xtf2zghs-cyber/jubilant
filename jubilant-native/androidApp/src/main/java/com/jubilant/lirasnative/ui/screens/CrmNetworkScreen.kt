@@ -62,9 +62,8 @@ private enum class CrmTab(
   val label: String,
 ) {
   Partners("Partners"),
-  Mediators("Mediators"),
   Tasks("Tasks"),
-  Activities("Activities"),
+  Activities("Activity"),
 }
 
 private enum class ActivityChipKind {
@@ -180,7 +179,7 @@ fun CrmNetworkScreen(
             FilterChip(
               selected = tab == t,
               onClick = { tab = t },
-              label = { Text(t.label) },
+              label = { Text(t.label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
               colors =
                 FilterChipDefaults.filterChipColors(
                   containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -222,16 +221,6 @@ fun CrmNetworkScreen(
           onMeeting = { m -> setPartnerConnect(m, "meeting") },
           onUndo = { m -> setPartnerConnect(m, null) },
           onOpenMediator = { onMediatorClick(it) },
-          modifier = Modifier.weight(1f, fill = true),
-        )
-      }
-
-      CrmTab.Mediators -> {
-        MediatorsTab(
-          state = mediatorsState,
-          leads = leads,
-          onMediatorClick = onMediatorClick,
-          onCreateMediator = onCreateMediator,
           modifier = Modifier.weight(1f, fill = true),
         )
       }
@@ -429,7 +418,7 @@ private fun ActivitiesPanel(
                   ActivityChipKind.Mediator -> onMediatorClick(item.id)
                 }
               },
-              label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+              label = { Text(item.label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
               modifier = Modifier.height(36.dp),
               colors =
                 FilterChipDefaults.filterChipColors(
