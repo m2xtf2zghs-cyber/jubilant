@@ -1,7 +1,7 @@
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist/build/pdf.mjs";
-import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-GlobalWorkerOptions.workerSrc = workerSrc;
+// Use a stable CDN worker to avoid bundler/hosting worker path issues.
+GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 
 const normalizeDate = (raw) => {
   const s = String(raw || "").trim();

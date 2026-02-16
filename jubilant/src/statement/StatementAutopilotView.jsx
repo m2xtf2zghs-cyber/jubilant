@@ -48,7 +48,14 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
   };
 
   const handleParse = async () => {
-    if (!selectedLead) return;
+    if (!selectedLead) {
+      setError("Select a lead first.");
+      return;
+    }
+    if (!files.length) {
+      setError("Upload at least one PDF.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -85,9 +92,13 @@ export default function StatementAutopilotView({ backend, leads, isAdmin }) {
       setError("Parse the PDF first.");
       return;
     }
-    const adjusted = applyManualEdits(rawLines);
-    const r = runStatementAutopilot(adjusted, parseMeta || {});
-    setResult(r);
+    try {
+      const adjusted = applyManualEdits(rawLines);
+      const r = runStatementAutopilot(adjusted, parseMeta || {});
+      setResult(r);
+    } catch (e) {
+      setError(String(e?.message || e));
+    }
   };
 
   const handleSave = async () => {
