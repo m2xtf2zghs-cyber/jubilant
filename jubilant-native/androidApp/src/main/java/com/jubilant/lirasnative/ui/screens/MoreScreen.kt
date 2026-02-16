@@ -51,8 +51,8 @@ fun MoreTab(
     )
 
     ActionTile(
-      label = "Statement Autopilot",
-      subtitle = "Strict transaction capture + reconciliation",
+      label = "Statement Autopilot (Web)",
+      subtitle = "Open Statement Autopilot in web app",
       icon = { Icon(Icons.Outlined.Description, contentDescription = null) },
       onClick = onOpenStatementAutopilot,
     )

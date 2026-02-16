@@ -91,7 +91,6 @@ import com.jubilant.lirasnative.di.MediatorsRepository
 import com.jubilant.lirasnative.di.PdRepository
 import com.jubilant.lirasnative.di.ProfilesRepository
 import com.jubilant.lirasnative.di.UnderwritingRepository
-import com.jubilant.lirasnative.di.StatementRepository
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
@@ -146,6 +145,7 @@ private enum class MainDest(
 private const val COLLECTIONS_ROUTE: String = "collections"
 private const val NETWORK_ROUTE: String = "crm_network"
 private const val UNDERWRITING_WEB_URL: String = "https://jubilantcrm.netlify.app/underwriting"
+private const val STATEMENT_AUTOPILOT_WEB_URL: String = "https://jubilantcrm.netlify.app/statement-autopilot"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -155,7 +155,6 @@ fun HomeScreen(
   profilesRepository: ProfilesRepository,
   underwritingRepository: UnderwritingRepository,
   pdRepository: PdRepository,
-  statementRepository: StatementRepository,
   onSignOut: () -> Unit,
   navTargetRoute: String?,
   onNavTargetHandled: () -> Unit,
@@ -210,7 +209,7 @@ fun HomeScreen(
       route.startsWith("mediator/") -> "Mediator"
       route.startsWith("pd/") -> "PD"
       route == "pd" -> "PD"
-      route == "statement_autopilot" -> "Statement Autopilot"
+      route == "statement_autopilot" -> "Statement Autopilot (Web)"
       route == MainDest.Leads.route -> MainDest.Leads.label
       route == COLLECTIONS_ROUTE -> "Collections"
       route == MainDest.More.route -> MainDest.More.label
@@ -226,6 +225,7 @@ fun HomeScreen(
       route == "my_day" -> "My Day"
       route.startsWith(NETWORK_ROUTE) -> "CRM / Network"
       route == "settings" -> "Settings"
+      route == "sync_queue" -> "Sync Queue"
       else -> MainDest.Home.label
     }
 
@@ -234,6 +234,14 @@ fun HomeScreen(
       context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UNDERWRITING_WEB_URL)))
     }.onFailure {
       Toast.makeText(context, "Couldn’t open Underwriting web page.", Toast.LENGTH_LONG).show()
+    }
+  }
+
+  fun openStatementAutopilotWeb() {
+    runCatching {
+      context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(STATEMENT_AUTOPILOT_WEB_URL)))
+    }.onFailure {
+      Toast.makeText(context, "Couldn’t open Statement Autopilot web page.", Toast.LENGTH_LONG).show()
     }
   }
 
@@ -246,6 +254,11 @@ fun HomeScreen(
     }
     if (target == "underwriting") {
       openUnderwritingWeb()
+      onNavTargetHandled()
+      return@LaunchedEffect
+    }
+    if (target == "statement_autopilot") {
+      openStatementAutopilotWeb()
       onNavTargetHandled()
       return@LaunchedEffect
     }
@@ -447,6 +460,7 @@ fun HomeScreen(
           composable(MainDest.Leads.route) {
             LeadsTab(
               state = leadsStateUi,
+              leadsRepository = leadsRepository,
               session = sessionState,
               mediators = mediatorsUi,
               query = leadsQuery,
@@ -456,6 +470,7 @@ fun HomeScreen(
               onOpenKanban = { nav.navigate("kanban") },
               onOpenCalendar = { nav.navigate("calendar") },
               onUploadDoc = { id -> nav.navigate("scan_doc/$id") },
+              onMutated = { leadsVm.refresh() },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
@@ -471,8 +486,8 @@ fun HomeScreen(
           composable(MainDest.More.route) {
             MoreTab(
               session = sessionState,
-              onOpenStatementAutopilot = { nav.navigate("statement_autopilot") },
-              onOpenPd = { nav.navigate("pd") },
+              onOpenStatementAutopilot = { openStatementAutopilotWeb() },
+              onOpenPd = { nav.navigate("pd_worklist") },
               onOpenCollections = { nav.navigate(COLLECTIONS_ROUTE) },
               onOpenLoanBook = { nav.navigate("loan_book") },
               onOpenReports = { nav.navigate("reports") },
@@ -554,6 +569,7 @@ fun HomeScreen(
               onOpenReminders = { nav.navigate("reminders") },
               onOpenScanDoc = { nav.navigate("scan_doc") },
               onOpenSecurity = { nav.navigate("security") },
+              onOpenSyncQueue = { nav.navigate("sync_queue") },
               onOpenAdminAccess = { nav.navigate("admin_access") },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
@@ -622,14 +638,10 @@ fun HomeScreen(
           }
 
           composable("statement_autopilot") {
-            SafeScreen(screenName = "Statement Autopilot") {
-              StatementAutopilotScreen(
-                leads = leadsState.leads,
-                statementRepository = statementRepository,
-                session = sessionState,
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
-              )
-            }
+            StatementAutopilotWebOnlyScreen(
+              onOpenWeb = { openStatementAutopilotWeb() },
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
           }
 
           composable("pd/{applicationId}/{leadId}") { entry ->
@@ -715,6 +727,12 @@ fun HomeScreen(
 
           composable("security") {
             SecurityScreen(
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+          }
+
+          composable("sync_queue") {
+            SyncQueueScreen(
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
@@ -899,6 +917,34 @@ private fun UnderwritingWebOnlyScreen(
       )
       Button(onClick = onOpenWeb, modifier = Modifier.fillMaxWidth()) {
         Text("Open Underwriting on Web")
+      }
+    }
+  }
+}
+
+@Composable
+private fun StatementAutopilotWebOnlyScreen(
+  onOpenWeb: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    modifier = modifier,
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text("Statement Autopilot is Web-only", style = MaterialTheme.typography.titleMedium)
+      Text(
+        "Native Statement Autopilot has been disabled. Continue this module in the web app.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Button(onClick = onOpenWeb, modifier = Modifier.fillMaxWidth()) {
+        Text("Open Statement Autopilot on Web")
       }
     }
   }

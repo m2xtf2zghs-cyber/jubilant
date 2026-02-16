@@ -26,10 +26,13 @@ import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.DashboardCustomize
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.NoteAdd
 import androidx.compose.material.icons.outlined.Today
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +51,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,16 +59,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.jubilant.lirasnative.di.LeadsRepository
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
+import com.jubilant.lirasnative.shared.supabase.LeadNote
+import com.jubilant.lirasnative.shared.supabase.LeadUpdate
 import com.jubilant.lirasnative.shared.supabase.Mediator
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import com.jubilant.lirasnative.ui.theme.Blue500
 import com.jubilant.lirasnative.ui.theme.Danger500
 import com.jubilant.lirasnative.ui.theme.Gold500
 import com.jubilant.lirasnative.ui.theme.Slate400
 import com.jubilant.lirasnative.ui.theme.Success500
 import com.jubilant.lirasnative.ui.theme.Warning500
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import java.text.DecimalFormat
+import java.time.Instant
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 private enum class LeadsFilter(
   val label: String,
@@ -77,6 +88,7 @@ private enum class LeadsFilter(
 @Composable
 fun LeadsTab(
   state: LeadsState,
+  leadsRepository: LeadsRepository,
   session: SessionState,
   mediators: List<Mediator>,
   query: String,
@@ -86,9 +98,17 @@ fun LeadsTab(
   onOpenKanban: () -> Unit,
   onOpenCalendar: () -> Unit,
   onUploadDoc: (leadId: String) -> Unit,
+  onMutated: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var filter by rememberSaveable { mutableStateOf(LeadsFilter.All) }
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val actor = session.myProfile?.email ?: session.userId ?: "unknown"
+  var actionBusyLeadId by remember { mutableStateOf<String?>(null) }
+  var actionError by remember { mutableStateOf<String?>(null) }
+  var noteLeadId by rememberSaveable { mutableStateOf<String?>(null) }
+  var noteDraft by rememberSaveable { mutableStateOf("") }
 
   val filteredLeads by remember(state.leads, query) {
     derivedStateOf {
@@ -118,6 +138,67 @@ fun LeadsTab(
   }
 
   val mediatorsById = remember(mediators) { mediators.associateBy { it.id } }
+  val leadsById = remember(state.leads) { state.leads.associateBy { it.id } }
+
+  fun markDone(lead: LeadSummary) {
+    if (actionBusyLeadId != null) return
+    actionBusyLeadId = lead.id
+    actionError = null
+    scope.launch {
+      val patch = LeadUpdate(status = "Deal Closed")
+      val saved =
+        runCatching { leadsRepository.updateLead(lead.id, patch) }
+          .onFailure {
+            val appCtx = context.applicationContext
+            RetryQueueStore.enqueueLeadUpdate(appCtx, lead.id, patch)
+            RetrySyncScheduler.enqueueNow(appCtx)
+            actionError = it.message ?: "Couldn’t mark done right now."
+            Toast.makeText(context, "Queued as done — will sync when online.", Toast.LENGTH_LONG).show()
+          }
+          .getOrNull()
+      if (saved != null) {
+        Toast.makeText(context, "Lead marked done.", Toast.LENGTH_SHORT).show()
+        onMutated()
+      }
+      actionBusyLeadId = null
+    }
+  }
+
+  fun saveQuickNote(leadId: String, rawText: String) {
+    val text = rawText.trim()
+    if (text.isBlank() || actionBusyLeadId != null) return
+    actionBusyLeadId = leadId
+    actionError = null
+    scope.launch {
+      val note =
+        LeadNote(
+          text = text,
+          date = Instant.now().toString(),
+          byUser = actor,
+        )
+      val saved =
+        runCatching {
+          val fullLead = leadsRepository.getLead(leadId)
+          val nextNotes = (fullLead.notes + note).takeLast(500)
+          leadsRepository.updateLead(leadId, LeadUpdate(notes = nextNotes))
+        }
+          .onFailure {
+            val appCtx = context.applicationContext
+            RetryQueueStore.enqueueLeadAppendNote(appCtx, leadId, note)
+            RetrySyncScheduler.enqueueNow(appCtx)
+            actionError = it.message ?: "Couldn’t save note right now."
+            Toast.makeText(context, "Note saved offline — will sync when online.", Toast.LENGTH_LONG).show()
+          }
+          .getOrNull()
+      if (saved != null) {
+        Toast.makeText(context, "Quick note added.", Toast.LENGTH_SHORT).show()
+        onMutated()
+      }
+      actionBusyLeadId = null
+      noteLeadId = null
+      noteDraft = ""
+    }
+  }
 
   if (state.loading && state.leads.isEmpty()) {
     Row(
@@ -140,6 +221,19 @@ fun LeadsTab(
           msg,
           modifier = Modifier.padding(12.dp),
           color = MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.bodyMedium,
+        )
+      }
+    }
+    actionError?.let { msg ->
+      Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)),
+      ) {
+        Text(
+          msg,
+          modifier = Modifier.padding(12.dp),
+          color = MaterialTheme.colorScheme.tertiary,
           style = MaterialTheme.typography.bodyMedium,
         )
       }
@@ -300,6 +394,15 @@ fun LeadsTab(
           mediator = lead.mediatorId?.let { mediatorsById[it] },
           onClick = { onLeadClick(lead.id) },
           onUploadDoc = { onUploadDoc(lead.id) },
+          onAddNote = {
+            if (actionBusyLeadId == null) {
+              noteLeadId = lead.id
+              noteDraft = ""
+              actionError = null
+            }
+          },
+          onMarkDone = { markDone(lead) },
+          busy = actionBusyLeadId == lead.id,
         )
       }
     }
@@ -313,6 +416,58 @@ fun LeadsTab(
     ) {
       androidx.compose.material3.Icon(Icons.Outlined.Add, contentDescription = "Add lead")
     }
+  }
+
+  val targetLeadId = noteLeadId
+  if (targetLeadId != null) {
+    val targetLeadName = leadsById[targetLeadId]?.name ?: "Lead"
+    val saving = actionBusyLeadId == targetLeadId
+    AlertDialog(
+      onDismissRequest = {
+        if (!saving) {
+          noteLeadId = null
+          noteDraft = ""
+        }
+      },
+      title = { Text("Add quick note") },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            "Lead: $targetLeadName",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          OutlinedTextField(
+            value = noteDraft,
+            onValueChange = { noteDraft = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Write update for timeline") },
+            minLines = 2,
+            maxLines = 4,
+            enabled = !saving,
+          )
+        }
+      },
+      confirmButton = {
+        TextButton(
+          onClick = { saveQuickNote(targetLeadId, noteDraft) },
+          enabled = noteDraft.trim().isNotEmpty() && !saving,
+        ) {
+          Text(if (saving) "Saving..." else "Save")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = {
+            noteLeadId = null
+            noteDraft = ""
+          },
+          enabled = !saving,
+        ) {
+          Text("Cancel")
+        }
+      },
+    )
   }
 }
 
@@ -374,6 +529,9 @@ private fun LeadCard(
   mediator: Mediator?,
   onClick: () -> Unit,
   onUploadDoc: () -> Unit,
+  onAddNote: () -> Unit,
+  onMarkDone: () -> Unit,
+  busy: Boolean,
 ) {
   val ctx = LocalContext.current
   val stripe = statusStripeColor(lead.status)
@@ -456,7 +614,7 @@ private fun LeadCard(
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clientPhone"))) }
                   .onFailure { Toast.makeText(ctx, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
               },
-              enabled = clientPhone.isNotBlank(),
+              enabled = clientPhone.isNotBlank() && !busy,
             ) {
               Icon(Icons.Outlined.Call, contentDescription = "Call client")
             }
@@ -469,7 +627,7 @@ private fun LeadCard(
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                   .onFailure { Toast.makeText(ctx, "Couldn’t open WhatsApp.", Toast.LENGTH_SHORT).show() }
               },
-              enabled = clientPhone.isNotBlank(),
+              enabled = clientPhone.isNotBlank() && !busy,
             ) {
               Icon(Icons.Outlined.Chat, contentDescription = "WhatsApp client")
             }
@@ -483,14 +641,26 @@ private fun LeadCard(
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                   .onFailure { Toast.makeText(ctx, "Couldn’t open WhatsApp.", Toast.LENGTH_SHORT).show() }
               },
-              enabled = mediatorPhone.isNotBlank(),
+              enabled = mediatorPhone.isNotBlank() && !busy,
             ) {
               Icon(Icons.Outlined.Groups, contentDescription = "WhatsApp partner")
             }
 
+            IconButton(onClick = onAddNote, enabled = !busy) {
+              Icon(Icons.Outlined.NoteAdd, contentDescription = "Add note")
+            }
+
+            IconButton(onClick = onMarkDone, enabled = !busy) {
+              Icon(Icons.Outlined.TaskAlt, contentDescription = "Mark done")
+            }
+
             Spacer(Modifier.weight(1f))
 
-            IconButton(onClick = onUploadDoc) {
+            if (busy) {
+              CircularProgressIndicator(modifier = Modifier.width(18.dp), strokeWidth = 2.dp)
+            }
+
+            IconButton(onClick = onUploadDoc, enabled = !busy) {
               Icon(Icons.Outlined.UploadFile, contentDescription = "Upload document")
             }
           }

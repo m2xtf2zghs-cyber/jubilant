@@ -37,7 +37,6 @@ fun AppRoot(
           profilesRepository = container.profilesRepository,
           underwritingRepository = container.underwritingRepository,
           pdRepository = container.pdRepository,
-          statementRepository = container.statementRepository,
           onSignOut = vm::signOut,
           navTargetRoute = navTargetRoute,
           onNavTargetHandled = onNavTargetHandled,

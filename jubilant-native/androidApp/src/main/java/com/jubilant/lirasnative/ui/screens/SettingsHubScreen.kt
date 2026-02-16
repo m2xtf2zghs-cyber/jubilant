@@ -14,6 +14,7 @@ import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 fun SettingsHubScreen(
   session: SessionState,
   onOpenSecurity: () -> Unit,
+  onOpenSyncQueue: () -> Unit,
   onOpenDataTools: () -> Unit,
   onOpenCalculator: () -> Unit,
   onOpenReminders: () -> Unit,
@@ -49,6 +51,12 @@ fun SettingsHubScreen(
       subtitle = "Biometric lock + screenshot blocking",
       icon = { Icon(Icons.Outlined.Security, contentDescription = null) },
       onClick = onOpenSecurity,
+    )
+    SettingsRow(
+      title = "Sync queue",
+      subtitle = "View pending offline changes and retry sync",
+      icon = { Icon(Icons.Outlined.Sync, contentDescription = null) },
+      onClick = onOpenSyncQueue,
     )
     SettingsRow(
       title = "Backup & CSV",
@@ -114,4 +122,3 @@ private fun SettingsRow(
     }
   }
 }
-
