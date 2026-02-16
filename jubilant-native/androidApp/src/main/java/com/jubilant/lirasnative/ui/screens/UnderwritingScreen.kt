@@ -1021,8 +1021,7 @@ fun UnderwritingScreen(
               }
 
               if (r.credibility != null) {
-                val cred = r.credibility
-                  ?: return@let
+                val cred = r.credibility!!
                 Card(
                   modifier = Modifier.fillMaxWidth(),
                   colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -58,12 +59,13 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
-private enum class CrmTab(
+enum class CrmTab(
   val label: String,
 ) {
   Partners("Partners"),
+  Mediators("Mediators"),
   Tasks("Tasks"),
-  Activities("Activity"),
+  Activities("Activities"),
 }
 
 private enum class ActivityChipKind {
@@ -85,6 +87,7 @@ fun CrmNetworkScreen(
   mediatorsState: MediatorsState,
   mediatorsRepository: MediatorsRepository,
   session: SessionState,
+  initialTab: CrmTab = CrmTab.Partners,
   onLeadClick: (id: String) -> Unit,
   onMediatorClick: (id: String) -> Unit,
   onCreateMediator: () -> Unit,
@@ -96,7 +99,7 @@ fun CrmNetworkScreen(
   val today by rememberKolkataDateTicker()
   val todayKey = remember(today) { today.toString() }
 
-  var tab by rememberSaveable { mutableStateOf(CrmTab.Partners) }
+  var tab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
 
   val todaysPartnerConnect by remember(mediatorsState.mediators, todayKey) {
     derivedStateOf {
@@ -225,6 +228,16 @@ fun CrmNetworkScreen(
         )
       }
 
+      CrmTab.Mediators -> {
+        MediatorsTab(
+          state = mediatorsState,
+          leads = leads,
+          onMediatorClick = onMediatorClick,
+          onCreateMediator = onCreateMediator,
+          modifier = Modifier.weight(1f, fill = true),
+        )
+      }
+
       CrmTab.Tasks -> {
         MyDayScreen(
           leads = leads,
@@ -349,6 +362,30 @@ private fun ActivitiesPanel(
     }
   }
 
+  fun shortName(raw: String, max: Int = 10): String {
+    val name = raw.trim().replace(Regex("\\s+"), " ")
+    if (name.length <= max) return name.uppercase()
+    return name.take(max).uppercase() + "…"
+  }
+
+  fun shortStatus(raw: String?): String {
+    val s = raw?.trim().orEmpty()
+    return when (s) {
+      "Meeting Scheduled" -> "MEET"
+      "Follow-Up Required" -> "FU"
+      "Partner Follow-Up" -> "PARTNER"
+      "Statements Not Received" -> "STAT"
+      "Contact Details Not Received" -> "CONTACT"
+      "Interest Rate Issue" -> "RATE"
+      "Commercial Client" -> "COMM"
+      "Payment Done" -> "PAID"
+      "Deal Closed" -> "CLOSED"
+      "Not Eligible" -> "REJECT"
+      "Lost to Competitor" -> "LOST"
+      else -> s.take(6).uppercase()
+    }
+  }
+
   val chips =
     remember(newToday, updatedToday, partnersDone, todayKey) {
       buildList {
@@ -358,19 +395,19 @@ private fun ActivitiesPanel(
               key = "new:${l.id}",
               kind = ActivityChipKind.Lead,
               id = l.id,
-              label = "NEW ${l.name}",
+              label = "NEW ${shortName(l.name)}",
             ),
           )
         }
         updatedToday.forEach { l ->
-          val status = (l.status ?: "").trim()
-          val suffix = if (status.isBlank()) "" else " • ${status.take(18)}"
+          val status = shortStatus(l.status)
+          val suffix = if (status.isBlank()) "" else " • $status"
           add(
             ActivityChipData(
               key = "upd:${l.id}",
               kind = ActivityChipKind.Lead,
               id = l.id,
-              label = "UPD ${l.name}$suffix",
+              label = "UPD ${shortName(l.name)}$suffix",
             ),
           )
         }
@@ -381,7 +418,7 @@ private fun ActivitiesPanel(
               key = "p:${m.id}",
               kind = ActivityChipKind.Mediator,
               id = m.id,
-              label = "$typeKeyword ${m.name}",
+              label = "$typeKeyword ${shortName(m.name)}",
             ),
           )
         }
@@ -419,7 +456,7 @@ private fun ActivitiesPanel(
                 }
               },
               label = { Text(item.label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-              modifier = Modifier.height(36.dp),
+              modifier = Modifier.height(36.dp).widthIn(min = 72.dp, max = 200.dp),
               colors =
                 FilterChipDefaults.filterChipColors(
                   containerColor = MaterialTheme.colorScheme.surfaceVariant,

@@ -37,6 +37,8 @@ data class StatementVersionRow(
   val versionNo: Int,
   @SerialName("created_at")
   val createdAt: String? = null,
+  @SerialName("template_id")
+  val templateId: String? = null,
   @SerialName("bank_name")
   val bankName: String? = null,
   @SerialName("account_type")
@@ -55,6 +57,7 @@ data class StatementVersionCreateInput(
   val ownerId: String,
   val status: String,
   val versionNo: Int,
+  val templateId: String? = null,
   val bankName: String? = null,
   val accountType: String? = null,
   val periodStart: String? = null,
@@ -124,4 +127,81 @@ data class TransactionCreateInput(
   val category: String,
   val flagsJson: JsonElement? = null,
   val transactionUid: String,
+)
+
+@Serializable
+data class MonthlyAggregateCreateInput(
+  val versionId: String,
+  val ownerId: String,
+  val month: String,
+  val metricsJson: JsonElement,
+)
+
+@Serializable
+data class PivotCreateInput(
+  val versionId: String,
+  val ownerId: String,
+  val pivotType: String,
+  val rowsJson: JsonElement,
+)
+
+@Serializable
+data class ReconciliationFailureCreateInput(
+  val versionId: String,
+  val ownerId: String,
+  val unmappedLineIds: JsonElement,
+  val continuityFailures: JsonElement,
+)
+
+@Serializable
+data class BankParsingTemplateRow(
+  val id: String,
+  @SerialName("owner_id")
+  val ownerId: String,
+  @SerialName("created_by")
+  val createdBy: String,
+  @SerialName("bank_name")
+  val bankName: String,
+  val country: String? = null,
+  @SerialName("statement_variants")
+  val statementVariants: JsonElement? = null,
+  @SerialName("header_keywords_json")
+  val headerKeywords: JsonElement? = null,
+  @SerialName("date_regex")
+  val dateRegex: String? = null,
+  @SerialName("amount_regex")
+  val amountRegex: String? = null,
+  @SerialName("table_detection_strategy")
+  val tableDetectionStrategy: String? = null,
+  @SerialName("column_map_json")
+  val columnMap: JsonElement? = null,
+  @SerialName("row_start_rules_json")
+  val rowStartRules: JsonElement? = null,
+  @SerialName("multiline_rules_json")
+  val multilineRules: JsonElement? = null,
+  @SerialName("cleanup_rules_json")
+  val cleanupRules: JsonElement? = null,
+  @SerialName("preferred_extractors")
+  val preferredExtractors: JsonElement? = null,
+  @SerialName("created_at")
+  val createdAt: String? = null,
+  @SerialName("updated_at")
+  val updatedAt: String? = null,
+)
+
+@Serializable
+data class BankParsingTemplateCreateInput(
+  val ownerId: String,
+  val bankName: String,
+  val country: String? = null,
+  val statementVariants: JsonElement? = null,
+  val headerKeywords: JsonElement? = null,
+  val dateRegex: String? = null,
+  val amountRegex: String? = null,
+  val tableDetectionStrategy: String? = null,
+  val columnMap: JsonElement? = null,
+  val rowStartRules: JsonElement? = null,
+  val multilineRules: JsonElement? = null,
+  val cleanupRules: JsonElement? = null,
+  val preferredExtractors: JsonElement? = null,
 )

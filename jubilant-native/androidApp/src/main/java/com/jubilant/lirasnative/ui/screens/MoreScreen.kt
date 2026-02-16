@@ -3,16 +3,19 @@ package com.jubilant.lirasnative.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ContactPage
+import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FactCheck
-import androidx.compose.material.icons.outlined.Gavel
-import androidx.compose.material.icons.outlined.QuestionAnswer
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.ManageAccounts
+import androidx.compose.material.icons.outlined.QuestionAnswer
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,27 +28,26 @@ import com.jubilant.lirasnative.ui.components.SectionHeader
 @Composable
 fun MoreTab(
   session: SessionState,
-  onOpenUnderwriting: () -> Unit,
   onOpenStatementAutopilot: () -> Unit,
   onOpenPd: () -> Unit,
   onOpenCollections: () -> Unit,
+  onOpenLoanBook: () -> Unit,
   onOpenReports: () -> Unit,
-  onOpenCrmNetwork: () -> Unit,
+  onOpenNetwork: () -> Unit,
+  onOpenTasks: () -> Unit,
+  onOpenActivities: () -> Unit,
   onOpenSettings: () -> Unit,
   onOpenAdminAccess: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+  val scroll = rememberScrollState()
+  Column(
+    modifier = modifier.verticalScroll(scroll),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
     SectionHeader(
       title = "More",
-      subtitle = "Underwriting, PD, reports, CRM network, and settings.",
-    )
-
-    ActionTile(
-      label = "Underwriting",
-      subtitle = "Run bank/GST/ITR checks and view credit memo",
-      icon = { Icon(Icons.Outlined.Gavel, contentDescription = null) },
-      onClick = onOpenUnderwriting,
+      subtitle = "All operating modules in one place.",
     )
 
     ActionTile(
@@ -70,17 +72,38 @@ fun MoreTab(
     )
 
     ActionTile(
+      label = "Loan Book",
+      subtitle = "Portfolio and account-level loan visibility",
+      icon = { Icon(Icons.Outlined.Book, contentDescription = null) },
+      onClick = onOpenLoanBook,
+    )
+
+    ActionTile(
       label = "Reports",
       subtitle = "Monthly / quarterly exports + summaries",
-      icon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+      icon = { Icon(Icons.Outlined.FactCheck, contentDescription = null) },
       onClick = onOpenReports,
     )
 
     ActionTile(
-      label = "CRM / Network",
-      subtitle = "Partners, mediators, tasks, activities",
-      icon = { Icon(Icons.Outlined.ContactPage, contentDescription = null) },
-      onClick = onOpenCrmNetwork,
+      label = "Network",
+      subtitle = "Partners + Mediators",
+      icon = { Icon(Icons.Outlined.Groups, contentDescription = null) },
+      onClick = onOpenNetwork,
+    )
+
+    ActionTile(
+      label = "Tasks",
+      subtitle = "My day queue and owner follow-ups",
+      icon = { Icon(Icons.Outlined.TaskAlt, contentDescription = null) },
+      onClick = onOpenTasks,
+    )
+
+    ActionTile(
+      label = "Activities",
+      subtitle = "Recent operations trail",
+      icon = { Icon(Icons.Outlined.Timeline, contentDescription = null) },
+      onClick = onOpenActivities,
     )
 
     ActionTile(

@@ -2,14 +2,13 @@ package com.jubilant.lirasnative.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
-import androidx.compose.ui.unit.dp
+import com.jubilant.lirasnative.ui.designsystem.tokens.AppRadius
 
 val JubilantShapes =
   Shapes(
-    extraSmall = RoundedCornerShape(10.dp),
-    small = RoundedCornerShape(14.dp),
-    medium = RoundedCornerShape(18.dp),
-    large = RoundedCornerShape(24.dp),
-    extraLarge = RoundedCornerShape(30.dp),
+    extraSmall = RoundedCornerShape(AppRadius.Radius8),
+    small = RoundedCornerShape(AppRadius.Radius12),
+    medium = RoundedCornerShape(AppRadius.Radius16),
+    large = RoundedCornerShape(AppRadius.Radius16),
+    extraLarge = RoundedCornerShape(AppRadius.Radius16),
   )
-

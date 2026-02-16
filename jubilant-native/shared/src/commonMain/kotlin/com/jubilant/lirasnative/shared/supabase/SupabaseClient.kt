@@ -927,6 +927,93 @@ class SupabaseClient(
     }
   }
 
+  @Throws(Exception::class)
+  suspend fun insertMonthlyAggregates(input: List<MonthlyAggregateCreateInput>) {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    if (input.isEmpty()) return
+    val userId = requireUserId()
+
+    withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "aggregates_monthly") }.buildString()
+
+      val body =
+        input.map { row ->
+          buildJsonObject {
+            put("statement_version_id", row.versionId)
+            put("owner_id", row.ownerId)
+            put("created_by", userId)
+            put("month", row.month)
+            put("metrics_json", row.metricsJson)
+          }
+        }
+
+      http.post(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+        accept(ContentType.Application.Json)
+        setBody(body)
+      }
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun insertStatementPivots(input: List<PivotCreateInput>) {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    if (input.isEmpty()) return
+    val userId = requireUserId()
+
+    withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "pivots") }.buildString()
+
+      val body =
+        input.map { row ->
+          buildJsonObject {
+            put("statement_version_id", row.versionId)
+            put("owner_id", row.ownerId)
+            put("created_by", userId)
+            put("pivot_type", row.pivotType)
+            put("rows_json", row.rowsJson)
+          }
+        }
+
+      http.post(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+        accept(ContentType.Application.Json)
+        setBody(body)
+      }
+    }
+  }
+
+  @Throws(Exception::class)
+  suspend fun insertReconciliationFailure(input: ReconciliationFailureCreateInput) {
+    require(isConfigured()) { "Supabase is not configured (missing SUPABASE_URL / SUPABASE_ANON_KEY)." }
+    val userId = requireUserId()
+
+    withValidAccessToken { token ->
+      val url = URLBuilder(baseUrl).apply { appendPathSegments("rest", "v1", "reconciliation_failures") }.buildString()
+
+      val body =
+        buildJsonObject {
+          put("statement_version_id", input.versionId)
+          put("owner_id", input.ownerId)
+          put("created_by", userId)
+          put("unmapped_line_ids", input.unmappedLineIds)
+          put("continuity_failures", input.continuityFailures)
+        }
+
+      http.post(url) {
+        header("apikey", config.anonKey)
+        header("Authorization", "Bearer $token")
+        header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+        accept(ContentType.Application.Json)
+        setBody(body)
+      }
+    }
+  }
+
   // ---- PD (Personal Discussion) + Dynamic Doubts ----
 
   @Throws(Exception::class)

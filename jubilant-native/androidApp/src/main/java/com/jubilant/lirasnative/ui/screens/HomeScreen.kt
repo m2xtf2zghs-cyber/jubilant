@@ -65,7 +65,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,7 +92,6 @@ import com.jubilant.lirasnative.di.PdRepository
 import com.jubilant.lirasnative.di.ProfilesRepository
 import com.jubilant.lirasnative.di.UnderwritingRepository
 import com.jubilant.lirasnative.di.StatementRepository
-import com.jubilant.lirasnative.R
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
@@ -102,9 +100,10 @@ import com.jubilant.lirasnative.shared.supabase.MediatorFollowUpEntry
 import com.jubilant.lirasnative.shared.supabase.MediatorUpdate
 import com.jubilant.lirasnative.ui.components.BankingBackground
 import com.jubilant.lirasnative.ui.components.SafeScreen
-import com.jubilant.lirasnative.ui.components.BrandHeader
 import com.jubilant.lirasnative.ui.components.BrandMark
 import com.jubilant.lirasnative.ui.components.NetworkStatusBanner
+import com.jubilant.lirasnative.ui.designsystem.components.AppTopBar
+import com.jubilant.lirasnative.ui.designsystem.components.SyncState
 import com.jubilant.lirasnative.ui.theme.Blue500
 import com.jubilant.lirasnative.ui.theme.Danger500
 import com.jubilant.lirasnative.ui.theme.Gold500
@@ -140,11 +139,13 @@ private enum class MainDest(
 ) {
   Home("dashboard", "Home"),
   Leads("leads", "Leads"),
-  Crm("crm_network", "CRM"),
+  Crm("crm_network?tab=Partners", "CRM"),
   More("more", "More"),
 }
 
 private const val COLLECTIONS_ROUTE: String = "collections"
+private const val NETWORK_ROUTE: String = "crm_network"
+private const val UNDERWRITING_WEB_URL: String = "https://jubilantcrm.netlify.app/underwriting"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -195,7 +196,7 @@ fun HomeScreen(
   val isMainRoute =
     route == MainDest.Home.route ||
       route == MainDest.Leads.route ||
-      route == MainDest.Crm.route ||
+      route.startsWith(NETWORK_ROUTE) ||
       route == MainDest.More.route ||
       route == COLLECTIONS_ROUTE ||
       route.isBlank()
@@ -219,19 +220,32 @@ fun HomeScreen(
       route == "analytics" -> "Analytics"
       route == "reports" -> "Reports"
       route == "eod" -> "End of day"
-      route == "underwriting" -> "Underwriting"
+      route == "underwriting" -> "Underwriting (Web)"
       route == "calculator" -> "Calculator"
       route == "data_tools" -> "Backup & CSV"
       route == "my_day" -> "My Day"
-      route == "crm_network" -> "CRM / Network"
+      route.startsWith(NETWORK_ROUTE) -> "CRM / Network"
       route == "settings" -> "Settings"
       else -> MainDest.Home.label
     }
+
+  fun openUnderwritingWeb() {
+    runCatching {
+      context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UNDERWRITING_WEB_URL)))
+    }.onFailure {
+      Toast.makeText(context, "Couldn’t open Underwriting web page.", Toast.LENGTH_LONG).show()
+    }
+  }
 
   LaunchedEffect(navTargetRoute) {
     val target = navTargetRoute?.trim().orEmpty()
     if (target.isBlank()) return@LaunchedEffect
     if (target == MainDest.Home.route) {
+      onNavTargetHandled()
+      return@LaunchedEffect
+    }
+    if (target == "underwriting") {
+      openUnderwritingWeb()
       onNavTargetHandled()
       return@LaunchedEffect
     }
@@ -269,37 +283,30 @@ fun HomeScreen(
     mediatorsVm.refresh()
   }
 
+  val profile = sessionState.myProfile
+  val userLabel =
+    profile?.fullName?.trim()?.takeIf { it.isNotBlank() }
+      ?: profile?.email?.trim()?.takeIf { it.isNotBlank() }
+      ?: sessionState.userId?.trim().orEmpty()
+
+  val pendingSyncCount = rememberRetryQueueCount()
+  val syncState =
+    when {
+      networkStatus == NetworkStatus.Offline -> SyncState.OFFLINE
+      networkStatus == NetworkStatus.PoorNetwork || pendingSyncCount > 0 || leadsState.loading || mediatorsState.loading -> SyncState.SYNCING
+      else -> SyncState.ONLINE
+    }
+
   BankingBackground {
     Scaffold(
       containerColor = Color.Transparent,
       topBar = {
-        TopAppBar(
-          title = {
-            if (isMainRoute) {
-              val profile = sessionState.myProfile
-              val userLabel =
-                profile?.fullName?.trim()?.takeIf { it.isNotBlank() }
-                  ?: profile?.email?.trim()?.takeIf { it.isNotBlank() }
-                  ?: sessionState.userId?.trim().orEmpty()
-              val subtitle = if (userLabel.isNotBlank()) "$title • $userLabel" else title
-              BrandHeader(title = stringResource(R.string.app_name), subtitle = subtitle)
-            } else {
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                BrandMark(size = 30.dp)
-                Spacer(Modifier.width(12.dp))
-                Text(title, style = MaterialTheme.typography.titleLarge)
-              }
-            }
-          },
-          navigationIcon = {
-            if (!isMainRoute) {
-              IconButton(onClick = { nav.popBackStack() }) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-              }
-            }
-          },
-          actions = {
-            if (isMainRoute) {
+        if (isMainRoute) {
+          AppTopBar(
+            userName = userLabel,
+            syncStatus = syncState,
+            onProfileClick = { nav.navigate("settings") },
+            actions = {
               IconButton(onClick = { nav.navigate("search") }) {
                 Icon(Icons.Outlined.Search, contentDescription = "Search")
               }
@@ -317,19 +324,39 @@ fun HomeScreen(
                   Text(if (adminOwnerModeEnabled) "Admin" else "Owner")
                 }
               }
-            }
-            IconButton(onClick = onSignOut) {
-              Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = "Sign out")
-            }
-          },
-          colors =
-            TopAppBarDefaults.topAppBarColors(
-              containerColor = MaterialTheme.colorScheme.background,
-              titleContentColor = MaterialTheme.colorScheme.onBackground,
-              navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
-              actionIconContentColor = MaterialTheme.colorScheme.onBackground,
-            ),
-        )
+              IconButton(onClick = onSignOut) {
+                Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = "Sign out")
+              }
+            },
+          )
+        } else {
+          TopAppBar(
+            title = {
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                BrandMark(size = 30.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(title, style = MaterialTheme.typography.titleLarge)
+              }
+            },
+            navigationIcon = {
+              IconButton(onClick = { nav.popBackStack() }) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+              }
+            },
+            actions = {
+              IconButton(onClick = onSignOut) {
+                Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = "Sign out")
+              }
+            },
+            colors =
+              TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.background,
+                titleContentColor = MaterialTheme.colorScheme.onBackground,
+                navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                actionIconContentColor = MaterialTheme.colorScheme.onBackground,
+              ),
+          )
+        }
       },
       bottomBar = {
         if (isMainRoute) {
@@ -342,7 +369,6 @@ fun HomeScreen(
           remember(leadsState.leads) {
             LeadsCacheStore.lastUpdatedAtMs(context.applicationContext)
           }
-        val pendingSyncCount = rememberRetryQueueCount()
         val lastUpdatedLabel =
           remember(lastUpdatedAtMs) {
             lastUpdatedAtMs?.let { formatRelativeTimeLabel(it) }
@@ -395,7 +421,7 @@ fun HomeScreen(
                   adminOwnerModeEnabled = next
                   HomeModeStore.setAdminOwnerModeEnabled(context.applicationContext, next)
                 },
-                onOpenUnderwriting = { nav.navigate("underwriting") },
+                onOpenUnderwriting = { openUnderwritingWeb() },
                 onOpenPdWorklist = { nav.navigate("pd_worklist") },
                 onOpenReports = { nav.navigate("reports") },
                 onOpenAdminTools = { nav.navigate("admin_access") },
@@ -445,13 +471,15 @@ fun HomeScreen(
           composable(MainDest.More.route) {
             MoreTab(
               session = sessionState,
-              onOpenUnderwriting = { nav.navigate("underwriting") },
               onOpenStatementAutopilot = { nav.navigate("statement_autopilot") },
               onOpenPd = { nav.navigate("pd") },
               onOpenCollections = { nav.navigate(COLLECTIONS_ROUTE) },
+              onOpenLoanBook = { nav.navigate("loan_book") },
               onOpenReports = { nav.navigate("reports") },
               onOpenAdminAccess = { nav.navigate("admin_access") },
-              onOpenCrmNetwork = { nav.navigate("crm_network") },
+              onOpenNetwork = { nav.navigate("$NETWORK_ROUTE?tab=${CrmTab.Partners.name}") },
+              onOpenTasks = { nav.navigate("$NETWORK_ROUTE?tab=${CrmTab.Tasks.name}") },
+              onOpenActivities = { nav.navigate("$NETWORK_ROUTE?tab=${CrmTab.Activities.name}") },
               onOpenSettings = { nav.navigate("settings") },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
@@ -459,7 +487,7 @@ fun HomeScreen(
 
           composable("pd") {
             PdHubScreen(
-              onOpenUnderwriting = { nav.navigate("underwriting") },
+              onOpenUnderwriting = { openUnderwritingWeb() },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
@@ -494,13 +522,19 @@ fun HomeScreen(
             )
           }
 
-          composable("crm_network") {
+          composable(
+            route = "$NETWORK_ROUTE?tab={tab}",
+            arguments = listOf(navArgument("tab") { nullable = true }),
+          ) { entry ->
+            val tabName = entry.arguments?.getString("tab")?.trim().orEmpty()
+            val initialTab = CrmTab.entries.firstOrNull { it.name.equals(tabName, ignoreCase = true) } ?: CrmTab.Partners
             CrmNetworkScreen(
               leads = leadsUi,
               leadsRepository = leadsRepository,
               mediatorsState = mediatorsStateUi,
               mediatorsRepository = mediatorsRepository,
               session = sessionState,
+              initialTab = initialTab,
               onLeadClick = { id -> nav.navigate("lead/$id") },
               onMediatorClick = { id -> nav.navigate("mediator/$id") },
               onCreateMediator = { nav.navigate("mediator_new") },
@@ -581,16 +615,10 @@ fun HomeScreen(
           }
 
           composable("underwriting") {
-            SafeScreen(screenName = "Underwriting") {
-              UnderwritingScreen(
-                leads = leadsState.leads,
-                leadsRepository = leadsRepository,
-                underwritingRepository = underwritingRepository,
-                session = sessionState,
-                onProceedToPd = { appId, leadId -> nav.navigate("pd/$appId/$leadId") },
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
-              )
-            }
+            UnderwritingWebOnlyScreen(
+              onOpenWeb = { openUnderwritingWeb() },
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
           }
 
           composable("statement_autopilot") {
@@ -830,7 +858,7 @@ private fun BottomBar(nav: NavHostController) {
       colors = itemColors,
     )
     NavigationBarItem(
-      selected = route == MainDest.Crm.route,
+      selected = route?.startsWith(NETWORK_ROUTE) == true,
       onClick = { navigateTo(MainDest.Crm) },
       icon = { Icon(Icons.Outlined.Group, contentDescription = null) },
       label = { Text(MainDest.Crm.label, style = MaterialTheme.typography.labelSmall) },
@@ -845,6 +873,34 @@ private fun BottomBar(nav: NavHostController) {
       alwaysShowLabel = true,
       colors = itemColors,
     )
+  }
+}
+
+@Composable
+private fun UnderwritingWebOnlyScreen(
+  onOpenWeb: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    modifier = modifier,
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+  ) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text("Underwriting is Web-only", style = MaterialTheme.typography.titleMedium)
+      Text(
+        "Native Underwriting has been disabled. Continue this module in the web app.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Button(onClick = onOpenWeb, modifier = Modifier.fillMaxWidth()) {
+        Text("Open Underwriting on Web")
+      }
+    }
   }
 }
 

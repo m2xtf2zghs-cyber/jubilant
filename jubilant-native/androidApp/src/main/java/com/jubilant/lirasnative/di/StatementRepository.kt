@@ -9,6 +9,9 @@ import com.jubilant.lirasnative.shared.supabase.PdfFileCreateInput
 import com.jubilant.lirasnative.shared.supabase.PdfFileRow
 import com.jubilant.lirasnative.shared.supabase.SupabaseClient
 import com.jubilant.lirasnative.shared.supabase.TransactionCreateInput
+import com.jubilant.lirasnative.shared.supabase.MonthlyAggregateCreateInput
+import com.jubilant.lirasnative.shared.supabase.PivotCreateInput
+import com.jubilant.lirasnative.shared.supabase.ReconciliationFailureCreateInput
 
 class StatementRepository(
   private val supabase: SupabaseClient,
@@ -36,6 +39,18 @@ class StatementRepository(
 
   suspend fun insertTransactions(input: List<TransactionCreateInput>) {
     supabase.insertStatementTransactions(input)
+  }
+
+  suspend fun insertMonthlyAggregates(input: List<MonthlyAggregateCreateInput>) {
+    supabase.insertMonthlyAggregates(input)
+  }
+
+  suspend fun insertPivots(input: List<PivotCreateInput>) {
+    supabase.insertStatementPivots(input)
+  }
+
+  suspend fun insertReconciliationFailure(input: ReconciliationFailureCreateInput) {
+    supabase.insertReconciliationFailure(input)
   }
 
   suspend fun updateStatementVersionStatus(versionId: String, status: String): StatementVersionRow =

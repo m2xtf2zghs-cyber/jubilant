@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
@@ -52,12 +53,16 @@ import com.jubilant.lirasnative.shared.statement.RawLineType
 import com.jubilant.lirasnative.shared.statement.RawStatementLine
 import com.jubilant.lirasnative.shared.statement.StatementAutopilotEngine
 import com.jubilant.lirasnative.shared.statement.StatementAutopilotResult
+import com.jubilant.lirasnative.shared.statement.StatementParseStatus
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.RawStatementLineCreateInput
 import com.jubilant.lirasnative.shared.supabase.PdfFileCreateInput
 import com.jubilant.lirasnative.shared.supabase.StatementCreateInput
 import com.jubilant.lirasnative.shared.supabase.StatementVersionCreateInput
 import com.jubilant.lirasnative.shared.supabase.TransactionCreateInput
+import com.jubilant.lirasnative.shared.supabase.MonthlyAggregateCreateInput
+import com.jubilant.lirasnative.shared.supabase.PivotCreateInput
+import com.jubilant.lirasnative.shared.supabase.ReconciliationFailureCreateInput
 import com.jubilant.lirasnative.ui.util.StatementParseInput
 import com.jubilant.lirasnative.ui.util.extractStatementRawLines
 import java.net.URLConnection
@@ -378,14 +383,12 @@ fun StatementAutopilotScreen(
         onClick = {
           val lead = selectedLead ?: return@Button
           val input = parseInput ?: return@Button
-          if (r.reconciliation.status.name == "PARSE_FAILED") {
-            error = "Parse failed. Resolve unmapped lines before saving."
-            return@Button
-          }
           scope.launch {
             loading = true
             error = null
             runCatching {
+              val parseStatus =
+                if (r.reconciliation.status == StatementParseStatus.PARSE_FAILED) "PARSE_FAILED" else approvalStatus
               val statement =
                 statementRepository.createStatement(
                   StatementCreateInput(ownerId = lead.ownerId ?: session.userId ?: error("Missing owner"), leadId = lead.id),
@@ -396,7 +399,7 @@ fun StatementAutopilotScreen(
                   StatementVersionCreateInput(
                     statementId = statement.id,
                     ownerId = ownerId,
-                    status = approvalStatus,
+                    status = parseStatus,
                     versionNo = 1,
                     bankName = input.bankName,
                     accountType = input.accountType,
@@ -469,6 +472,47 @@ fun StatementAutopilotScreen(
               chunk(txnPayload, 500).forEach { batch ->
                 statementRepository.insertTransactions(batch)
               }
+
+              if (r.monthlyAggregates.isNotEmpty()) {
+                val aggregates =
+                  r.monthlyAggregates.map {
+                    MonthlyAggregateCreateInput(
+                      versionId = version.id,
+                      ownerId = ownerId,
+                      month = it.month,
+                      metricsJson = STATEMENT_JSON.encodeToJsonElement(it),
+                    )
+                  }
+                statementRepository.insertMonthlyAggregates(aggregates)
+              }
+
+              val pivots =
+                listOf(
+                  PivotCreateInput(
+                    versionId = version.id,
+                    ownerId = ownerId,
+                    pivotType = "CREDIT_HEAT",
+                    rowsJson = STATEMENT_JSON.encodeToJsonElement(r.creditHeat),
+                  ),
+                  PivotCreateInput(
+                    versionId = version.id,
+                    ownerId = ownerId,
+                    pivotType = "DEBIT_HEAT",
+                    rowsJson = STATEMENT_JSON.encodeToJsonElement(r.debitHeat),
+                  ),
+                )
+              statementRepository.insertPivots(pivots)
+
+              if (r.reconciliation.status == StatementParseStatus.PARSE_FAILED || r.reconciliation.continuityFailures.isNotEmpty()) {
+                statementRepository.insertReconciliationFailure(
+                  ReconciliationFailureCreateInput(
+                    versionId = version.id,
+                    ownerId = ownerId,
+                    unmappedLineIds = STATEMENT_JSON.encodeToJsonElement(r.reconciliation.unmappedLineIds),
+                    continuityFailures = STATEMENT_JSON.encodeToJsonElement(r.reconciliation.continuityFailures),
+                  ),
+                )
+              }
             }.onSuccess {
               Toast.makeText(context, "Statement run saved", Toast.LENGTH_LONG).show()
             }.onFailure { ex ->
@@ -500,9 +544,9 @@ fun StatementAutopilotScreen(
       text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           OutlinedTextField(value = dateText, onValueChange = { dateText = it }, label = { Text("Date (YYYY-MM-DD)") })
-          OutlinedTextField(value = drText, onValueChange = { drText = it }, label = { Text("Debit") }, keyboardOptions = androidx.compose.ui.text.input.KeyboardOptions(keyboardType = KeyboardType.Number))
-          OutlinedTextField(value = crText, onValueChange = { crText = it }, label = { Text("Credit") }, keyboardOptions = androidx.compose.ui.text.input.KeyboardOptions(keyboardType = KeyboardType.Number))
-          OutlinedTextField(value = balText, onValueChange = { balText = it }, label = { Text("Balance") }, keyboardOptions = androidx.compose.ui.text.input.KeyboardOptions(keyboardType = KeyboardType.Number))
+          OutlinedTextField(value = drText, onValueChange = { drText = it }, label = { Text("Debit") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+          OutlinedTextField(value = crText, onValueChange = { crText = it }, label = { Text("Credit") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+          OutlinedTextField(value = balText, onValueChange = { balText = it }, label = { Text("Balance") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
           OutlinedTextField(value = narText, onValueChange = { narText = it }, label = { Text("Narration") })
         }
       },
