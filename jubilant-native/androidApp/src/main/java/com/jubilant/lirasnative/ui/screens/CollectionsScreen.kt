@@ -1,8 +1,14 @@
 package com.jubilant.lirasnative.ui.screens
 
+import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.location.Location
+import android.location.LocationManager
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,16 +38,27 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.jubilant.lirasnative.di.LeadsRepository
+import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
+import com.jubilant.lirasnative.shared.supabase.LeadUpdate
+import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.ui.util.PREFS_NAME
+import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.isoToKolkataDate
 import com.jubilant.lirasnative.ui.util.rememberKolkataDateTicker
+import java.time.Instant
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import java.util.Locale
+import kotlinx.coroutines.launch
 
 private enum class CollectionsFilter(
   val label: String,
@@ -54,14 +72,36 @@ private enum class CollectionsFilter(
 @Composable
 fun CollectionsTab(
   leads: List<LeadSummary>,
+  leadsRepository: LeadsRepository,
   session: SessionState,
   onLeadClick: (id: String) -> Unit,
   onOpenEod: () -> Unit,
+  onMutated: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var filter by rememberSaveable { mutableStateOf(CollectionsFilter.Today) }
   val today by rememberKolkataDateTicker()
   val ctx = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val prefs = remember { ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+  val todayKey = remember(today) { today.toString() }
+  val actor = remember(session.userId, session.myProfile) { session.myProfile?.email ?: session.userId ?: "unknown" }
+  var checkInBusyLeadId by remember { mutableStateOf<String?>(null) }
+  var hasLocationPermission by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+          ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED,
+      )
+    }
+
+  val permissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      hasLocationPermission = granted
+      if (!granted) {
+        Toast.makeText(ctx, "Location permission is needed for visit check-in.", Toast.LENGTH_SHORT).show()
+      }
+    }
 
   val closedStatuses = remember { setOf("Payment Done", "Deal Closed") }
   val rejectedStatuses = remember { setOf("Not Eligible", "Not Reliable", "Lost to Competitor") }
@@ -113,6 +153,49 @@ fun CollectionsTab(
     if (digits.isBlank()) return
     runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits"))) }
       .onFailure { Toast.makeText(ctx, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
+  }
+
+  fun checkInNow(lead: LeadSummary) {
+    if (!hasLocationPermission) {
+      permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+      return
+    }
+    if (checkInBusyLeadId != null) return
+    checkInBusyLeadId = lead.id
+    scope.launch {
+      val location = resolveBestKnownLocation(ctx)
+      if (location == null) {
+        checkInBusyLeadId = null
+        Toast.makeText(ctx, "Couldn’t fetch location. Try again in a few seconds.", Toast.LENGTH_SHORT).show()
+        return@launch
+      }
+      val lat = String.format(Locale.US, "%.6f", location.latitude)
+      val lon = String.format(Locale.US, "%.6f", location.longitude)
+      val mapLink = "https://maps.google.com/?q=$lat,$lon"
+      val note =
+        LeadNote(
+          text = "[COLLECTIONS_CHECKIN] $todayKey by $actor at $lat,$lon ($mapLink)",
+          date = Instant.now().toString(),
+          byUser = actor,
+        )
+
+      runCatching {
+        val full = leadsRepository.getLead(lead.id)
+        val nextNotes = (full.notes + note).takeLast(500)
+        leadsRepository.updateLead(lead.id, LeadUpdate(notes = nextNotes))
+      }.onSuccess {
+        prefs.edit().putBoolean("checkin_${todayKey}_${lead.id}", true).apply()
+        onMutated()
+        Toast.makeText(ctx, "Check-in saved.", Toast.LENGTH_SHORT).show()
+      }.onFailure {
+        RetryQueueStore.enqueueLeadAppendNote(ctx.applicationContext, lead.id, note)
+        RetrySyncScheduler.enqueueNow(ctx.applicationContext)
+        prefs.edit().putBoolean("checkin_${todayKey}_${lead.id}", true).apply()
+        Toast.makeText(ctx, "Check-in saved offline — will sync.", Toast.LENGTH_LONG).show()
+      }
+
+      checkInBusyLeadId = null
+    }
   }
 
   Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -211,6 +294,7 @@ fun CollectionsTab(
         } else {
           LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(list.take(120)) { lead ->
+              val checkedInToday = prefs.getBoolean("checkin_${todayKey}_${lead.id}", false)
               Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -246,9 +330,22 @@ fun CollectionsTab(
 
                   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     LeadStatusPill(status = lead.status)
+                    if (checkedInToday) {
+                      Text(
+                        "Checked in",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                      )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                       IconButton(onClick = { openDial(lead.phone) }) {
                         Icon(Icons.Outlined.Call, contentDescription = "Call")
+                      }
+                      IconButton(
+                        onClick = { checkInNow(lead) },
+                        enabled = checkInBusyLeadId != lead.id,
+                      ) {
+                        Icon(Icons.Outlined.Place, contentDescription = "Geo check-in")
                       }
                       IconButton(onClick = { onLeadClick(lead.id) }) {
                         Icon(Icons.Outlined.Edit, contentDescription = "Update / Notes")
@@ -273,4 +370,18 @@ fun CollectionsTab(
       }
     }
   }
+}
+
+private fun resolveBestKnownLocation(context: Context): Location? {
+  val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+  val providers =
+    manager.getProviders(true)
+      .filter { it == LocationManager.GPS_PROVIDER || it == LocationManager.NETWORK_PROVIDER || it == LocationManager.PASSIVE_PROVIDER }
+
+  val candidates =
+    providers.mapNotNull { provider ->
+      runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
+    }
+
+  return candidates.maxByOrNull { it.time }
 }

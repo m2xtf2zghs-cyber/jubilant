@@ -3,6 +3,8 @@
 
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
   <application
     android:allowBackup="true"
@@ -11,6 +13,10 @@
     android:roundIcon="@mipmap/ic_launcher_round"
     android:supportsRtl="true"
     android:theme="@style/Theme.JubilantNative">
+    <receiver
+      android:name=".reminders.ReminderActionReceiver"
+      android:exported="false" />
+
     <receiver
       android:name=".widgets.QuickActionsWidgetProvider"
       android:exported="false">

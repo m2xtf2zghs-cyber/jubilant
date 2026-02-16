@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,6 +32,7 @@ fun SettingsHubScreen(
   session: SessionState,
   onOpenSecurity: () -> Unit,
   onOpenSyncQueue: () -> Unit,
+  onOpenConflictResolver: () -> Unit,
   onOpenDataTools: () -> Unit,
   onOpenCalculator: () -> Unit,
   onOpenReminders: () -> Unit,
@@ -57,6 +59,12 @@ fun SettingsHubScreen(
       subtitle = "View pending offline changes and retry sync",
       icon = { Icon(Icons.Outlined.Sync, contentDescription = null) },
       onClick = onOpenSyncQueue,
+    )
+    SettingsRow(
+      title = "Conflict resolver",
+      subtitle = "Resolve local vs server edit conflicts",
+      icon = { Icon(Icons.Outlined.Rule, contentDescription = null) },
+      onClick = onOpenConflictResolver,
     )
     SettingsRow(
       title = "Backup & CSV",

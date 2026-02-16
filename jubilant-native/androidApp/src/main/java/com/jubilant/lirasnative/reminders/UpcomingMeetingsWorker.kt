@@ -3,6 +3,7 @@ package com.jubilant.lirasnative.reminders
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.CoroutineWorker
@@ -12,6 +13,7 @@ import com.jubilant.lirasnative.R
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
 import com.jubilant.lirasnative.ui.util.LeadsCacheStore
 import com.jubilant.lirasnative.ui.util.isoToKolkataLocalDateTime
+import com.jubilant.lirasnative.ui.util.snoozePrefKeyForLead
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -42,6 +44,7 @@ class UpcomingMeetingsWorker(
 
     val horizonMinutes = 45L
     val cutoff = now.plusMinutes(horizonMinutes)
+    val nowMs = System.currentTimeMillis()
 
     val closedStatuses = setOf("Payment Done", "Deal Closed")
     val rejectedStatuses = setOf("Not Eligible", "Not Reliable", "Lost to Competitor")
@@ -50,6 +53,10 @@ class UpcomingMeetingsWorker(
       leads
         .asSequence()
         .filterNot { (it.status ?: "").trim() in closedStatuses || (it.status ?: "").trim() in rejectedStatuses }
+        .filter { l ->
+          val snoozeUntil = prefs.getLong(snoozePrefKeyForLead(l.id), 0L)
+          snoozeUntil <= nowMs
+        }
         .mapNotNull { l ->
           val dt = isoToKolkataLocalDateTime(l.nextFollowUp) ?: return@mapNotNull null
           l to dt
@@ -115,7 +122,7 @@ class UpcomingMeetingsWorker(
         "Upcoming actions"
       }
 
-    val notification =
+    val notificationBuilder =
       NotificationCompat.Builder(appContext, ReminderNotifications.CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_launcher)
         .setContentTitle("Jubilant Capital • $title")
@@ -124,7 +131,57 @@ class UpcomingMeetingsWorker(
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setAutoCancel(true)
         .setContentIntent(pendingIntent)
-        .build()
+
+    val singleLead = toNotify.singleOrNull()?.first
+    if (singleLead != null) {
+      val markDoneIntent =
+        Intent(appContext, ReminderActionReceiver::class.java).apply {
+          action = ReminderActionReceiver.ACTION_MARK_DONE
+          putExtra(ReminderActionReceiver.EXTRA_LEAD_ID, singleLead.id)
+          putExtra(ReminderActionReceiver.EXTRA_NOTIFICATION_ID, NOTIFICATION_ID)
+        }
+      val markDonePending =
+        PendingIntent.getBroadcast(
+          appContext,
+          2101,
+          markDoneIntent,
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+      notificationBuilder.addAction(0, "Mark done", markDonePending)
+
+      val snoozeIntent =
+        Intent(appContext, ReminderActionReceiver::class.java).apply {
+          action = ReminderActionReceiver.ACTION_SNOOZE
+          putExtra(ReminderActionReceiver.EXTRA_LEAD_ID, singleLead.id)
+          putExtra(ReminderActionReceiver.EXTRA_NOTIFICATION_ID, NOTIFICATION_ID)
+        }
+      val snoozePending =
+        PendingIntent.getBroadcast(
+          appContext,
+          2102,
+          snoozeIntent,
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+      notificationBuilder.addAction(0, "Snooze 30m", snoozePending)
+
+      val digits = singleLead.phone?.filter { it.isDigit() }.orEmpty()
+      if (digits.isNotBlank()) {
+        val dialIntent =
+          Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits")).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+          }
+        val dialPending =
+          PendingIntent.getActivity(
+            appContext,
+            2103,
+            dialIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+          )
+        notificationBuilder.addAction(0, "Call back", dialPending)
+      }
+    }
+
+    val notification = notificationBuilder.build()
 
     NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
     return Result.success()

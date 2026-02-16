@@ -1,8 +1,12 @@
 package com.jubilant.lirasnative.ui.screens
 
+import android.app.Activity.RESULT_OK
 import android.content.Intent
 import android.net.Uri
+import android.speech.RecognizerIntent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +30,7 @@ import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.DashboardCustomize
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.KeyboardVoice
 import androidx.compose.material.icons.outlined.NoteAdd
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material.icons.outlined.TaskAlt
@@ -43,6 +48,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -51,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +72,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.jubilant.lirasnative.di.LeadsRepository
 import com.jubilant.lirasnative.shared.supabase.LeadSummary
 import com.jubilant.lirasnative.shared.supabase.LeadNote
@@ -77,9 +87,15 @@ import com.jubilant.lirasnative.ui.theme.Gold500
 import com.jubilant.lirasnative.ui.theme.Slate400
 import com.jubilant.lirasnative.ui.theme.Success500
 import com.jubilant.lirasnative.ui.theme.Warning500
+import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
 import com.jubilant.lirasnative.ui.util.RetryQueueStore
+import com.jubilant.lirasnative.ui.util.showDatePicker
+import com.jubilant.lirasnative.ui.util.showTimePicker
 import java.text.DecimalFormat
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -91,6 +107,22 @@ private enum class LeadsFilter(
   Watchlist("Watchlist"),
 }
 
+private enum class PostCallOutcome(
+  val label: String,
+  val statusPatch: String?,
+) {
+  Connected("Connected", "Follow-Up Required"),
+  NoAnswer("No Answer", null),
+  Promised("Promised", "Partner Follow-Up"),
+  Collected("Collected", "Payment Done"),
+}
+
+private enum class DictationTarget {
+  QuickNote,
+  PostCall,
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LeadsTab(
   state: LeadsState,
@@ -116,6 +148,33 @@ fun LeadsTab(
   var actionError by remember { mutableStateOf<String?>(null) }
   var noteLeadId by rememberSaveable { mutableStateOf<String?>(null) }
   var noteDraft by rememberSaveable { mutableStateOf("") }
+  var postCallLeadId by rememberSaveable { mutableStateOf<String?>(null) }
+  var showPostCallSheet by rememberSaveable { mutableStateOf(false) }
+  var postCallOutcome by rememberSaveable { mutableStateOf(PostCallOutcome.Connected.name) }
+  var postCallNote by rememberSaveable { mutableStateOf("") }
+  var postCallNextDate by rememberSaveable { mutableStateOf(LocalDate.now(KOLKATA_ZONE)) }
+  var postCallNextTime by rememberSaveable { mutableStateOf(LocalTime.now(KOLKATA_ZONE).plusMinutes(30)) }
+  var dictationTarget by remember { mutableStateOf(DictationTarget.QuickNote) }
+
+  val speechLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      if (result.resultCode != RESULT_OK) return@rememberLauncherForActivityResult
+      val spoken =
+        result.data
+          ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+          ?.firstOrNull()
+          ?.trim()
+          .orEmpty()
+      if (spoken.isBlank()) return@rememberLauncherForActivityResult
+      when (dictationTarget) {
+        DictationTarget.QuickNote -> {
+          noteDraft = listOf(noteDraft.trim(), spoken).filter { it.isNotBlank() }.joinToString(" ")
+        }
+        DictationTarget.PostCall -> {
+          postCallNote = listOf(postCallNote.trim(), spoken).filter { it.isNotBlank() }.joinToString(" ")
+        }
+      }
+    }
 
   val filteredLeads by remember(state.leads, query) {
     derivedStateOf {
@@ -147,7 +206,20 @@ fun LeadsTab(
   val mediatorsById = remember(mediators) { mediators.associateBy { it.id } }
   val leadsById = remember(state.leads) { state.leads.associateBy { it.id } }
 
-  fun swipeCall(lead: LeadSummary) {
+  fun launchVoiceDictation(target: DictationTarget) {
+    dictationTarget = target
+    val intent =
+      Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your note")
+      }
+    runCatching { speechLauncher.launch(intent) }
+      .onFailure {
+        Toast.makeText(context, "Voice input unavailable on this device.", Toast.LENGTH_SHORT).show()
+      }
+  }
+
+  fun startLeadCall(lead: LeadSummary) {
     val digits = lead.phone?.filter { it.isDigit() }.orEmpty()
     if (digits.isBlank()) {
       Toast.makeText(context, "No phone number available.", Toast.LENGTH_SHORT).show()
@@ -156,6 +228,25 @@ fun LeadsTab(
     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits"))) }
       .onFailure { Toast.makeText(context, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
+      .onSuccess {
+        postCallLeadId = lead.id
+        showPostCallSheet = false
+        postCallOutcome = PostCallOutcome.Connected.name
+        postCallNote = ""
+        postCallNextDate = LocalDate.now(KOLKATA_ZONE)
+        postCallNextTime = LocalTime.now(KOLKATA_ZONE).plusMinutes(30)
+      }
+  }
+
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner, postCallLeadId, actionBusyLeadId) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME && postCallLeadId != null && actionBusyLeadId == null) {
+        showPostCallSheet = true
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
   fun markDone(lead: LeadSummary) {
@@ -217,6 +308,61 @@ fun LeadsTab(
       actionBusyLeadId = null
       noteLeadId = null
       noteDraft = ""
+    }
+  }
+
+  fun savePostCallWrap() {
+    val leadId = postCallLeadId ?: return
+    val outcome = PostCallOutcome.entries.firstOrNull { it.name == postCallOutcome } ?: PostCallOutcome.Connected
+    val nextFollowUpIso =
+      LocalDateTime
+        .of(postCallNextDate, postCallNextTime)
+        .atZone(KOLKATA_ZONE)
+        .toInstant()
+        .toString()
+
+    val wrapNote =
+      buildString {
+        append("[POST-CALL] Outcome: ${outcome.label}.")
+        val cleaned = postCallNote.trim()
+        if (cleaned.isNotBlank()) {
+          append(" ")
+          append(cleaned)
+        }
+      }
+
+    actionBusyLeadId = leadId
+    scope.launch {
+      val note =
+        LeadNote(
+          text = wrapNote,
+          date = Instant.now().toString(),
+          byUser = actor,
+        )
+      val patch = LeadUpdate(status = outcome.statusPatch, nextFollowUp = nextFollowUpIso)
+      val saved =
+        runCatching {
+          val lead = leadsRepository.getLead(leadId)
+          val nextNotes = (lead.notes + note).takeLast(500)
+          leadsRepository.updateLead(leadId, patch.copy(notes = nextNotes))
+        }
+          .onFailure {
+            val appCtx = context.applicationContext
+            RetryQueueStore.enqueueLeadUpdate(appCtx, leadId, patch)
+            RetryQueueStore.enqueueLeadAppendNote(appCtx, leadId, note)
+            RetrySyncScheduler.enqueueNow(appCtx)
+            Toast.makeText(context, "Post-call wrap saved offline — will sync.", Toast.LENGTH_LONG).show()
+          }
+          .getOrNull()
+
+      if (saved != null) {
+        onMutated()
+        Toast.makeText(context, "Post-call wrap saved.", Toast.LENGTH_SHORT).show()
+      }
+      actionBusyLeadId = null
+      postCallLeadId = null
+      showPostCallSheet = false
+      postCallNote = ""
     }
   }
 
@@ -411,7 +557,7 @@ fun LeadsTab(
       items(scopedLeads) { lead ->
         LeadSwipeRow(
           enabled = actionBusyLeadId == null,
-          onSwipeCall = { swipeCall(lead) },
+          onSwipeCall = { startLeadCall(lead) },
           onSwipeAddNote = {
             if (actionBusyLeadId == null) {
               haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -426,6 +572,7 @@ fun LeadsTab(
             mediator = lead.mediatorId?.let { mediatorsById[it] },
             onClick = { onLeadClick(lead.id) },
             onUploadDoc = { onUploadDoc(lead.id) },
+            onCallClient = { startLeadCall(lead) },
             onAddNote = {
               if (actionBusyLeadId == null) {
                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -479,6 +626,14 @@ fun LeadsTab(
             minLines = 2,
             maxLines = 4,
             enabled = !saving,
+            trailingIcon = {
+              IconButton(
+                onClick = { launchVoiceDictation(DictationTarget.QuickNote) },
+                enabled = !saving,
+              ) {
+                Icon(Icons.Outlined.KeyboardVoice, contentDescription = "Voice note")
+              }
+            },
           )
         }
       },
@@ -502,6 +657,100 @@ fun LeadsTab(
         }
       },
     )
+  }
+
+  if (showPostCallSheet && postCallLeadId != null) {
+    val leadName = leadsById[postCallLeadId]?.name ?: "Lead"
+    ModalBottomSheet(
+      onDismissRequest = {
+        if (actionBusyLeadId == null) {
+          showPostCallSheet = false
+        }
+      },
+    ) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Text("Post-call wrap-up", style = MaterialTheme.typography.titleMedium)
+        Text(
+          "Lead: $leadName",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          PostCallOutcome.entries.forEach { outcome ->
+            FilterChip(
+              selected = postCallOutcome == outcome.name,
+              onClick = { postCallOutcome = outcome.name },
+              label = { Text(outcome.label) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                  selectedContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
+                  selectedLabelColor = MaterialTheme.colorScheme.onBackground,
+                ),
+              border =
+                FilterChipDefaults.filterChipBorder(
+                  enabled = true,
+                  selected = postCallOutcome == outcome.name,
+                  borderColor = MaterialTheme.colorScheme.outlineVariant,
+                  selectedBorderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
+                ),
+            )
+          }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          TextButton(onClick = { showDatePicker(context, postCallNextDate) { postCallNextDate = it } }) {
+            Text("Date: $postCallNextDate")
+          }
+          TextButton(onClick = { showTimePicker(context, postCallNextTime) { postCallNextTime = it } }) {
+            Text("Time: ${postCallNextTime.toString().take(5)}")
+          }
+        }
+
+        OutlinedTextField(
+          value = postCallNote,
+          onValueChange = { postCallNote = it },
+          modifier = Modifier.fillMaxWidth(),
+          placeholder = { Text("Add call summary (optional)") },
+          minLines = 2,
+          maxLines = 4,
+          trailingIcon = {
+            IconButton(
+              onClick = { launchVoiceDictation(DictationTarget.PostCall) },
+              enabled = actionBusyLeadId == null,
+            ) {
+              Icon(Icons.Outlined.KeyboardVoice, contentDescription = "Voice wrap note")
+            }
+          },
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+          TextButton(
+            onClick = {
+              postCallLeadId = null
+              showPostCallSheet = false
+              postCallNote = ""
+            },
+            modifier = Modifier.weight(1f),
+            enabled = actionBusyLeadId == null,
+          ) {
+            Text("Skip")
+          }
+          TextButton(
+            onClick = { savePostCallWrap() },
+            modifier = Modifier.weight(1f),
+            enabled = actionBusyLeadId == null,
+          ) {
+            Text("Save")
+          }
+        }
+      }
+      Spacer(Modifier.height(20.dp))
+    }
   }
 }
 
@@ -640,6 +889,7 @@ private fun LeadCard(
   mediator: Mediator?,
   onClick: () -> Unit,
   onUploadDoc: () -> Unit,
+  onCallClient: () -> Unit,
   onAddNote: () -> Unit,
   onMarkDone: () -> Unit,
   busy: Boolean,
@@ -720,11 +970,7 @@ private fun LeadCard(
 
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             IconButton(
-              onClick = {
-                if (clientPhone.isBlank()) return@IconButton
-                runCatching { ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$clientPhone"))) }
-                  .onFailure { Toast.makeText(ctx, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
-              },
+              onClick = onCallClient,
               enabled = clientPhone.isNotBlank() && !busy,
             ) {
               Icon(Icons.Outlined.Call, contentDescription = "Call client")

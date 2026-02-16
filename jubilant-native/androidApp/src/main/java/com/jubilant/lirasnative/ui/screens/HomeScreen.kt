@@ -122,7 +122,12 @@ import com.jubilant.lirasnative.ui.util.rememberRetryQueueCount
 import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.showDatePicker
 import com.jubilant.lirasnative.ui.util.showTimePicker
+import com.jubilant.lirasnative.ui.util.KEY_SESSION_ROLE
+import com.jubilant.lirasnative.ui.util.KEY_SESSION_USER_ID
+import com.jubilant.lirasnative.ui.util.PREFS_NAME
 import com.jubilant.lirasnative.sync.RetrySyncScheduler
+import com.jubilant.lirasnative.widgets.QuickActionsWidgetProvider
+import com.jubilant.lirasnative.widgets.RoleShortcutsManager
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -168,6 +173,16 @@ fun HomeScreen(
 
   val sessionVm: SessionViewModel = viewModel(factory = SessionViewModel.factory(profilesRepository))
   val sessionState by sessionVm.state.collectAsState()
+
+  LaunchedEffect(sessionState.role, sessionState.userId) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit()
+      .putString(KEY_SESSION_ROLE, sessionState.role)
+      .putString(KEY_SESSION_USER_ID, sessionState.userId ?: "")
+      .apply()
+    RoleShortcutsManager.refresh(context.applicationContext, sessionState.role)
+    QuickActionsWidgetProvider.refreshAll(context.applicationContext)
+  }
 
   val networkStatus: NetworkStatus = rememberNetworkStatus()
 
@@ -226,6 +241,7 @@ fun HomeScreen(
       route.startsWith(NETWORK_ROUTE) -> "CRM / Network"
       route == "settings" -> "Settings"
       route == "sync_queue" -> "Sync Queue"
+      route == "conflicts" -> "Conflict Resolver"
       else -> MainDest.Home.label
     }
 
@@ -477,9 +493,11 @@ fun HomeScreen(
           composable(COLLECTIONS_ROUTE) {
             CollectionsTab(
               leads = leadsUi,
+              leadsRepository = leadsRepository,
               session = sessionState,
               onLeadClick = { id -> nav.navigate("lead/$id") },
               onOpenEod = { nav.navigate("eod") },
+              onMutated = { leadsVm.refresh() },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
@@ -570,6 +588,7 @@ fun HomeScreen(
               onOpenScanDoc = { nav.navigate("scan_doc") },
               onOpenSecurity = { nav.navigate("security") },
               onOpenSyncQueue = { nav.navigate("sync_queue") },
+              onOpenConflictResolver = { nav.navigate("conflicts") },
               onOpenAdminAccess = { nav.navigate("admin_access") },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
@@ -733,6 +752,14 @@ fun HomeScreen(
 
           composable("sync_queue") {
             SyncQueueScreen(
+              modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+          }
+
+          composable("conflicts") {
+            ConflictResolverScreen(
+              leadsRepository = leadsRepository,
+              onMutated = { leadsVm.refresh() },
               modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
             )
           }
