@@ -6,6 +6,8 @@ import androidx.work.WorkerParameters
 import com.jubilant.lirasnative.di.AppContainer
 import com.jubilant.lirasnative.shared.supabase.LeadNote
 import com.jubilant.lirasnative.shared.supabase.LeadUpdate
+import com.jubilant.lirasnative.ui.util.KEY_SYNC_PAUSED
+import com.jubilant.lirasnative.ui.util.PREFS_NAME
 import com.jubilant.lirasnative.ui.util.RetryQueueAction
 import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import kotlinx.serialization.json.Json
@@ -22,6 +24,11 @@ class RetrySyncWorker(
   params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
   override suspend fun doWork(): Result {
+    val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val syncPaused = prefs.getBoolean(KEY_SYNC_PAUSED, false)
+    val forceRun = inputData.getBoolean(RetrySyncScheduler.INPUT_FORCE_RUN, false)
+    if (syncPaused && !forceRun) return Result.success()
+
     val container = AppContainer(appContext)
     val supabase = container.supabaseClient
     if (!supabase.isConfigured()) return Result.success()
@@ -30,7 +37,11 @@ class RetrySyncWorker(
     val session = runCatching { supabase.restoreSession() }.getOrNull()
     if (session == null) return Result.success()
 
-    val actions = RetryQueueStore.load(appContext)
+    val targetActionId = inputData.getString(RetrySyncScheduler.INPUT_ACTION_ID)?.trim().orEmpty()
+    val allActions = RetryQueueStore.load(appContext)
+    val actions =
+      if (targetActionId.isBlank()) allActions
+      else allActions.filter { it.id == targetActionId }
     if (actions.isEmpty()) return Result.success()
 
     for (action in actions) {

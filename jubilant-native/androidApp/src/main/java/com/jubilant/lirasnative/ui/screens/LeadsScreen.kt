@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -155,6 +156,9 @@ fun LeadsTab(
   var postCallNextDate by rememberSaveable { mutableStateOf(LocalDate.now(KOLKATA_ZONE)) }
   var postCallNextTime by rememberSaveable { mutableStateOf(LocalTime.now(KOLKATA_ZONE).plusMinutes(30)) }
   var dictationTarget by remember { mutableStateOf(DictationTarget.QuickNote) }
+  var callStartedLeadId by rememberSaveable { mutableStateOf<String?>(null) }
+  var callStartedAtMs by rememberSaveable { mutableStateOf(0L) }
+  var estimatedCallDurationSec by rememberSaveable { mutableStateOf<Int?>(null) }
 
   val speechLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -229,20 +233,57 @@ fun LeadsTab(
     runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits"))) }
       .onFailure { Toast.makeText(context, "Couldn’t open dialer.", Toast.LENGTH_SHORT).show() }
       .onSuccess {
-        postCallLeadId = lead.id
+        callStartedLeadId = lead.id
+        callStartedAtMs = System.currentTimeMillis()
+        postCallLeadId = null
         showPostCallSheet = false
         postCallOutcome = PostCallOutcome.Connected.name
         postCallNote = ""
         postCallNextDate = LocalDate.now(KOLKATA_ZONE)
         postCallNextTime = LocalTime.now(KOLKATA_ZONE).plusMinutes(30)
+        estimatedCallDurationSec = null
       }
   }
 
   val lifecycleOwner = LocalLifecycleOwner.current
-  DisposableEffect(lifecycleOwner, postCallLeadId, actionBusyLeadId) {
+  fun applySmartCallSuggestion(durationSec: Int) {
+    val nowDate = LocalDate.now(KOLKATA_ZONE)
+    val nowTime = LocalTime.now(KOLKATA_ZONE)
+    when {
+      durationSec < 30 -> {
+        postCallOutcome = PostCallOutcome.NoAnswer.name
+        postCallNextDate = nowDate
+        postCallNextTime = nowTime.plusHours(2)
+      }
+      durationSec < 180 -> {
+        postCallOutcome = PostCallOutcome.Connected.name
+        postCallNextDate = nowDate.plusDays(1)
+        postCallNextTime = LocalTime.of(11, 0)
+      }
+      else -> {
+        postCallOutcome = PostCallOutcome.Promised.name
+        postCallNextDate = nowDate.plusDays(2)
+        postCallNextTime = LocalTime.of(12, 0)
+      }
+    }
+  }
+
+  DisposableEffect(lifecycleOwner, callStartedLeadId, callStartedAtMs, actionBusyLeadId) {
     val observer = LifecycleEventObserver { _, event ->
-      if (event == Lifecycle.Event.ON_RESUME && postCallLeadId != null && actionBusyLeadId == null) {
+      if (event == Lifecycle.Event.ON_RESUME && callStartedLeadId != null && actionBusyLeadId == null) {
+        postCallLeadId = callStartedLeadId
+        val durationSec =
+          if (callStartedAtMs > 0L) ((System.currentTimeMillis() - callStartedAtMs) / 1000L).coerceAtLeast(0L).toInt() else null
+        estimatedCallDurationSec = durationSec
+        if (durationSec != null) {
+          applySmartCallSuggestion(durationSec)
+          if (durationSec < 30 && postCallNote.isBlank()) {
+            postCallNote = "Short call/disconnected quickly."
+          }
+        }
         showPostCallSheet = true
+        callStartedLeadId = null
+        callStartedAtMs = 0L
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -314,20 +355,39 @@ fun LeadsTab(
   fun savePostCallWrap() {
     val leadId = postCallLeadId ?: return
     val outcome = PostCallOutcome.entries.firstOrNull { it.name == postCallOutcome } ?: PostCallOutcome.Connected
-    val nextFollowUpIso =
+    val requestedFollowUpIso =
       LocalDateTime
         .of(postCallNextDate, postCallNextTime)
         .atZone(KOLKATA_ZONE)
         .toInstant()
         .toString()
+    val durationSec = estimatedCallDurationSec
+    val missedCallAutoTask = outcome == PostCallOutcome.NoAnswer && (durationSec ?: 0) < 30
+    val nextFollowUpIso =
+      if (missedCallAutoTask) {
+        LocalDateTime.now(KOLKATA_ZONE).plusHours(2).atZone(KOLKATA_ZONE).toInstant().toString()
+      } else {
+        requestedFollowUpIso
+      }
+    val statusPatch =
+      when {
+        missedCallAutoTask -> "Follow-Up Required"
+        else -> outcome.statusPatch
+      }
 
     val wrapNote =
       buildString {
         append("[POST-CALL] Outcome: ${outcome.label}.")
+        if (durationSec != null) {
+          append(" Duration: ${formatCallDuration(durationSec)}.")
+        }
         val cleaned = postCallNote.trim()
         if (cleaned.isNotBlank()) {
           append(" ")
           append(cleaned)
+        }
+        if (missedCallAutoTask) {
+          append(" [MISSED_CALL_AUTO_TASK] Retry call auto-scheduled.")
         }
       }
 
@@ -339,7 +399,7 @@ fun LeadsTab(
           date = Instant.now().toString(),
           byUser = actor,
         )
-      val patch = LeadUpdate(status = outcome.statusPatch, nextFollowUp = nextFollowUpIso)
+      val patch = LeadUpdate(status = statusPatch, nextFollowUp = nextFollowUpIso)
       val saved =
         runCatching {
           val lead = leadsRepository.getLead(leadId)
@@ -363,6 +423,7 @@ fun LeadsTab(
       postCallLeadId = null
       showPostCallSheet = false
       postCallNote = ""
+      estimatedCallDurationSec = null
     }
   }
 
@@ -602,6 +663,7 @@ fun LeadsTab(
   val targetLeadId = noteLeadId
   if (targetLeadId != null) {
     val targetLeadName = leadsById[targetLeadId]?.name ?: "Lead"
+    val quickTemplates = remember(targetLeadId, leadsById[targetLeadId]?.status) { quickNoteTemplates(leadsById[targetLeadId]?.status) }
     val saving = actionBusyLeadId == targetLeadId
     AlertDialog(
       onDismissRequest = {
@@ -635,6 +697,18 @@ fun LeadsTab(
               }
             },
           )
+          if (quickTemplates.isNotEmpty()) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+              items(quickTemplates) { template ->
+                FilterChip(
+                  selected = false,
+                  onClick = { noteDraft = appendTemplateNote(noteDraft, template) },
+                  label = { Text(template) },
+                  enabled = !saving,
+                )
+              }
+            }
+          }
         }
       },
       confirmButton = {
@@ -661,6 +735,8 @@ fun LeadsTab(
 
   if (showPostCallSheet && postCallLeadId != null) {
     val leadName = leadsById[postCallLeadId]?.name ?: "Lead"
+    val selectedOutcome = PostCallOutcome.entries.firstOrNull { it.name == postCallOutcome } ?: PostCallOutcome.Connected
+    val postCallTemplateList = remember(selectedOutcome) { postCallTemplates(selectedOutcome) }
     ModalBottomSheet(
       onDismissRequest = {
         if (actionBusyLeadId == null) {
@@ -678,9 +754,16 @@ fun LeadsTab(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        estimatedCallDurationSec?.let { seconds ->
+          Text(
+            "Estimated call duration: ${formatCallDuration(seconds)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary,
+          )
+        }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-          PostCallOutcome.entries.forEach { outcome ->
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          items(PostCallOutcome.entries) { outcome ->
             FilterChip(
               selected = postCallOutcome == outcome.name,
               onClick = { postCallOutcome = outcome.name },
@@ -698,6 +781,23 @@ fun LeadsTab(
                   borderColor = MaterialTheme.colorScheme.outlineVariant,
                   selectedBorderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
                 ),
+            )
+          }
+        }
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          items(
+            listOf(
+              "Short <30s" to 20,
+              "Medium <3m" to 120,
+              "Long 3m+" to 240,
+            ),
+          ) { (label, seconds) ->
+            FilterChip(
+              selected = false,
+              onClick = { applySmartCallSuggestion(seconds) },
+              label = { Text(label) },
+              enabled = actionBusyLeadId == null,
             )
           }
         }
@@ -727,6 +827,18 @@ fun LeadsTab(
             }
           },
         )
+        if (postCallTemplateList.isNotEmpty()) {
+          LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            items(postCallTemplateList) { template ->
+              FilterChip(
+                selected = false,
+                onClick = { postCallNote = appendTemplateNote(postCallNote, template) },
+                label = { Text(template) },
+                enabled = actionBusyLeadId == null,
+              )
+            }
+          }
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
           TextButton(
@@ -734,6 +846,7 @@ fun LeadsTab(
               postCallLeadId = null
               showPostCallSheet = false
               postCallNote = ""
+              estimatedCallDurationSec = null
             },
             modifier = Modifier.weight(1f),
             enabled = actionBusyLeadId == null,
@@ -1085,6 +1198,65 @@ internal fun statusStripeColor(status: String?): Color {
     "New" -> Blue500
     else -> Slate400
   }
+}
+
+private fun appendTemplateNote(existing: String, template: String): String {
+  val cleanExisting = existing.trim()
+  val cleanTemplate = template.trim()
+  if (cleanTemplate.isBlank()) return cleanExisting
+  return if (cleanExisting.isBlank()) cleanTemplate else "$cleanExisting $cleanTemplate"
+}
+
+private fun quickNoteTemplates(status: String?): List<String> {
+  val normalized = status?.trim().orEmpty()
+  val base =
+    listOf(
+      "Called client; follow-up pending.",
+      "Documents pending from client.",
+      "Connected with partner; waiting update.",
+      "Visit planned for today.",
+    )
+  val stageSpecific =
+    when (normalized) {
+      "Meeting Scheduled" -> listOf("Meeting reminder shared with client.", "Will update post meeting.")
+      "Follow-Up Required" -> listOf("Follow-up attempted; no response.", "Rescheduled call for tomorrow.")
+      "Partner Follow-Up" -> listOf("Partner follow-up required on file checks.")
+      "Payment Done" -> listOf("Collection confirmed; closure process started.")
+      else -> emptyList()
+    }
+  return (base + stageSpecific).distinct().take(6)
+}
+
+private fun postCallTemplates(outcome: PostCallOutcome): List<String> {
+  return when (outcome) {
+    PostCallOutcome.Connected ->
+      listOf(
+        "Client confirmed interest and requested callback.",
+        "Shared next steps and pending documents.",
+      )
+    PostCallOutcome.NoAnswer ->
+      listOf(
+        "No response; retry in next slot.",
+        "Line busy/disconnected; second attempt pending.",
+      )
+    PostCallOutcome.Promised ->
+      listOf(
+        "Client promised update by next follow-up time.",
+        "Partner confirmed to revert after internal check.",
+      )
+    PostCallOutcome.Collected ->
+      listOf(
+        "Collection confirmed by client.",
+        "Payment acknowledged; closure update sent.",
+      )
+  }
+}
+
+private fun formatCallDuration(seconds: Int): String {
+  val safe = seconds.coerceAtLeast(0)
+  val mins = safe / 60
+  val secs = safe % 60
+  return if (mins > 0) "${mins}m ${secs}s" else "${secs}s"
 }
 
 private fun calculateLeadScore(lead: LeadSummary): Int {

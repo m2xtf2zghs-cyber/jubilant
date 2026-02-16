@@ -1,5 +1,10 @@
 package com.jubilant.lirasnative.ui.screens
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +21,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.jubilant.lirasnative.sync.RetrySyncScheduler
 import com.jubilant.lirasnative.ui.util.KOLKATA_ZONE
+import com.jubilant.lirasnative.ui.util.KEY_SYNC_PAUSED
+import com.jubilant.lirasnative.ui.util.PREFS_NAME
 import com.jubilant.lirasnative.ui.util.RetryQueueAction
 import com.jubilant.lirasnative.ui.util.RetryQueueStore
 import com.jubilant.lirasnative.ui.util.rememberRetryQueueCount
@@ -44,6 +52,8 @@ fun SyncQueueScreen(
   val queuedCount = rememberRetryQueueCount()
   var actions by remember { mutableStateOf(emptyList<RetryQueueAction>()) }
   var showClearConfirm by remember { mutableStateOf(false) }
+  val prefs = remember { appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+  var syncPaused by remember { mutableStateOf(prefs.getBoolean(KEY_SYNC_PAUSED, false)) }
 
   LaunchedEffect(queuedCount) {
     actions = RetryQueueStore.load(appContext).sortedByDescending { it.createdAtMs }
@@ -60,12 +70,32 @@ fun SyncQueueScreen(
         modifier = Modifier.fillMaxWidth().padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Text("Sync Queue", style = MaterialTheme.typography.titleMedium)
+        Text("Sync Center", style = MaterialTheme.typography.titleMedium)
         Text(
           "Pending offline updates: $queuedCount",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+          Text(
+            if (syncPaused) "Sync paused" else "Sync active",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+          )
+          Switch(
+            checked = syncPaused,
+            onCheckedChange = { checked ->
+              syncPaused = checked
+              prefs.edit().putBoolean(KEY_SYNC_PAUSED, checked).apply()
+              if (checked) {
+                RetrySyncScheduler.cancelPending(appContext)
+              } else {
+                RetrySyncScheduler.enqueueNow(appContext)
+              }
+            },
+          )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
           Button(
             onClick = {
@@ -84,8 +114,24 @@ fun SyncQueueScreen(
             Text("Clear queue")
           }
         }
+        OutlinedButton(
+          onClick = {
+            RetrySyncScheduler.enqueueNow(appContext, force = true)
+            Toast.makeText(context, "Emergency sync triggered.", Toast.LENGTH_SHORT).show()
+          },
+          modifier = Modifier.fillMaxWidth(),
+          enabled = actions.isNotEmpty(),
+        ) {
+          Text("Emergency panic sync")
+        }
       }
     }
+
+    SyncAdvisorCard(
+      batteryPercent = readBatteryPercent(appContext),
+      networkQuality = readNetworkQuality(appContext),
+      isPowerSave = isPowerSaveMode(appContext),
+    )
 
     if (actions.isEmpty()) {
       Card(
@@ -107,7 +153,13 @@ fun SyncQueueScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(actions, key = { it.id }) { action ->
-          QueueActionRow(action = action)
+          QueueActionRow(
+            action = action,
+            onRetryNow = {
+              RetrySyncScheduler.enqueueNow(appContext, actionId = action.id, force = true)
+              Toast.makeText(context, "Queued retry for this item.", Toast.LENGTH_SHORT).show()
+            },
+          )
         }
       }
     }
@@ -147,6 +199,7 @@ fun SyncQueueScreen(
 @Composable
 private fun QueueActionRow(
   action: RetryQueueAction,
+  onRetryNow: () -> Unit,
 ) {
   val title =
     when (action) {
@@ -183,6 +236,49 @@ private fun QueueActionRow(
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+      OutlinedButton(onClick = onRetryNow, modifier = Modifier.fillMaxWidth()) {
+        Text("Retry this item")
+      }
+    }
+  }
+}
+
+@Composable
+private fun SyncAdvisorCard(
+  batteryPercent: Int?,
+  networkQuality: String,
+  isPowerSave: Boolean,
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      val batteryLabel = batteryPercent?.let { "$it%" } ?: "Unknown"
+      val powerSaveLabel = if (isPowerSave) " (Power saver ON)" else ""
+      Text("Battery & Network Advisor", style = MaterialTheme.typography.titleSmall)
+      Text(
+        "Battery: $batteryLabel$powerSaveLabel",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Text(
+        "Network: $networkQuality",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      if (isPowerSave || networkQuality.contains("offline", ignoreCase = true)) {
+        Text(
+          "Advice: keep app foreground while syncing and disable battery restrictions for reliable retries.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+      }
     }
   }
 }
@@ -195,3 +291,28 @@ private fun formatQueueTime(createdAtMs: Long): String {
   }.getOrDefault("just now")
 }
 
+private fun readBatteryPercent(context: Context): Int? {
+  val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
+  val value = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+  return value.takeIf { it in 0..100 }
+}
+
+private fun isPowerSaveMode(context: Context): Boolean {
+  val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+  return pm.isPowerSaveMode
+}
+
+private fun readNetworkQuality(context: Context): String {
+  val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return "Unknown"
+  val network = cm.activeNetwork ?: return "Offline"
+  val caps = cm.getNetworkCapabilities(network) ?: return "Offline"
+  val transport =
+    when {
+      caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+      caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobile data"
+      caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+      else -> "Unknown"
+    }
+  val metered = if (cm.isActiveNetworkMetered) "metered" else "unmetered"
+  return "$transport ($metered)"
+}
