@@ -16,3 +16,5 @@ services:
         value: statements
       - key: STATEMENT_SERVICE_CORS_ORIGINS
         value: https://jubilantcrm.netlify.app
+      - key: STATEMENT_WORKBOOK_ENABLED
+        value: "false"

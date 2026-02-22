@@ -1,6 +1,6 @@
 # Statement Autopilot FastAPI Service
 
-Backend parser + strict reconciliation + template-clone Excel generator for Statement Autopilot.
+Backend parser + strict reconciliation + optional template-clone Excel generator for Statement Autopilot.
 
 ## What it does
 
@@ -8,7 +8,7 @@ Backend parser + strict reconciliation + template-clone Excel generator for Stat
 - Extracts/stores strict raw lines (`TRANSACTION` + `NON_TXN_LINE`).
 - Merges multiline transactions.
 - Hard-fails parse when any transaction-start line remains unmapped.
-- Generates output XLSX by cloning the styled template workbook.
+- Optionally generates output XLSX by cloning the styled template workbook.
 - Writes normalized transactions, monthly aggregates, pivots, and audit event.
 
 ## Schema
@@ -28,8 +28,9 @@ Optional:
 
 - `SUPABASE_BUCKET` (default: `statements`)
 - `PERFIOS_TEMPLATE_PATH`
+- `STATEMENT_WORKBOOK_ENABLED` (default: `true`; set `false` to disable workbook generation)
 
-Template fallback order:
+Template fallback order (used only when `STATEMENT_WORKBOOK_ENABLED=true`):
 
 1. `PERFIOS_TEMPLATE_PATH`
 2. `/Users/jegannathan/Documents/New project/jubilant/fixtures/AFFAN METALS-FINAL WORKINGS- 05-02-2026.xlsx`
@@ -47,6 +48,8 @@ pip install -r requirements.txt
 export SUPABASE_URL="https://<project-ref>.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="<service-role-key>"
 export SUPABASE_BUCKET="statements"
+# optional: disable workbook/template dependency
+# export STATEMENT_WORKBOOK_ENABLED="false"
 # optional
 # export PERFIOS_TEMPLATE_PATH="/absolute/path/to/template.xlsx"
 
@@ -69,7 +72,9 @@ Successful response:
 ```json
 {
   "status": "READY",
-  "excel_path": "exports/<version_id>/perfios_output.xlsx",
+  "excel_path": null,
+  "workbook_path": null,
+  "workbook_active": false,
   "transactions": 123,
   "continuity_failures": 0
 }
@@ -89,6 +94,7 @@ Steps:
 4. Set required env vars in Render:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
+   - `STATEMENT_WORKBOOK_ENABLED=false` (recommended if you only need parsing + underwriting data and not XLSX workbook generation)
 5. Deploy and copy the service URL (example: `https://jubilant-statement-service.onrender.com`).
 
 Then set this in Netlify (frontend):

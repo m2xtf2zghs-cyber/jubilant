@@ -57,6 +57,13 @@ DEFAULT_PVT_KEYWORDS = {
     "METTU": Decimal("0.70"),
 }
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
 DEFAULT_BANK_KEYWORDS = {
     "EMI": Decimal("0.95"),
     "ECS": Decimal("0.90"),
@@ -659,10 +666,14 @@ def _update_version(version_id: str, payload: Dict[str, Any]) -> None:
 @app.get("/health")
 def health() -> Dict[str, Any]:
     template_exists = Path(settings.template_path).exists()
+    workbook_enabled = _env_flag("STATEMENT_WORKBOOK_ENABLED", True)
+    workbook_active = workbook_enabled and template_exists
     return {
         "ok": True,
         "template_path": settings.template_path,
         "template_exists": template_exists,
+        "workbook_enabled": workbook_enabled,
+        "workbook_active": workbook_active,
         "bucket": settings.bucket,
     }
 
@@ -671,6 +682,14 @@ def health() -> Dict[str, Any]:
 def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc)
     now_iso = now.isoformat()
+    template_exists = Path(settings.template_path).exists()
+    workbook_enabled = _env_flag("STATEMENT_WORKBOOK_ENABLED", True)
+    workbook_active = workbook_enabled and template_exists
+    workbook_skip_reason: Optional[str] = None
+    if not workbook_enabled:
+        workbook_skip_reason = "Workbook generation disabled by STATEMENT_WORKBOOK_ENABLED"
+    elif not template_exists:
+        workbook_skip_reason = f"Workbook template not found: {settings.template_path}"
 
     version_rows = _safe_table_select("statement_versions", select="*", eq={"id": version_id}, limit=1)
     if not version_rows:
@@ -698,7 +717,10 @@ def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
         not force
         and str(version_row.get("parse_hash") or "") == parse_hash
         and str(version_row.get("parse_status") or "").upper() == "SUCCESS"
-        and (version_row.get("underwriting_workbook_url") or version_row.get("excel_url"))
+        and (
+            not workbook_active
+            or (version_row.get("underwriting_workbook_url") or version_row.get("excel_url"))
+        )
     ):
         return {
             "status": "READY",
@@ -707,6 +729,9 @@ def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
             "parse_hash": parse_hash,
             "excel_path": version_row.get("excel_url"),
             "workbook_path": version_row.get("underwriting_workbook_url") or version_row.get("excel_url"),
+            "workbook_enabled": workbook_enabled,
+            "workbook_active": workbook_active,
+            "workbook_skip_reason": workbook_skip_reason,
         }
 
     _update_version(
@@ -1099,80 +1124,87 @@ def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
         for i, reason in enumerate(risk["reasons"], start=1):
             final_rows.append([f"Reason {i}", reason])
 
-        xns_templates, pivot_templates = _choose_template_sheets(settings.template_path)
-        accounts = []
-        for index, pdf in enumerate(pdfs):
-            txns = excel_txns_by_pdf.get(pdf["id"], [])
-            xns_tpl = xns_templates[min(index, len(xns_templates) - 1)]
-            piv_tpl = pivot_templates[min(index, len(pivot_templates) - 1)]
-            accounts.append(
-                {
-                    "xns_template_sheet": xns_tpl,
-                    "pivot_template_sheet": piv_tpl,
-                    "xns_sheet_name": f"XNS-{index + 1}",
-                    "pivot_sheet_name": f"PIVOT-{index + 1}",
-                    "xns_start_row": 10,
-                    "xns_template_row": 10,
-                    "pivot_start_row": 2,
-                    "pivot_template_row": 2,
-                    "txns": txns,
-                    "pivots": [p for p in pivot_rows],
-                }
-            )
+        legacy_excel_path: Optional[str] = None
+        workbook_path: Optional[str] = None
+        workbook_generated_at: Optional[str] = None
 
-        out_xlsx = os.path.join(tmp_dir, "underwriting_workbook.xlsx")
-        generate_perfios_excel(
-            template_path=settings.template_path,
-            output_path=out_xlsx,
-            context={
-                "accounts": accounts,
-                "analysis_rows": analysis_rows,
-                "analysis_start_row": 2,
-                "cons_rows": cons_rows,
-                "pvt_fin_rows": pvt_fin_rows,
-                "bank_fin_rows": bank_fin_rows,
-                "final_rows": final_rows,
-            },
-        )
-
-        legacy_excel_path = f"exports/{version_id}/perfios_output.xlsx"
-        _upsert_storage_file(
-            legacy_excel_path,
-            out_xlsx,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        lead_id = statement_row.get("lead_id") or "unknown"
-        workbook_path = f"underwriting/{lead_id}/{statement_id}/underwriting_workbook.xlsx"
-        _upsert_storage_file(
-            workbook_path,
-            out_xlsx,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        try:
-            _batch_upsert(
-                "statement_underwriting_workbooks",
-                [
+        if workbook_active:
+            xns_templates, pivot_templates = _choose_template_sheets(settings.template_path)
+            accounts = []
+            for index, pdf in enumerate(pdfs):
+                txns = excel_txns_by_pdf.get(pdf["id"], [])
+                xns_tpl = xns_templates[min(index, len(xns_templates) - 1)]
+                piv_tpl = pivot_templates[min(index, len(pivot_templates) - 1)]
+                accounts.append(
                     {
-                        "lead_id": statement_row.get("lead_id"),
-                        "statement_id": statement_id,
-                        "version_id": version_id,
-                        "parse_hash": parse_hash,
-                        "storage_path": workbook_path,
-                        "meta_json": {
-                            "raw_row_count": raw_txn_candidate_count,
-                            "parsed_row_count": parsed_row_count,
-                            "risk_score": risk["risk_score"],
-                            "risk_band": risk["risk_band"],
-                        },
+                        "xns_template_sheet": xns_tpl,
+                        "pivot_template_sheet": piv_tpl,
+                        "xns_sheet_name": f"XNS-{index + 1}",
+                        "pivot_sheet_name": f"PIVOT-{index + 1}",
+                        "xns_start_row": 10,
+                        "xns_template_row": 10,
+                        "pivot_start_row": 2,
+                        "pivot_template_row": 2,
+                        "txns": txns,
+                        "pivots": [p for p in pivot_rows],
                     }
-                ],
-                on_conflict="version_id,parse_hash",
-                size=100,
+                )
+
+            out_xlsx = os.path.join(tmp_dir, "underwriting_workbook.xlsx")
+            generate_perfios_excel(
+                template_path=settings.template_path,
+                output_path=out_xlsx,
+                context={
+                    "accounts": accounts,
+                    "analysis_rows": analysis_rows,
+                    "analysis_start_row": 2,
+                    "cons_rows": cons_rows,
+                    "pvt_fin_rows": pvt_fin_rows,
+                    "bank_fin_rows": bank_fin_rows,
+                    "final_rows": final_rows,
+                },
             )
-        except Exception:
-            pass
+
+            legacy_excel_path = f"exports/{version_id}/perfios_output.xlsx"
+            _upsert_storage_file(
+                legacy_excel_path,
+                out_xlsx,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            lead_id = statement_row.get("lead_id") or "unknown"
+            workbook_path = f"underwriting/{lead_id}/{statement_id}/underwriting_workbook.xlsx"
+            _upsert_storage_file(
+                workbook_path,
+                out_xlsx,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            try:
+                _batch_upsert(
+                    "statement_underwriting_workbooks",
+                    [
+                        {
+                            "lead_id": statement_row.get("lead_id"),
+                            "statement_id": statement_id,
+                            "version_id": version_id,
+                            "parse_hash": parse_hash,
+                            "storage_path": workbook_path,
+                            "meta_json": {
+                                "raw_row_count": raw_txn_candidate_count,
+                                "parsed_row_count": parsed_row_count,
+                                "risk_score": risk["risk_score"],
+                                "risk_band": risk["risk_band"],
+                            },
+                        }
+                    ],
+                    on_conflict="version_id,parse_hash",
+                    size=100,
+                )
+            except Exception:
+                pass
+
+            workbook_generated_at = now_iso
 
         _update_version(
             version_id,
@@ -1182,7 +1214,7 @@ def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
                 "error_reason": None,
                 "excel_url": legacy_excel_path,
                 "underwriting_workbook_url": workbook_path,
-                "underwriting_workbook_generated_at": now_iso,
+                "underwriting_workbook_generated_at": workbook_generated_at,
                 "unmapped_txn_lines": 0,
                 "continuity_failures": continuity_failures,
                 "raw_row_count": raw_txn_candidate_count,
@@ -1207,6 +1239,9 @@ def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
                         "continuity_failures": continuity_failures,
                         "excel_url": legacy_excel_path,
                         "workbook_url": workbook_path,
+                        "workbook_enabled": workbook_enabled,
+                        "workbook_active": workbook_active,
+                        "workbook_skip_reason": workbook_skip_reason,
                         "parse_hash": parse_hash,
                         "risk_score": risk["risk_score"],
                         "risk_band": risk["risk_band"],
@@ -1222,6 +1257,9 @@ def parse_statement(version_id: str, force: bool = False) -> Dict[str, Any]:
             "parse_hash": parse_hash,
             "excel_path": legacy_excel_path,
             "workbook_path": workbook_path,
+            "workbook_enabled": workbook_enabled,
+            "workbook_active": workbook_active,
+            "workbook_skip_reason": workbook_skip_reason,
             "transactions": parsed_row_count,
             "raw_row_count": raw_txn_candidate_count,
             "parsed_row_count": parsed_row_count,
