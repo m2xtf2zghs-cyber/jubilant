@@ -1,0 +1,36 @@
+const { Pool } = require('pg');
+const { config } = require('./config');
+
+const pool = new Pool({
+  connectionString: config.databaseUrl,
+});
+
+async function query(text, params = [], client) {
+  const executor = client || pool;
+  return executor.query(text, params);
+}
+
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // ignore rollback errors
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function closePool() {
+  await pool.end();
+}
+
+module.exports = { pool, query, withTransaction, closePool };

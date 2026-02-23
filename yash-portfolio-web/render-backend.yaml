@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: yash-portfolio-backend
+    env: node
+    rootDir: yash-portfolio-web/backend
+    buildCommand: npm ci
+    preDeployCommand: npm run db:apply-schema
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - yash-portfolio-web/backend/**
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://yash-portfolio-manager-v5-20260223.netlify.app
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
