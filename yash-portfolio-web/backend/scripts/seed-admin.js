@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const { Client } = require('pg');
 
-dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+dotenv.config({ path: process.env.BACKEND_ENV_FILE || path.resolve(process.cwd(), '.env') });
 
 function getArg(name, fallback) {
   const prefix = `--${name}=`;
@@ -14,6 +14,21 @@ function getArg(name, fallback) {
 function must(name, value) {
   if (!value) throw new Error(`Missing required value: ${name}`);
   return value;
+}
+
+function getSslConfig(connectionString) {
+  if (!connectionString) return undefined;
+  try {
+    const u = new URL(connectionString);
+    const host = String(u.hostname || '');
+    const sslmode = (u.searchParams.get('sslmode') || '').toLowerCase();
+    if (sslmode === 'require' || host.endsWith('.render.com')) {
+      return { rejectUnauthorized: false };
+    }
+  } catch (_) {
+    // ignore URL parse errors and fall back to plain connection
+  }
+  return undefined;
 }
 
 (async () => {
@@ -30,7 +45,8 @@ function must(name, value) {
     throw new Error('orgCode, orgName, adminEmail, adminPassword, adminName are required');
   }
 
-  const client = new Client({ connectionString: databaseUrl });
+  const ssl = getSslConfig(databaseUrl);
+  const client = new Client({ connectionString: databaseUrl, ...(ssl ? { ssl } : {}) });
   await client.connect();
 
   try {

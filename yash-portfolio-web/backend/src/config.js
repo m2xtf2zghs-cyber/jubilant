@@ -16,6 +16,7 @@ const config = {
   port: Number(process.env.PORT || 8787),
   databaseUrl: required('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/yash_portfolio'),
   corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',').map(s => s.trim()).filter(Boolean),
+  corsAllowNetlifyPreviews: String(process.env.CORS_ALLOW_NETLIFY_PREVIEWS || 'true').trim().toLowerCase() !== 'false',
   jwt: {
     accessSecret: required('JWT_ACCESS_SECRET', 'change-me-access-secret'),
     refreshSecret: required('JWT_REFRESH_SECRET', 'change-me-refresh-secret'),

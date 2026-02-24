@@ -9,7 +9,8 @@
     "start": "node src/server.js",
     "check": "node --check src/server.js",
     "db:apply-schema": "node scripts/apply-schema.js",
-    "seed:admin": "node scripts/seed-admin.js"
+    "seed:admin": "node scripts/seed-admin.js",
+    "backup:json": "node scripts/backup-json.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

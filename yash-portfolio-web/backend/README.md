@@ -47,6 +47,8 @@ Prepared Render Blueprint file:
 3. Select custom Blueprint file path:
    - `yash-portfolio-web/render-backend.yaml`
 4. Set `DATABASE_URL` in the backend service env vars (Blueprint keeps it manual with `sync: false`).
+   - Keep `CORS_ORIGIN=https://yash-portfolio-manager-v5-20260223.netlify.app`
+   - Optional (recommended): `CORS_ALLOW_NETLIFY_PREVIEWS=true` to allow Netlify preview/unique deploy URLs automatically
 5. Deploy. The Blueprint runs:
    - `npm ci`
    - `npm run db:apply-schema` (pre-deploy)
@@ -57,6 +59,12 @@ Open Render Shell for the backend service and run:
 ```bash
 cd /opt/render/project/src/yash-portfolio-web/backend
 npm run seed:admin -- --orgCode=ymjcapital --orgName="YMJ Capital" --adminEmail=jegan@example.com --adminPassword=jegan --adminName="Jegan"
+```
+
+The seed script is idempotent (safe to rerun). You can use it to reset the admin password/email later.
+Example password reset:
+```bash
+npm run seed:admin -- --orgCode=ymjcapital --orgName="YMJ Capital" --adminEmail=jegan3388@gmail.com --adminPassword=yashwath --adminName="Jegan"
 ```
 
 ### Netlify frontend connection (after backend URL is live)
@@ -80,6 +88,26 @@ Optional args / envs:
 - `--adminRole=OWNER`
 
 Default local URL: `http://localhost:8787`
+
+## Backup / Export Routine (JSON)
+Create a portable JSON backup of your finance data tables:
+
+```bash
+npm run backup:json -- --orgCode=ymjcapital
+```
+
+Output:
+- Writes to `./backups/` by default (timestamped file)
+- Includes organizations/users/clients/loans/installments/collections/expenses/ledger/audit/etc.
+- With `--orgCode=...`, exports only that organization's rows (plus the matching `organizations` record)
+
+Optional flags:
+- `--out=./backups/ymjcapital-latest.json`
+- `--orgCode=ymjcapital`
+
+Recommended:
+- Run this daily/weekly and store a copy in secure cloud storage (private drive/S3)
+- Also keep periodic PostgreSQL physical dumps (`pg_dump`) for disaster recovery
 
 ## Frontend integration notes
 - Base URL: `/api/v1`
