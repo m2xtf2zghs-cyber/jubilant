@@ -1198,7 +1198,8 @@ function App(){
     if(!principal||principal<=0) return alert('Invalid principal');
     if(isNaN(interest)||interest<0) return alert('Invalid interest');
     if(!duration||duration<=0) return alert('Invalid instalment count');
-    if(!isBackendSession&&bal<principal)return alert('Insufficient balance');
+    const availableCash=isBackendSession?toNum(backendDash?.summary?.cashBalance):toNum(bal);
+    if(availableCash<principal)return alert(`Insufficient cash balance. Available ${fc(availableCash)}. Add capital first or reduce disbursement.`);
     disburseInFlightRef.current=true;
     setDisburseBusy(true);
     try{
