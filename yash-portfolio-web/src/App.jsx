@@ -742,6 +742,8 @@ function App(){
 
   /* ── COMPUTED ── */
   const bal=useMemo(()=>{let b=ob;transactions.forEach(t=>t.type==='CREDIT'?b+=t.amount:b-=t.amount);return b;},[ob,transactions]);
+  const sidebarCashReady=!isBackendSession||!!backendDash.summary;
+  const sidebarCashValue=isBackendSession?toNum(backendDash?.summary?.cashBalance):toNum(bal);
 
   const stats=useMemo(()=>{
     const totalCap=ob+transactions.filter(t=>t.tag==='CAPITAL').reduce((a,t)=>a+t.amount,0);
@@ -2519,7 +2521,12 @@ function App(){
       <div style={{padding:'10px 12px',borderBottom:'1px solid var(--border)'}}>
         <div className="bc">
           <p style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--st)',marginBottom:3}}>Cash Balance</p>
-          <p className={`mono ${bal<0?'sn':'sp'}`} style={{fontSize:19,fontWeight:700}}>{fc(bal)}</p>
+          <p
+            className={`mono ${sidebarCashReady?(sidebarCashValue<0?'sn':'sp'):''}`}
+            style={{fontSize:19,fontWeight:700,color:sidebarCashReady?undefined:'var(--st)'}}
+          >
+            {sidebarCashReady?fc(sidebarCashValue):'Syncing...'}
+          </p>
         </div>
       </div>
       <nav style={{flex:1,padding:8,overflowY:'auto'}}>
