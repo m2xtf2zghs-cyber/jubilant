@@ -242,9 +242,11 @@ function App(){
   const[backendDash,setBackendDash]=useState({loading:false,error:'',summary:null,risk:null,lastFetchedAt:null});
   const[backendReports,setBackendReports]=useState({loading:false,error:'',pnl:null,efficiency:null,clientArrears:null,dayBook:null,topCollections:null,expenseMix:null,ledgerSummary:null,lastFetchedAt:null});
   const[backendTdsFollowup,setBackendTdsFollowup]=useState({loading:false,error:'',items:[],summary:null,lastFetchedAt:null});
+  const[disburseBusy,setDisburseBusy]=useState(false);
   const isBackendSession=!!(BACKEND_API_ENABLED&&backendAuth?.accessToken&&backendAuth?.organization?.id);
   const fileRef=useRef(null);
   const backendRefreshPromiseRef=useRef(null);
+  const disburseInFlightRef=useRef(false);
 
   useEffect(()=>{
     try{
@@ -1097,36 +1099,15 @@ function App(){
     if(isBackendSession){
       const backendId=client.backendId||clientProfiles[client.name]?.backendId||client.loans?.find(l=>l.clientId)?.clientId||null;
       if(!backendId) return alert('Backend client ID not found for this client.');
-      const choiceRaw=window.prompt(
-        `Delete action for "${client.name}"\n\nType ARCHIVE (safe, accounting records kept)\nType FORCE (permanent delete for trial data only)`,
-        'ARCHIVE'
-      );
-      if(choiceRaw==null) return;
-      const choice=String(choiceRaw).trim().toUpperCase();
-      if(!choice) return;
       (async()=>{
         try{
-          if(choice==='ARCHIVE'){
-            const msg=`Archive client "${client.name}" in backend?\n\nThis will mark the client inactive (soft delete). Existing loans and ledger entries will remain for accounting records.`;
-            if(!window.confirm(msg)) return;
-            await backendApiFetch(`/api/v1/clients/${backendId}`,{
-              method:'DELETE',
-              token:backendAuth.accessToken,
-              orgId:backendAuth.organization.id,
-            });
-          }else if(choice==='FORCE'){
-            const msg=`PERMANENTLY DELETE "${client.name}" and linked trial records?\n\nThis removes client + linked loans/installments/collections and cannot be undone.`;
-            if(!window.confirm(msg)) return;
-            const confirmName=window.prompt(`Type client name exactly to confirm force delete:\n${client.name}`,'');
-            if((confirmName||'').trim()!==client.name) return alert('Force delete cancelled: name did not match.');
-            await backendApiFetch(`/api/v1/clients/${backendId}/force`,{
-              method:'DELETE',
-              token:backendAuth.accessToken,
-              orgId:backendAuth.organization.id,
-            });
-          }else{
-            return alert('Invalid choice. Type ARCHIVE or FORCE.');
-          }
+          const msg=`Delete client "${client.name}" permanently?\n\nThis will remove client + linked loans/installments/collections (trial cleanup). This cannot be undone.`;
+          if(!window.confirm(msg)) return;
+          await backendApiFetch(`/api/v1/clients/${backendId}/force`,{
+            method:'DELETE',
+            token:backendAuth.accessToken,
+            orgId:backendAuth.organization.id,
+          });
           if(cDetail===client.name) setCDetail(null);
           if(editProfile?.name===client.name) setEditProfile(null);
           await refreshBackendSnapshot();
@@ -1210,6 +1191,7 @@ function App(){
   };
 
   const handleDisburse=async()=>{
+    if(disburseInFlightRef.current||disburseBusy) return;
     const clientName=newLoan.clientName.trim();
     if(!clientName)return alert('Client name required');
     const principal=parseFloat(newLoan.principal),interest=parseFloat(newLoan.interest),duration=parseInt(newLoan.duration,10);
@@ -1217,8 +1199,10 @@ function App(){
     if(isNaN(interest)||interest<0) return alert('Invalid interest');
     if(!duration||duration<=0) return alert('Invalid instalment count');
     if(!isBackendSession&&bal<principal)return alert('Insufficient balance');
-    if(isBackendSession){
-      try{
+    disburseInFlightRef.current=true;
+    setDisburseBusy(true);
+    try{
+      if(isBackendSession){
         const norm=clientName.toLowerCase();
         let existingClient=Object.values(clientProfiles||{}).find(p=>String(p?.name||'').trim().toLowerCase()===norm&&p?.backendId);
         if(!existingClient){
@@ -1249,48 +1233,51 @@ function App(){
         await refreshBackendSnapshot();
         setNL({...newLoan,clientName:'',clientPhone:'',kycRef:'',purpose:'',notes:''});
         setView('COLLECTIONS');
-      }catch(e){
-        alert(e?.message||'Loan disbursement failed');
+        return;
       }
-      return;
+      const total=principal+interest,emi=total/duration,freq=newLoan.freq;
+      const instPlan=buildInstallmentComponents(principal,interest,duration);
+      const schedule=[];
+      if(freq==='MONTHLY'){
+        const sd=new Date(newLoan.startDate),startDay=sd.getDate();
+        for(let i=0;i<duration;i++){
+          const d=new Date(newLoan.startDate);
+          d.setMonth(d.getMonth()+i);
+          if(d.getDate()!==startDay) d.setDate(0);
+          const comp=instPlan[i]||{payment:emi,principalDue:0,interestDue:0};
+          schedule.push({no:i+1,date:d.toISOString(),payment:comp.payment,principalDue:comp.principalDue,interestDue:comp.interestDue,principalPaid:0,interestPaid:0,paid:0,status:'Pending'});
+        }
+      }else{
+        let cur=new Date(newLoan.startDate);
+        for(let i=0;i<duration;i++){
+          const comp=instPlan[i]||{payment:emi,principalDue:0,interestDue:0};
+          schedule.push({no:i+1,date:new Date(cur).toISOString(),payment:comp.payment,principalDue:comp.principalDue,interestDue:comp.interestDue,principalPaid:0,interestPaid:0,paid:0,status:'Pending'});
+          cur.setDate(cur.getDate()+FREQ[freq].days);
+        }
+      }
+      const loan={id:'LN'+Date.now(),client:clientName,clientPhone:(newLoan.clientPhone||'').trim(),kycRef:(newLoan.kycRef||'').trim(),purpose:(newLoan.purpose||'').trim(),notes:(newLoan.notes||'').trim(),principal,interest,total,effectiveRate:calcRate(principal,interest,freq,duration),startDate:newLoan.startDate,freq,schedule,status:'Active'};
+      const baseProfile=clientProfiles[clientName]||blankProfile(clientName);
+      const nextProfiles={
+        ...clientProfiles,
+        [clientName]:{
+          ...blankProfile(clientName),
+          ...baseProfile,
+          name:clientName,
+          phone:loan.clientPhone||baseProfile.phone||'',
+          kycRef:loan.kycRef||baseProfile.kycRef||'',
+          address:baseProfile.address||'',
+          riskGrade:baseProfile.riskGrade||'STANDARD',
+          notes:loan.notes||baseProfile.notes||'',
+        },
+      };
+      save(undefined,pushTx(`Loan Disbursed — ${loan.client}`,'DEBIT',principal,'LENDING',loan.id),[loan,...loans],nextProfiles);
+      setNL({...newLoan,clientName:'',clientPhone:'',kycRef:'',purpose:'',notes:''});setView('COLLECTIONS');
+    }catch(e){
+      alert(e?.message||'Loan disbursement failed');
+    }finally{
+      disburseInFlightRef.current=false;
+      setDisburseBusy(false);
     }
-    const total=principal+interest,emi=total/duration,freq=newLoan.freq;
-    const instPlan=buildInstallmentComponents(principal,interest,duration);
-    const schedule=[];
-    if(freq==='MONTHLY'){
-      const sd=new Date(newLoan.startDate),startDay=sd.getDate();
-      for(let i=0;i<duration;i++){
-        const d=new Date(newLoan.startDate);
-        d.setMonth(d.getMonth()+i);
-        if(d.getDate()!==startDay) d.setDate(0);
-        const comp=instPlan[i]||{payment:emi,principalDue:0,interestDue:0};
-        schedule.push({no:i+1,date:d.toISOString(),payment:comp.payment,principalDue:comp.principalDue,interestDue:comp.interestDue,principalPaid:0,interestPaid:0,paid:0,status:'Pending'});
-      }
-    }else{
-      let cur=new Date(newLoan.startDate);
-      for(let i=0;i<duration;i++){
-        const comp=instPlan[i]||{payment:emi,principalDue:0,interestDue:0};
-        schedule.push({no:i+1,date:new Date(cur).toISOString(),payment:comp.payment,principalDue:comp.principalDue,interestDue:comp.interestDue,principalPaid:0,interestPaid:0,paid:0,status:'Pending'});
-        cur.setDate(cur.getDate()+FREQ[freq].days);
-      }
-    }
-    const loan={id:'LN'+Date.now(),client:clientName,clientPhone:(newLoan.clientPhone||'').trim(),kycRef:(newLoan.kycRef||'').trim(),purpose:(newLoan.purpose||'').trim(),notes:(newLoan.notes||'').trim(),principal,interest,total,effectiveRate:calcRate(principal,interest,freq,duration),startDate:newLoan.startDate,freq,schedule,status:'Active'};
-    const baseProfile=clientProfiles[clientName]||blankProfile(clientName);
-    const nextProfiles={
-      ...clientProfiles,
-      [clientName]:{
-        ...blankProfile(clientName),
-        ...baseProfile,
-        name:clientName,
-        phone:loan.clientPhone||baseProfile.phone||'',
-        kycRef:loan.kycRef||baseProfile.kycRef||'',
-        address:baseProfile.address||'',
-        riskGrade:baseProfile.riskGrade||'STANDARD',
-        notes:loan.notes||baseProfile.notes||'',
-      },
-    };
-    save(undefined,pushTx(`Loan Disbursed — ${loan.client}`,'DEBIT',principal,'LENDING',loan.id),[loan,...loans],nextProfiles);
-    setNL({...newLoan,clientName:'',clientPhone:'',kycRef:'',purpose:'',notes:''});setView('COLLECTIONS');
   };
 
   const openCollect=(loanId,idx,full,client)=>setCollect({
@@ -2678,7 +2665,7 @@ function App(){
                 ))}
               </div>
             </div>
-            <button className="bg" style={{width:'100%',justifyContent:'center',fontSize:14,padding:'12px'}} onClick={handleDisburse}>Disburse — {fc(+newLoan.principal||0)}</button>
+            <button className="bg" style={{width:'100%',justifyContent:'center',fontSize:14,padding:'12px',opacity:disburseBusy?0.85:1}} onClick={handleDisburse} disabled={disburseBusy}>{disburseBusy?'Disbursing...':`Disburse — ${fc(+newLoan.principal||0)}`}</button>
             <p style={{textAlign:'center',fontSize:11,color:'var(--st)',marginTop:7}}>Available: <span className={`mono ${bal<(+newLoan.principal||0)?'sn':'sp'}`}>{fc(bal)}</span></p>
           </div>
         </div>
