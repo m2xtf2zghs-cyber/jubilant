@@ -2540,6 +2540,7 @@ function App(){
               )}
             </div>
           )}
+          {!isBackendSession&&<>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,marginBottom:18}}>
             <SC label="Cash In Hand" value={fc(bal)} col={bal<0?'sn':'sp'} sub={`Base: ${fc(stats.totalCap)}`}/>
             <SC label="Receivables" value={fc(stats.recv)} col="sb" sub={`${stats.activeLoans} active · ${stats.closedLoans} closed`}/>
@@ -2617,6 +2618,7 @@ function App(){
               </div>
             ))}
           </div>}
+          </>}
         </div>
       )}
 
@@ -2684,7 +2686,11 @@ function App(){
               </div>
             </div>
             <button className="bg" style={{width:'100%',justifyContent:'center',fontSize:14,padding:'12px',opacity:disburseBusy?0.85:1}} onClick={handleDisburse} disabled={disburseBusy}>{disburseBusy?'Disbursing...':`Disburse — ${fc(+newLoan.principal||0)}`}</button>
-            <p style={{textAlign:'center',fontSize:11,color:'var(--st)',marginTop:7}}>Available: <span className={`mono ${bal<(+newLoan.principal||0)?'sn':'sp'}`}>{fc(bal)}</span></p>
+            {(()=>{
+              const availableDisplay=isBackendSession?toNum(backendDash?.summary?.cashBalance):toNum(bal);
+              const principalWanted=toNum(newLoan.principal);
+              return <p style={{textAlign:'center',fontSize:11,color:'var(--st)',marginTop:7}}>Available: <span className={`mono ${availableDisplay<principalWanted?'sn':'sp'}`}>{fc(availableDisplay)}</span></p>;
+            })()}
           </div>
         </div>
       )}
