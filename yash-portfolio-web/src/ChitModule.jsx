@@ -29,6 +29,8 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
   const [portfolio,setPortfolio]=useState(null);
   const [portfolioBusy,setPortfolioBusy]=useState(false);
   const [fyStartYear,setFyStartYear]=useState(currentFyStart);
+  const [returnsMode,setReturnsMode]=useState('HYBRID');
+  const [treasuryPolicy,setTreasuryPolicy]=useState('PRO_RATA');
   const [showCreate,setShowCreate]=useState(false);
   const [createForm,setCreateForm]=useState(emptyCreate);
   const [savingCreate,setSavingCreate]=useState(false);
@@ -66,7 +68,7 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
     const toMonth=`${fyStartYear+1}-03`;
     setPortfolioBusy(true);
     try{
-      const data=await safeApi(`/api/v1/chits/portfolio/summary?fromMonth=${encodeURIComponent(fromMonth)}&toMonth=${encodeURIComponent(toMonth)}`);
+      const data=await safeApi(`/api/v1/chits/portfolio/summary?fromMonth=${encodeURIComponent(fromMonth)}&toMonth=${encodeURIComponent(toMonth)}&returnsMode=${encodeURIComponent(returnsMode)}&treasuryPolicy=${encodeURIComponent(treasuryPolicy)}`);
       setPortfolio(data);
     }catch(e){setPortfolio({error:e?.message||'Failed to load portfolio'});}
     finally{setPortfolioBusy(false);}
@@ -82,7 +84,7 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
         safeApi(`/api/v1/chits/${id}/receipt`),
         safeApi(`/api/v1/chits/${id}/allocations`),
         safeApi(`/api/v1/chits/${id}/returns`),
-        safeApi(`/api/v1/chits/${id}/roi`),
+        safeApi(`/api/v1/chits/${id}/roi?returnsMode=${encodeURIComponent(returnsMode)}&treasuryPolicy=${encodeURIComponent(treasuryPolicy)}`),
         safeApi(`/api/v1/chits/${id}/journal`),
         safeApi(`/api/v1/chits/${id}/audit`),
       ]);
@@ -115,8 +117,8 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
   };
 
   useEffect(()=>{ if(apiReady) loadList(); },[apiReady]);
-  useEffect(()=>{ if(apiReady) loadPortfolio(); },[apiReady,fyStartYear]);
-  useEffect(()=>{ if(apiReady&&selectedId) loadDetail(selectedId); },[apiReady,selectedId]);
+  useEffect(()=>{ if(apiReady) loadPortfolio(); },[apiReady,fyStartYear,returnsMode,treasuryPolicy]);
+  useEffect(()=>{ if(apiReady&&selectedId) loadDetail(selectedId); },[apiReady,selectedId,returnsMode,treasuryPolicy]);
 
   const createChit=async()=>{
     if(!apiReady||savingCreate) return;
@@ -240,6 +242,17 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:8}}>
           <h3 style={{fontSize:14,fontWeight:700}}>Financial Year Portfolio Impact</h3>
           <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <span className="lbl" style={{margin:0}}>Returns Attribution</span>
+            <select className="inp" style={{width:150}} value={returnsMode} onChange={e=>setReturnsMode(e.target.value)}>
+              <option value="HYBRID">HYBRID (Recommended)</option>
+              <option value="AUTO">AUTO</option>
+              <option value="MANUAL">MANUAL</option>
+            </select>
+            <span className="lbl" style={{margin:0}}>Treasury Policy</span>
+            <select className="inp" style={{width:140}} value={treasuryPolicy} onChange={e=>setTreasuryPolicy(e.target.value)}>
+              <option value="PRO_RATA">PRO_RATA</option>
+              <option value="FIFO">FIFO</option>
+            </select>
             <span className="lbl" style={{margin:0}}>FY</span>
             <select className="inp" style={{width:140}} value={fyStartYear} onChange={e=>setFyStartYear(parseInt(e.target.value,10))}>
               {Array.from({length:8},(_,i)=>currentFyStart-3+i).map(y=><option key={y} value={y}>{fyLabel(y)}</option>)}
@@ -262,6 +275,13 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
               <p className={`mono ${c}`} style={{fontSize:14,fontWeight:700}}>{v}</p>
             </div>
           ))}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:8,marginBottom:10}}>
+          <div className="card" style={{padding:10}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>Attribution Mode</p><p className="mono" style={{fontSize:13,fontWeight:700}}>{portfolioSummary?.attributionMode||returnsMode}</p></div>
+          <div className="card" style={{padding:10}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>Treasury Policy</p><p className="mono" style={{fontSize:13,fontWeight:700}}>{portfolioSummary?.treasuryPolicy||treasuryPolicy}</p></div>
+          <div className="card" style={{padding:10}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>Auto Linked Lending</p><p className="mono sb" style={{fontSize:13,fontWeight:700}}>{fc(portfolioSummary?.autoAttribution?.totalLinkedLendingAllocationAmount||0)}</p></div>
+          <div className="card" style={{padding:10}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>Non-Loan Allocations</p><p className={`mono ${toNum(portfolioSummary?.autoAttribution?.totalNonLoanAllocationAmount)>0?'sn':'sb'}`} style={{fontSize:13,fontWeight:700}}>{fc(portfolioSummary?.autoAttribution?.totalNonLoanAllocationAmount||0)}</p></div>
+          <div className="card" style={{padding:10}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>Chits With Warnings</p><p className={`mono ${toNum(portfolioSummary?.autoAttribution?.chitsWithWarnings)>0?'sn':'sp'}`} style={{fontSize:13,fontWeight:700}}>{portfolioSummary?.autoAttribution?.chitsWithWarnings||0}</p></div>
         </div>
         <div style={{maxHeight:180,overflow:'auto',border:'1px solid var(--border)',borderRadius:8}}>
           <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
@@ -455,6 +475,10 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
 
               {detailTab==='RETURNS'&&(
                 <div>
+                  <div className="card" style={{padding:10,marginBottom:10,background:'rgba(201,168,76,.05)'}}>
+                    <p style={{fontSize:12,fontWeight:700,marginBottom:4}}>Manual Returns = Override / Correction (not primary workflow)</p>
+                    <p style={{fontSize:11,color:'var(--st)'}}>ROI uses <b>{returnsMode}</b> attribution mode. In HYBRID, manual rows override auto-attributed rows only when you provide a linked collection ID. Use manual rows for non-loan allocations or corrections.</p>
+                  </div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:10}}>
                     <div><span className="lbl">Return Date</span><input className="inp" type="date" value={returnForm.returnDate} onChange={e=>setReturnForm({...returnForm,returnDate:e.target.value})}/></div>
                     <div><span className="lbl">Capital Returned</span><input className="inp" type="number" value={returnForm.amountReturned} onChange={e=>setReturnForm({...returnForm,amountReturned:e.target.value})}/></div>
@@ -480,6 +504,36 @@ export default function ChitModule({ isBackendSession, backendAuth, backendApiFe
 
               {detailTab==='ROI'&&(
                 <div>
+                  <div className="card" style={{padding:12,marginBottom:10}}>
+                    <div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap',alignItems:'center'}}>
+                      <div>
+                        <p style={{fontSize:10,color:'var(--st)',fontWeight:700,textTransform:'uppercase'}}>Returns Attribution Engine</p>
+                        <p style={{fontSize:12}}>Mode: <b>{roi?.returnsMode||returnsMode}</b> · Treasury: <b>{roi?.treasuryPolicy||treasuryPolicy}</b> · Method: <b>{roiSummary?.attribution?.method||'—'}</b></p>
+                      </div>
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(120px,1fr))',gap:8,flex:'1 1 420px'}}>
+                        <div><p style={{fontSize:10,color:'var(--st)'}}>Linked Lending Alloc</p><p className="mono sb">{fc(roiSummary?.attribution?.linkedLendingAllocationAmount||0)}</p></div>
+                        <div><p style={{fontSize:10,color:'var(--st)'}}>Auto Capital Returned</p><p className="mono">{fc(roiSummary?.attribution?.autoDerivedCapitalReturned||0)}</p></div>
+                        <div><p style={{fontSize:10,color:'var(--st)'}}>Auto Interest Income</p><p className="mono sp">{fc(roiSummary?.attribution?.autoDerivedInterestIncome||0)}</p></div>
+                      </div>
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:8,marginTop:8}}>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Manual Override Rows</p><p className="mono">{roiSummary?.attribution?.manualOverrideCount??0}</p></div>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Effective Return Rows (XIRR)</p><p className="mono">{roiSummary?.attribution?.effectiveReturnRowsCount??0}</p></div>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Treasury Alloc (Unlinked Lending)</p><p className="mono sb">{fc(roiSummary?.attribution?.treasuryAllocationAmount||0)}</p></div>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Treasury Auto Capital</p><p className="mono">{fc(roiSummary?.attribution?.treasuryAutoCapitalReturned||0)}</p></div>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Treasury Auto Interest</p><p className="mono sp">{fc(roiSummary?.attribution?.treasuryAutoInterestIncome||0)}</p></div>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Treasury Unrecovered Balance</p><p className={`mono ${toNum(roiSummary?.attribution?.treasuryUnrecoveredBalance)>0?'sn':'sp'}`}>{fc(roiSummary?.attribution?.treasuryUnrecoveredBalance||0)}</p></div>
+                      <div><p style={{fontSize:10,color:'var(--st)'}}>Non-Loan Allocation (manual/treasury pending)</p><p className={`mono ${toNum(roiSummary?.attribution?.nonLoanAllocationAmount)>0?'sn':'sp'}`}>{fc(roiSummary?.attribution?.nonLoanAllocationAmount||0)}</p></div>
+                    </div>
+                    {!!(roiSummary?.attribution?.warnings||[]).length&&(
+                      <div style={{marginTop:10,padding:10,border:'1px solid rgba(255,107,107,.18)',background:'rgba(255,107,107,.05)',borderRadius:8}}>
+                        <p style={{fontSize:11,fontWeight:700,color:'var(--red)',marginBottom:6}}>Attribution Warnings</p>
+                        <ul style={{margin:0,paddingLeft:18,fontSize:11,color:'var(--st)'}}>
+                          {(roiSummary?.attribution?.warnings||[]).map((w,i)=><li key={i} style={{marginBottom:4}}>{w}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:10}}>
                     <div className="card" style={{padding:12}}><p style={{fontSize:10,color:'var(--st)',fontWeight:700,textTransform:'uppercase'}}>Chit Cost XIRR</p><p className="mono sn" style={{fontSize:16,fontWeight:700}}>{pct(roiSummary?.cost?.chitXirrAnnualPct)}</p><p style={{fontSize:11,color:'var(--st)'}}>Total Paid {fc(roiSummary?.cost?.totalPaid||0)} · Net Proceeds {fc(roiSummary?.cost?.netProceeds||0)}</p></div>
                     <div className="card" style={{padding:12}}><p style={{fontSize:10,color:'var(--st)',fontWeight:700,textTransform:'uppercase'}}>Yield XIRR</p><p className="mono sp" style={{fontSize:16,fontWeight:700}}>{pct(roiSummary?.yield?.yieldXirrAnnualPct)}</p><p style={{fontSize:11,color:'var(--st)'}}>Allocated {fc(roiSummary?.yield?.totalAllocated||0)} · Attributed Income {fc(roiSummary?.yield?.attributedIncome||0)}</p></div>

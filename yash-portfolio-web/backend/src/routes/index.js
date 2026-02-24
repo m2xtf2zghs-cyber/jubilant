@@ -10,6 +10,7 @@ const ledgerRoutes = require('./ledger');
 const dashboardRoutes = require('./dashboard');
 const reportsRoutes = require('./reports');
 const chitsRoutes = require('./chits');
+const tdsRoutes = require('./tds');
 const { requireAuth } = require('../middleware/auth');
 
 const rootRouter = express.Router();
@@ -27,6 +28,7 @@ api.use('/ledger', ledgerRoutes);
 api.use('/dashboard', dashboardRoutes);
 api.use('/reports', reportsRoutes);
 api.use('/chits', chitsRoutes);
+api.use('/tds', tdsRoutes);
 
 rootRouter.use('/api/v1', api);
 

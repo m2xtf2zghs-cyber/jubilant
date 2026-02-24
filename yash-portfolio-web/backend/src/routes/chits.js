@@ -6,6 +6,11 @@ const {
   summarizeChit,
   summarizePortfolio,
   toAmount,
+  normalizeReturnsMode,
+  normalizeTreasuryPolicy,
+  buildAutoAttributedReturnsLoanLinked,
+  buildTreasuryPoolAttributedReturns,
+  calcCollectionSplitForAttribution,
 } = require('../services/chit-calculations');
 
 const router = express.Router();
@@ -191,7 +196,263 @@ async function getChitReturns(dbClient, orgId, chitId) {
   return r.rows;
 }
 
-async function buildChitSummarySnapshot(dbClient, orgId, chitId) {
+function extractLinkedLoanIdsFromAllocations(allocations = []) {
+  return Array.from(new Set(
+    allocations
+      .filter((a) => String(a.purpose || '').toUpperCase() === 'LENDING' && (a.linked_loan_id || a.linkedLoanId))
+      .map((a) => a.linked_loan_id || a.linkedLoanId),
+  ));
+}
+
+async function fetchLoanAttributionInputs(dbClient, orgId, loanIds = []) {
+  if (!Array.isArray(loanIds) || !loanIds.length) {
+    return { loansById: {}, collectionsByLoan: new Map() };
+  }
+
+  const [loansRes, collectionsRes] = await Promise.all([
+    query(
+      `
+      select id, principal_amount, interest_amount, total_amount
+      from loans
+      where organization_id = $1 and id = any($2::uuid[])
+      `,
+      [orgId, loanIds],
+      dbClient,
+    ),
+    query(
+      `
+      select
+        id, loan_id, amount, collection_date,
+        principal_component, interest_component, is_writeoff
+      from collections
+      where organization_id = $1 and loan_id = any($2::uuid[])
+      order by collection_date asc, created_at asc
+      `,
+      [orgId, loanIds],
+      dbClient,
+    ),
+  ]);
+
+  const loansById = Object.fromEntries(loansRes.rows.map((r) => [r.id, r]));
+  const collectionsByLoan = new Map();
+  for (const c of collectionsRes.rows) {
+    if (!collectionsByLoan.has(c.loan_id)) collectionsByLoan.set(c.loan_id, []);
+    collectionsByLoan.get(c.loan_id).push(c);
+  }
+  return { loansById, collectionsByLoan };
+}
+
+async function fetchAllCollectionsForTreasuryAttribution(dbClient, orgId) {
+  const result = await query(
+    `
+    select
+      co.id, co.loan_id, co.amount, co.collection_date,
+      co.principal_component, co.interest_component, co.is_writeoff,
+      l.principal_amount, l.interest_amount, l.total_amount
+    from collections co
+    left join loans l on l.id = co.loan_id and l.organization_id = co.organization_id
+    where co.organization_id = $1
+    order by co.collection_date asc, co.created_at asc
+    `,
+    [orgId],
+    dbClient,
+  );
+  return result.rows;
+}
+
+function flattenCollectionsForLoanIds(loanIds = [], collectionsByLoan = new Map()) {
+  const seen = new Set();
+  const out = [];
+  for (const loanId of loanIds) {
+    const rows = collectionsByLoan.get(loanId) || [];
+    for (const r of rows) {
+      const key = r.id || `${loanId}:${r.collection_date}:${r.amount}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(r);
+    }
+  }
+  out.sort((a, b) => new Date(a.collection_date || a.collectionDate) - new Date(b.collection_date || b.collectionDate));
+  return out;
+}
+
+function buildEffectiveReturnsForChit({
+  chit,
+  allocations = [],
+  manualReturns = [],
+  returnsMode = 'HYBRID',
+  loansById = {},
+  collectionsByLoan = new Map(),
+}) {
+  const linkedLoanIds = extractLinkedLoanIdsFromAllocations(allocations);
+  const collections = flattenCollectionsForLoanIds(linkedLoanIds, collectionsByLoan);
+  const derived = buildAutoAttributedReturnsLoanLinked({
+    chit,
+    allocations,
+    manualReturns,
+    collections,
+    loansById,
+    mode: returnsMode,
+  });
+  return derived;
+}
+
+function combineAutoAndManualReturns({ autoReturns = [], manualReturns = [], returnsMode = 'HYBRID' }) {
+  const mode = normalizeReturnsMode(returnsMode);
+  const manual = [...manualReturns].map((r) => ({ ...r, _autoDerived: false }));
+  if (mode === 'MANUAL') return { returnsMode: mode, effectiveReturns: manual };
+  if (mode === 'AUTO') return { returnsMode: mode, effectiveReturns: [...autoReturns] };
+
+  const manualCollectionIds = new Set(manual.map((r) => r.linked_collection_id || r.linkedCollectionId).filter(Boolean));
+  const filteredAuto = autoReturns.filter((r) => {
+    const cid = r.linked_collection_id || r.linkedCollectionId;
+    return !(cid && manualCollectionIds.has(cid));
+  });
+  return { returnsMode: mode, effectiveReturns: [...filteredAuto, ...manual] };
+}
+
+async function buildAttributedPortfolioChitSummaries(dbClient, orgId, { status, returnsMode = 'HYBRID', treasuryPolicy = 'PRO_RATA', chitIds = null } = {}) {
+  const normalizedReturnsMode = normalizeReturnsMode(returnsMode);
+  const normalizedTreasuryPolicy = normalizeTreasuryPolicy(treasuryPolicy);
+  const { chits, receiptsByChit, paymentsByChit, allocationsByChit, returnsByChit } = await getPortfolioChitData(dbClient, orgId, { status, chitIds });
+  if (!chits.length) {
+    return {
+      chits,
+      chitSummaries: [],
+      receiptsByChit, paymentsByChit, allocationsByChit, returnsByChit,
+      attributionMeta: { returnsMode: normalizedReturnsMode, treasuryPolicy: normalizedTreasuryPolicy },
+    };
+  }
+
+  const allLinkedLoanIds = Array.from(new Set(
+    chits.flatMap((c) => extractLinkedLoanIdsFromAllocations(allocationsByChit.get(c.id) || [])),
+  ));
+  const { loansById, collectionsByLoan } = await fetchLoanAttributionInputs(dbClient, orgId, allLinkedLoanIds);
+
+  const exactByChit = new Map();
+  const exactConsumedByCollection = new Map();
+  for (const c of chits) {
+    const allocations = allocationsByChit.get(c.id) || [];
+    const manualReturns = returnsByChit.get(c.id) || [];
+    const exact = buildEffectiveReturnsForChit({
+      chit: c,
+      allocations,
+      manualReturns,
+      returnsMode: 'AUTO',
+      loansById,
+      collectionsByLoan,
+    });
+    exactByChit.set(c.id, exact);
+    for (const r of exact.autoDerivedReturns || []) {
+      const cid = r.linked_collection_id || r.linkedCollectionId;
+      if (!cid) continue;
+      const prev = exactConsumedByCollection.get(cid) || { principal: 0, interest: 0 };
+      prev.principal += toAmount(r.amount_returned);
+      prev.interest += toAmount(r.interest_income_amount);
+      exactConsumedByCollection.set(cid, prev);
+    }
+  }
+
+  const allCollections = await fetchAllCollectionsForTreasuryAttribution(dbClient, orgId);
+  const residualCollections = [];
+  for (const row of allCollections) {
+    if (row.is_writeoff) continue;
+    const split = calcCollectionSplitForAttribution(row, row);
+    const consumed = exactConsumedByCollection.get(row.id) || { principal: 0, interest: 0 };
+    const principalResidual = Math.max(0, Number((split.principal - toAmount(consumed.principal)).toFixed(2)));
+    const interestResidual = Math.max(0, Number((split.interest - toAmount(consumed.interest)).toFixed(2)));
+    if (principalResidual <= 0 && interestResidual <= 0) continue;
+    residualCollections.push({
+      collectionId: row.id,
+      date: row.collection_date,
+      principalResidual,
+      interestResidual,
+    });
+  }
+
+  const treasuryAllocations = chits.flatMap((c) => (allocationsByChit.get(c.id) || [])
+    .filter((a) => String(a.purpose || '').toUpperCase() === 'LENDING' && !(a.linked_loan_id || a.linkedLoanId))
+    .map((a) => ({ ...a, chitId: c.id })));
+  const treasuryPool = buildTreasuryPoolAttributedReturns({
+    treasuryAllocations,
+    residualCollections,
+    policy: normalizedTreasuryPolicy,
+  });
+
+  const chitSummaries = chits.map((c) => {
+    const allocations = allocationsByChit.get(c.id) || [];
+    const manualReturns = returnsByChit.get(c.id) || [];
+    const exact = exactByChit.get(c.id) || { autoDerivedReturns: [], attribution: { warnings: [] } };
+    const treasuryAuto = treasuryPool.autoReturnsByChit.get(c.id) || [];
+    const combined = combineAutoAndManualReturns({
+      autoReturns: [...(exact.autoDerivedReturns || []), ...treasuryAuto],
+      manualReturns,
+      returnsMode: normalizedReturnsMode,
+    });
+    combined.effectiveReturns.sort((a, b) => new Date(a.return_date || a.returnDate) - new Date(b.return_date || b.returnDate));
+
+    const summary = summarizeChit({
+      chit: c,
+      receipt: receiptsByChit.get(c.id) || null,
+      payments: paymentsByChit.get(c.id) || [],
+      allocations,
+      returns: combined.effectiveReturns,
+    });
+
+    const treasuryMetrics = treasuryPool.metricsByChit.get(c.id) || {
+      treasuryPolicy: normalizedTreasuryPolicy,
+      treasuryAllocationAmount: 0,
+      treasuryAutoCapitalReturned: 0,
+      treasuryAutoInterestIncome: 0,
+      treasuryUnrecoveredBalance: 0,
+      warnings: [],
+    };
+
+    const nonLoanAllocationAmount = allocations
+      .filter((a) => String(a.purpose || '').toUpperCase() !== 'LENDING')
+      .reduce((s, a) => s + toAmount(a.amount_allocated ?? a.amountAllocated), 0);
+
+    return {
+      ...summary,
+      returnsMode: combined.returnsMode,
+      attribution: {
+        ...(exact.attribution || {}),
+        treasuryPolicy: normalizedTreasuryPolicy,
+        treasuryAllocationAmount: toAmount(treasuryMetrics.treasuryAllocationAmount),
+        treasuryAutoCapitalReturned: toAmount(treasuryMetrics.treasuryAutoCapitalReturned),
+        treasuryAutoInterestIncome: toAmount(treasuryMetrics.treasuryAutoInterestIncome),
+        treasuryUnrecoveredBalance: toAmount(treasuryMetrics.treasuryUnrecoveredBalance),
+        nonLoanAllocationAmount: Number((toAmount(exact.attribution?.nonLoanAllocationAmount) + nonLoanAllocationAmount).toFixed(2)),
+        warnings: [
+          ...(exact.attribution?.warnings || []),
+          ...(toAmount(treasuryMetrics.treasuryAllocationAmount) > 0 ? [
+            `Treasury pool auto-attribution (${normalizedTreasuryPolicy}) assumes residual business collections can be economically attributed to unlinked lending allocations.`,
+          ] : []),
+          ...(nonLoanAllocationAmount > 0 ? [
+            'Non-lending allocations still require manual/override treatment (treasury engine currently covers unlinked lending allocations only).',
+          ] : []),
+        ],
+        manualOverrideCount: manualReturns.length,
+        effectiveReturnRowsCount: combined.effectiveReturns.length,
+        autoDerivedReturnRowsCount: (exact.autoDerivedReturns || []).length + treasuryAuto.length,
+      },
+    };
+  });
+
+  return {
+    chits,
+    chitSummaries,
+    receiptsByChit, paymentsByChit, allocationsByChit, returnsByChit,
+    attributionMeta: {
+      returnsMode: normalizedReturnsMode,
+      treasuryPolicy: normalizedTreasuryPolicy,
+      residualCollectionsCount: residualCollections.length,
+      treasuryPoolAllocationsCount: treasuryAllocations.length,
+    },
+  };
+}
+
+async function buildChitSummarySnapshot(dbClient, orgId, chitId, { returnsMode = 'HYBRID' } = {}) {
   const [chit, receipt, payments, allocations, returns] = await Promise.all([
     getChitOrThrow(dbClient, orgId, chitId),
     getChitReceipt(dbClient, orgId, chitId),
@@ -199,7 +460,35 @@ async function buildChitSummarySnapshot(dbClient, orgId, chitId) {
     getChitAllocations(dbClient, orgId, chitId),
     getChitReturns(dbClient, orgId, chitId),
   ]);
-  return summarizeChit({ chit, receipt, payments, allocations, returns });
+  const linkedLoanIds = extractLinkedLoanIdsFromAllocations(allocations);
+  const { loansById, collectionsByLoan } = await fetchLoanAttributionInputs(dbClient, orgId, linkedLoanIds);
+  const effective = buildEffectiveReturnsForChit({
+    chit,
+    allocations,
+    manualReturns: returns,
+    returnsMode,
+    loansById,
+    collectionsByLoan,
+  });
+  const summary = summarizeChit({ chit, receipt, payments, allocations, returns: effective.effectiveReturns });
+  return {
+    ...summary,
+    returnsMode: effective.returnsMode,
+    attribution: {
+      ...effective.attribution,
+      manualOverrideCount: returns.length,
+      effectiveReturnRowsCount: effective.effectiveReturns.length,
+      autoDerivedReturnRowsCount: effective.autoDerivedReturns.length,
+    },
+  };
+}
+
+async function buildChitSummarySnapshotWithPortfolioAttribution(dbClient, orgId, chitId, { returnsMode = 'HYBRID', treasuryPolicy = 'PRO_RATA' } = {}) {
+  await getChitOrThrow(dbClient, orgId, chitId);
+  const ctx = await buildAttributedPortfolioChitSummaries(dbClient, orgId, { returnsMode, treasuryPolicy });
+  const summary = ctx.chitSummaries.find((c) => c.chitId === chitId);
+  if (!summary) throw new ApiError(404, 'CHIT_NOT_FOUND', 'Chit not found');
+  return summary;
 }
 
 async function getAvailableChitBalance(dbClient, orgId, chitId) {
@@ -431,6 +720,8 @@ router.post('/', requireRoles('OWNER', 'ACCOUNTS_OFFICER'), asyncHandler(async (
 router.get('/portfolio/summary', asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const status = req.query.status ? String(req.query.status).toUpperCase() : undefined;
+  const returnsMode = normalizeReturnsMode(req.query.returnsMode);
+  const treasuryPolicy = normalizeTreasuryPolicy(req.query.treasuryPolicy);
   const scenario = {
     reduceInflowsPct: req.query.reduceInflowsPct == null ? 20 : Number(req.query.reduceInflowsPct),
     delayCollectionsDays: req.query.delayCollectionsDays == null ? 60 : Number(req.query.delayCollectionsDays),
@@ -440,14 +731,8 @@ router.get('/portfolio/summary', asyncHandler(async (req, res) => {
   const fromMonth = req.query.fromMonth ? String(req.query.fromMonth) : null;
   const toMonth = req.query.toMonth ? String(req.query.toMonth) : null;
 
-  const { chits, receiptsByChit, paymentsByChit, allocationsByChit, returnsByChit } = await getPortfolioChitData(null, orgId, { status });
-  const chitSummaries = chits.map((c) => summarizeChit({
-    chit: c,
-    receipt: receiptsByChit.get(c.id) || null,
-    payments: paymentsByChit.get(c.id) || [],
-    allocations: allocationsByChit.get(c.id) || [],
-    returns: returnsByChit.get(c.id) || [],
-  }));
+  const attributed = await buildAttributedPortfolioChitSummaries(null, orgId, { status, returnsMode, treasuryPolicy });
+  const chitSummaries = attributed.chitSummaries;
 
   const monthFilter = fromMonth && toMonth ? [monthBounds(fromMonth), monthBounds(toMonth)] : null;
   let dueWhere = '';
@@ -505,6 +790,17 @@ router.get('/portfolio/summary', asyncHandler(async (req, res) => {
     scenario,
     auditLog: auditRes.rows,
   });
+  payload.portfolio_summary.attributionMode = returnsMode;
+  payload.portfolio_summary.treasuryPolicy = treasuryPolicy;
+  payload.portfolio_summary.autoAttribution = {
+    chitsWithWarnings: chitSummaries.filter((c) => (c.attribution?.warnings || []).length > 0).length,
+    totalLinkedLendingAllocationAmount: chitSummaries.reduce((s, c) => s + toAmount(c.attribution?.linkedLendingAllocationAmount), 0),
+    totalNonLoanAllocationAmount: chitSummaries.reduce((s, c) => s + toAmount(c.attribution?.nonLoanAllocationAmount), 0),
+    autoDerivedCapitalReturned: chitSummaries.reduce((s, c) => s + toAmount(c.attribution?.autoDerivedCapitalReturned), 0),
+    autoDerivedInterestIncome: chitSummaries.reduce((s, c) => s + toAmount(c.attribution?.autoDerivedInterestIncome), 0),
+  };
+  payload.portfolio_summary.autoAttribution.residualCollectionsCount = attributed.attributionMeta?.residualCollectionsCount || 0;
+  payload.portfolio_summary.autoAttribution.treasuryPoolAllocationsCount = attributed.attributionMeta?.treasuryPoolAllocationsCount || 0;
 
   res.json(payload);
 }));
@@ -529,7 +825,10 @@ router.get('/:chitId', asyncHandler(async (req, res) => {
       [orgId, chitId],
     ),
   ]);
-  const summary = await buildChitSummarySnapshot(null, orgId, chitId);
+  const summary = await buildChitSummarySnapshotWithPortfolioAttribution(null, orgId, chitId, {
+    returnsMode: normalizeReturnsMode(req.query.returnsMode),
+    treasuryPolicy: normalizeTreasuryPolicy(req.query.treasuryPolicy),
+  });
   const stats = scheduleRes.rows[0] || {};
   res.json({
     item: mapChitRow(chit),
@@ -1091,9 +1390,13 @@ router.post('/:chitId/returns', requireRoles('OWNER', 'ACCOUNTS_OFFICER'), async
 router.get('/:chitId/roi', asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { chitId } = req.params;
-  const summary = await buildChitSummarySnapshot(null, orgId, chitId);
+  const returnsMode = normalizeReturnsMode(req.query.returnsMode);
+  const treasuryPolicy = normalizeTreasuryPolicy(req.query.treasuryPolicy);
+  const summary = await buildChitSummarySnapshotWithPortfolioAttribution(null, orgId, chitId, { returnsMode, treasuryPolicy });
   const { cashflowSeries, ...rest } = summary;
   res.json({
+    returnsMode,
+    treasuryPolicy,
     chit_summary: rest,
     cashflow_series_per_chit: cashflowSeries,
   });
@@ -1130,7 +1433,10 @@ router.get('/:chitId/stress', asyncHandler(async (req, res) => {
       `,
       [orgId],
     ),
-    buildChitSummarySnapshot(null, orgId, chitId),
+    buildChitSummarySnapshotWithPortfolioAttribution(null, orgId, chitId, {
+      returnsMode: normalizeReturnsMode(req.query.returnsMode),
+      treasuryPolicy: normalizeTreasuryPolicy(req.query.treasuryPolicy),
+    }),
   ]);
 
   const payload = summarizePortfolio({

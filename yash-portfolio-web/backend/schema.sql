@@ -143,6 +143,8 @@ create table collections (
   installment_id uuid references installments(id),
   client_id uuid not null references clients(id),
   amount numeric(14,2) not null check (amount >= 0),
+  cash_received_amount numeric(14,2) not null check (cash_received_amount >= 0),
+  tds_deducted_amount numeric(14,2) not null default 0 check (tds_deducted_amount >= 0),
   principal_component numeric(14,2),
   interest_component numeric(14,2),
   split_method text,

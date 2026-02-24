@@ -193,6 +193,357 @@ function buildChitYieldCashflows({ allocations = [], returns = [] } = {}) {
   return sortCashflows(flows);
 }
 
+function normalizeReturnsMode(mode) {
+  const v = String(mode || 'HYBRID').trim().toUpperCase();
+  if (['AUTO', 'MANUAL', 'HYBRID'].includes(v)) return v;
+  return 'HYBRID';
+}
+
+function normalizeTreasuryPolicy(policy) {
+  const v = String(policy || 'PRO_RATA').trim().toUpperCase();
+  if (['PRO_RATA', 'FIFO'].includes(v)) return v;
+  return 'PRO_RATA';
+}
+
+function calcCollectionSplitForAttribution(collection, loan) {
+  const amount = toAmount(collection.amount);
+  if (amount <= 0) return { principal: 0, interest: 0 };
+  const explicitInterest = collection.interest_component ?? collection.interestComponent;
+  const explicitPrincipal = collection.principal_component ?? collection.principalComponent;
+  if (explicitInterest != null || explicitPrincipal != null) {
+    const interest = explicitInterest == null ? Math.max(0, amount - toAmount(explicitPrincipal)) : toAmount(explicitInterest);
+    const principal = explicitPrincipal == null ? Math.max(0, amount - interest) : toAmount(explicitPrincipal);
+    return { principal, interest };
+  }
+  const total = toAmount(loan?.total_amount ?? loan?.totalAmount);
+  const interestAmount = toAmount(loan?.interest_amount ?? loan?.interestAmount);
+  const interest = total > 0 ? (amount * (interestAmount / total)) : 0;
+  return { principal: Math.max(0, amount - interest), interest: Math.max(0, interest) };
+}
+
+function allocateByProRata(openEntries, amountCents, { capByOpen = false } = {}) {
+  let remaining = Math.max(0, Math.round(amountCents || 0));
+  if (remaining <= 0) return new Map();
+  const totalOpen = openEntries.reduce((s, e) => s + Math.max(0, Math.round(e.openCents || 0)), 0);
+  if (totalOpen <= 0) return new Map();
+
+  const temp = openEntries.map((e) => {
+    const openCents = Math.max(0, Math.round(e.openCents || 0));
+    if (openCents <= 0) return { key: e.key, alloc: 0, frac: 0, cap: 0 };
+    const raw = (remaining * openCents) / totalOpen;
+    let alloc = Math.floor(raw);
+    const cap = capByOpen ? openCents : Number.MAX_SAFE_INTEGER;
+    if (alloc > cap) alloc = cap;
+    return { key: e.key, alloc, frac: raw - Math.floor(raw), cap };
+  });
+
+  let allocated = temp.reduce((s, t) => s + t.alloc, 0);
+  let residue = Math.max(0, remaining - allocated);
+  temp.sort((a, b) => b.frac - a.frac);
+  while (residue > 0) {
+    let moved = false;
+    for (const t of temp) {
+      if (residue <= 0) break;
+      if (t.alloc >= t.cap) continue;
+      t.alloc += 1;
+      residue -= 1;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+
+  const out = new Map();
+  for (const t of temp) {
+    if (t.alloc > 0) out.set(t.key, t.alloc);
+  }
+  return out;
+}
+
+function buildTreasuryPoolAttributedReturns({
+  treasuryAllocations = [],
+  residualCollections = [],
+  policy = 'PRO_RATA',
+} = {}) {
+  const treasuryPolicy = normalizeTreasuryPolicy(policy);
+  const allocations = [...treasuryAllocations]
+    .map((a) => ({
+      ...a,
+      chitId: a.chitId || a.chit_id,
+      allocationId: a.id || a.allocation_id || null,
+      allocationDate: a.allocationDate || a.allocation_date,
+      amountAllocated: toAmount(a.amountAllocated ?? a.amount_allocated),
+    }))
+    .filter((a) => a.chitId && a.amountAllocated > 0 && a.allocationDate);
+
+  const queue = allocations
+    .map((a, idx) => ({
+      unitId: `${a.chitId}:${a.allocationId || idx}`,
+      chitId: a.chitId,
+      allocationId: a.allocationId,
+      date: a.allocationDate,
+      remainingCents: Math.round(a.amountAllocated * 100),
+    }))
+    .sort((x, y) => new Date(x.date) - new Date(y.date));
+
+  const openByChit = new Map();
+  for (const q of queue) openByChit.set(q.chitId, (openByChit.get(q.chitId) || 0) + q.remainingCents);
+
+  const rows = [...residualCollections]
+    .map((r) => ({
+      ...r,
+      collectionId: r.collectionId || r.id || r.collection_id,
+      date: r.collectionDate || r.collection_date || r.date,
+      principalResidual: toAmount(r.principalResidual ?? r.principal_residual),
+      interestResidual: toAmount(r.interestResidual ?? r.interest_residual),
+    }))
+    .filter((r) => r.date && (r.principalResidual > 0 || r.interestResidual > 0))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  const autoReturnsByChit = new Map();
+  const metricsByChit = new Map();
+  const ensure = (chitId) => {
+    if (!autoReturnsByChit.has(chitId)) autoReturnsByChit.set(chitId, []);
+    if (!metricsByChit.has(chitId)) metricsByChit.set(chitId, {
+      treasuryAutoCapitalReturned: 0,
+      treasuryAutoInterestIncome: 0,
+      treasuryAllocationAmount: 0,
+      treasuryUnrecoveredBalance: 0,
+      treasuryPolicy,
+      warnings: [],
+    });
+    return metricsByChit.get(chitId);
+  };
+  for (const q of queue) ensure(q.chitId).treasuryAllocationAmount += q.remainingCents / 100;
+
+  const pushReturn = (chitId, row) => {
+    autoReturnsByChit.get(chitId).push(row);
+    const m = ensure(chitId);
+    m.treasuryAutoCapitalReturned += toAmount(row.amount_returned);
+    m.treasuryAutoInterestIncome += toAmount(row.interest_income_amount);
+  };
+
+  const openEntries = () => Array.from(openByChit.entries()).map(([key, openCents]) => ({ key, openCents })).filter((e) => e.openCents > 0);
+
+  for (const c of rows) {
+    let principalCents = Math.max(0, Math.round(c.principalResidual * 100));
+    let interestCents = Math.max(0, Math.round(c.interestResidual * 100));
+    const totalOpenBefore = Array.from(openByChit.values()).reduce((s, v) => s + v, 0);
+    if (totalOpenBefore <= 0) continue;
+
+    const principalAllocByChit = new Map();
+    const interestAllocByChit = new Map();
+
+    if (treasuryPolicy === 'PRO_RATA') {
+      const entries = openEntries();
+      const pMap = allocateByProRata(entries, principalCents, { capByOpen: true });
+      for (const [chitId, cents] of pMap.entries()) {
+        principalAllocByChit.set(chitId, (principalAllocByChit.get(chitId) || 0) + cents);
+        openByChit.set(chitId, Math.max(0, (openByChit.get(chitId) || 0) - cents));
+      }
+      const iMap = allocateByProRata(openEntries(), interestCents, { capByOpen: false });
+      for (const [chitId, cents] of iMap.entries()) {
+        interestAllocByChit.set(chitId, (interestAllocByChit.get(chitId) || 0) + cents);
+      }
+    } else {
+      // FIFO: oldest chit treasury allocations consume residual collections first.
+      let pLeft = principalCents;
+      for (const q of queue) {
+        if (pLeft <= 0) break;
+        if (q.remainingCents <= 0) continue;
+        const take = Math.min(pLeft, q.remainingCents);
+        if (take <= 0) continue;
+        q.remainingCents -= take;
+        pLeft -= take;
+        openByChit.set(q.chitId, Math.max(0, (openByChit.get(q.chitId) || 0) - take));
+        principalAllocByChit.set(q.chitId, (principalAllocByChit.get(q.chitId) || 0) + take);
+      }
+
+      let iLeft = interestCents;
+      for (const q of queue) {
+        if (iLeft <= 0) break;
+        const openCents = Math.max(0, Math.round(openByChit.get(q.chitId) || 0));
+        if (openCents <= 0) continue;
+        const take = Math.min(iLeft, openCents);
+        if (take <= 0) continue;
+        iLeft -= take;
+        interestAllocByChit.set(q.chitId, (interestAllocByChit.get(q.chitId) || 0) + take);
+      }
+    }
+
+    const allChitIds = new Set([...principalAllocByChit.keys(), ...interestAllocByChit.keys()]);
+    for (const chitId of allChitIds) {
+      const capital = (principalAllocByChit.get(chitId) || 0) / 100;
+      const interest = (interestAllocByChit.get(chitId) || 0) / 100;
+      if (capital <= 0 && interest <= 0) continue;
+      pushReturn(chitId, {
+        id: `AUTO-TREASURY-${chitId}-${c.collectionId || c.date}`,
+        return_date: c.date,
+        amount_returned: Number(capital.toFixed(2)),
+        source_type: 'LOAN_PRINCIPAL_REPAYMENT',
+        linked_loan_id: null,
+        linked_collection_id: c.collectionId || null,
+        interest_income_amount: Number(interest.toFixed(2)),
+        other_income_amount: 0,
+        notes: `Auto-attributed from treasury lending pool (${treasuryPolicy})`,
+        _autoDerived: true,
+        _treasuryPool: true,
+      });
+    }
+  }
+
+  for (const [chitId, openCents] of openByChit.entries()) {
+    const m = ensure(chitId);
+    m.treasuryUnrecoveredBalance = Number((openCents / 100).toFixed(2));
+  }
+  for (const m of metricsByChit.values()) {
+    m.treasuryAutoCapitalReturned = Number(m.treasuryAutoCapitalReturned.toFixed(2));
+    m.treasuryAutoInterestIncome = Number(m.treasuryAutoInterestIncome.toFixed(2));
+    m.treasuryAllocationAmount = Number(m.treasuryAllocationAmount.toFixed(2));
+  }
+
+  return {
+    treasuryPolicy,
+    autoReturnsByChit,
+    metricsByChit,
+  };
+}
+
+function buildAutoAttributedReturnsLoanLinked({
+  chit = {},
+  allocations = [],
+  manualReturns = [],
+  collections = [],
+  loansById = {},
+  mode = 'HYBRID',
+} = {}) {
+  const returnsMode = normalizeReturnsMode(mode);
+  const linkedAllocByLoan = new Map();
+  let linkedLendingAllocationAmount = 0;
+  let nonLoanAllocationAmount = 0;
+  let allocationsWithoutLoanLinkCount = 0;
+  let ignoredWriteoffCollections = 0;
+  const warnings = [];
+
+  for (const a of allocations) {
+    const amountAllocated = toAmount(a.amount_allocated ?? a.amountAllocated);
+    const purpose = String(a.purpose || '').toUpperCase();
+    const linkedLoanId = a.linked_loan_id || a.linkedLoanId || null;
+    if (purpose === 'LENDING' && linkedLoanId) {
+      linkedLendingAllocationAmount += amountAllocated;
+      linkedAllocByLoan.set(linkedLoanId, (linkedAllocByLoan.get(linkedLoanId) || 0) + amountAllocated);
+    } else {
+      nonLoanAllocationAmount += amountAllocated;
+      if (purpose === 'LENDING' && !linkedLoanId) allocationsWithoutLoanLinkCount += 1;
+    }
+  }
+
+  if (allocationsWithoutLoanLinkCount > 0) {
+    warnings.push(`Some lending allocations have no linkedLoanId (${allocationsWithoutLoanLinkCount}); auto-attribution excludes them.`);
+  }
+  if (nonLoanAllocationAmount > 0) {
+    warnings.push('Non-loan / treasury allocations detected. Full auto-attribution for mixed working-capital pool is pending; use manual override for those amounts.');
+  }
+
+  const collectionsByLoan = new Map();
+  for (const c of collections) {
+    const loanId = c.loan_id || c.loanId;
+    if (!loanId) continue;
+    if (!collectionsByLoan.has(loanId)) collectionsByLoan.set(loanId, []);
+    collectionsByLoan.get(loanId).push(c);
+  }
+  for (const rows of collectionsByLoan.values()) {
+    rows.sort((a, b) => new Date(a.collection_date || a.collectionDate) - new Date(b.collection_date || b.collectionDate));
+  }
+
+  const autoReturns = [];
+  let autoDerivedCapitalReturned = 0;
+  let autoDerivedInterestIncome = 0;
+  const loanCoverage = [];
+
+  for (const [loanId, allocAmount] of linkedAllocByLoan.entries()) {
+    const loan = loansById[loanId] || {};
+    const principal = toAmount(loan.principal_amount ?? loan.principalAmount);
+    if (!(principal > 0)) {
+      warnings.push(`Loan ${loanId} principal not found for auto-attribution; skipped.`);
+      continue;
+    }
+    const rawShare = allocAmount / principal;
+    const share = Math.max(0, Math.min(1, rawShare));
+    if (rawShare > 1.000001) warnings.push(`Chit allocation on loan ${loanId} exceeds loan principal. Auto share capped at 100%.`);
+
+    let loanCapital = 0;
+    let loanInterest = 0;
+    const loanCollections = collectionsByLoan.get(loanId) || [];
+    for (const c of loanCollections) {
+      if (c.is_writeoff || c.isWriteoff) { ignoredWriteoffCollections += 1; continue; }
+      const split = calcCollectionSplitForAttribution(c, loan);
+      const capitalReturned = Number((split.principal * share).toFixed(2));
+      const interestIncomeAmount = Number((split.interest * share).toFixed(2));
+      if (capitalReturned <= 0 && interestIncomeAmount <= 0) continue;
+      autoReturns.push({
+        id: `AUTO-${chit.id || 'CHIT'}-${loanId}-${c.id || c.collection_id || autoReturns.length + 1}`,
+        allocation_id: null,
+        return_date: c.collection_date || c.collectionDate,
+        amount_returned: capitalReturned,
+        source_type: 'LOAN_PRINCIPAL_REPAYMENT',
+        linked_loan_id: loanId,
+        linked_collection_id: c.id || c.collection_id || null,
+        interest_income_amount: interestIncomeAmount,
+        other_income_amount: 0,
+        notes: 'Auto-attributed from linked loan collection',
+        _autoDerived: true,
+        _sharePct: share * 100,
+      });
+      autoDerivedCapitalReturned += capitalReturned;
+      autoDerivedInterestIncome += interestIncomeAmount;
+      loanCapital += capitalReturned;
+      loanInterest += interestIncomeAmount;
+    }
+    loanCoverage.push({
+      loanId,
+      allocatedAmount: allocAmount,
+      loanPrincipal: principal,
+      attributionSharePct: share * 100,
+      autoDerivedCapitalReturned: Number(loanCapital.toFixed(2)),
+      autoDerivedInterestIncome: Number(loanInterest.toFixed(2)),
+    });
+  }
+
+  const manual = [...manualReturns].map((r) => ({ ...r, _autoDerived: false }));
+  let effectiveReturns = [];
+  if (returnsMode === 'MANUAL') {
+    effectiveReturns = manual;
+  } else if (returnsMode === 'AUTO') {
+    effectiveReturns = autoReturns;
+  } else {
+    const manualCollectionIds = new Set(
+      manual.map((r) => r.linked_collection_id || r.linkedCollectionId).filter(Boolean),
+    );
+    const autoFiltered = autoReturns.filter((r) => !((r.linked_collection_id || r.linkedCollectionId) && manualCollectionIds.has(r.linked_collection_id || r.linkedCollectionId)));
+    effectiveReturns = [...autoFiltered, ...manual];
+  }
+
+  effectiveReturns.sort((a, b) => new Date(a.return_date || a.returnDate) - new Date(b.return_date || b.returnDate));
+
+  return {
+    returnsMode,
+    effectiveReturns,
+    autoDerivedReturns: autoReturns,
+    attribution: {
+      mode: returnsMode,
+      method: 'LOAN_LINKED_EXACT_WITH_MANUAL_OVERRIDE',
+      linkedLendingAllocationAmount: Number(linkedLendingAllocationAmount.toFixed(2)),
+      nonLoanAllocationAmount: Number(nonLoanAllocationAmount.toFixed(2)),
+      allocationsWithoutLoanLinkCount,
+      autoDerivedCapitalReturned: Number(autoDerivedCapitalReturned.toFixed(2)),
+      autoDerivedInterestIncome: Number(autoDerivedInterestIncome.toFixed(2)),
+      ignoredWriteoffCollections,
+      loanCoverage,
+      warnings,
+    },
+  };
+}
+
 function estimateFundingCostRupees(costCashflows, chitMeta = {}) {
   const totalOut = costCashflows.filter((f) => f.amount < 0).reduce((s, f) => s + Math.abs(f.amount), 0);
   const totalIn = costCashflows.filter((f) => f.amount > 0).reduce((s, f) => s + f.amount, 0);
@@ -433,4 +784,9 @@ module.exports = {
   buildStressTable,
   summarizePortfolio,
   profitabilityFlag,
+  normalizeReturnsMode,
+  normalizeTreasuryPolicy,
+  calcCollectionSplitForAttribution,
+  buildAutoAttributedReturnsLoanLinked,
+  buildTreasuryPoolAttributedReturns,
 };

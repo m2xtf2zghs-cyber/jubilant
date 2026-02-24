@@ -47,6 +47,8 @@ router.get('/', asyncHandler(async (req, res) => {
         c.phone,
         c.kyc_ref,
         c.address_line,
+        c.funding_channel,
+        c.tie_up_partner_name,
         c.risk_grade,
         c.notes,
         c.is_active,
@@ -87,6 +89,12 @@ router.post('/', asyncHandler(async (req, res) => {
   const body = req.body || {};
   const name = String(body.name || '').trim();
   if (!name) throw new ApiError(422, 'VALIDATION_ERROR', 'Client name is required', { field: 'name' });
+  const fundingChannel = body.fundingChannel ? String(body.fundingChannel).toUpperCase() : 'DIRECT';
+  if (!['DIRECT', 'TIE_UP'].includes(fundingChannel)) throw new ApiError(422, 'VALIDATION_ERROR', 'Invalid fundingChannel');
+  const tieUpPartnerName = body.tieUpPartnerName == null ? null : String(body.tieUpPartnerName).trim() || null;
+  if (fundingChannel === 'DIRECT' && tieUpPartnerName) {
+    // Allow storing historical text, but prefer empty for direct.
+  }
 
   const clientCode = String(body.clientCode || `CL${Date.now()}`).trim().slice(0, 40);
   const result = await query(
@@ -94,8 +102,9 @@ router.post('/', asyncHandler(async (req, res) => {
     insert into clients (
       organization_id, client_code, name, phone, alt_phone, kyc_ref, kyc_type,
       address_line, locality, city, state, postal_code, risk_grade, notes, is_active, created_by
+      , funding_channel, tie_up_partner_name
     ) values (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,coalesce($15,true),$16
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,coalesce($15,true),$16,$17,$18
     )
     returning *
     `,
@@ -116,6 +125,8 @@ router.post('/', asyncHandler(async (req, res) => {
       body.notes || null,
       body.isActive,
       userId,
+      fundingChannel,
+      tieUpPartnerName,
     ]
   );
 
@@ -176,6 +187,8 @@ router.patch('/:clientId', asyncHandler(async (req, res) => {
     state: 'state',
     postalCode: 'postal_code',
     riskGrade: 'risk_grade',
+    fundingChannel: 'funding_channel',
+    tieUpPartnerName: 'tie_up_partner_name',
     notes: 'notes',
     isActive: 'is_active',
   };
@@ -186,6 +199,10 @@ router.patch('/:clientId', asyncHandler(async (req, res) => {
     if (!Object.prototype.hasOwnProperty.call(body, bodyKey)) continue;
     let val = body[bodyKey];
     if (bodyKey === 'riskGrade' && val != null) val = String(val).toUpperCase();
+    if (bodyKey === 'fundingChannel' && val != null) {
+      val = String(val).toUpperCase();
+      if (!['DIRECT', 'TIE_UP'].includes(val)) throw new ApiError(422, 'VALIDATION_ERROR', 'Invalid fundingChannel');
+    }
     values.push(val);
     sets.push(`${column} = $${values.length}`);
   }

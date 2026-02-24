@@ -49,7 +49,16 @@ const RISK_META={
   WATCH:{label:'Watchlist',cls:'bg-y'},
   HIGH_RISK:{label:'High Risk',cls:'bg-r'},
 };
-const blankProfile=(name='')=>({name,phone:'',kycRef:'',address:'',riskGrade:'STANDARD',notes:''});
+const blankProfile=(name='')=>({name,phone:'',kycRef:'',address:'',riskGrade:'STANDARD',notes:'',fundingChannel:'DIRECT',tieUpPartnerName:''});
+const blankCollect=()=>({
+  show:false,loanId:null,idx:null,partAmt:'',fullAmt:0,client:'',
+  shortReceiptReason:'PARTIAL', // PARTIAL | TDS
+  tdsAmt:'',
+  tdsReceiptStatus:'PENDING',
+  tdsDeducedBy:'AUTO', // AUTO | CLIENT | TIE_UP_PARTNER
+  tdsCertificateRef:'',
+  tdsNotes:'',
+});
 
 const calcRate=(p,i,fk,d)=>{p=+p||0;i=+i||0;d=+d||0;if(!p||!d)return 0;const r=i/p;return fk==='MONTHLY'?(r/((d+1)/2))*100:(r/((d+1)/2)/FREQ[fk].days)*3000;};
 const toNum=v=>Number.isFinite(+v)?+v:0;
@@ -182,10 +191,11 @@ function App(){
   const[newExp,setNE]=useState({desc:'',amount:'',category:'Other Indirect Expenses'});
   const[capAmt,setCapAmt]=useState('');
   const[showCap,setShowCap]=useState(false);
-  const[collect,setCollect]=useState({show:false,loanId:null,idx:null,partAmt:'',fullAmt:0,client:''});
+  const[collect,setCollect]=useState(blankCollect);
   const[cSearch,setCSearch]=useState('');
   const[dbDate,setDbDate]=useState(ts());
   const[repMonth,setRepMonth]=useState(new Date().toISOString().slice(0,7));
+  const[reportTieUpFilter,setReportTieUpFilter]=useState('ALL');
   const[cDetail,setCDetail]=useState(null);
   const[showSetup,setShowSetup]=useState(false);
   const[setupBal,setSetupBal]=useState('');
@@ -197,9 +207,14 @@ function App(){
   const[txSearch,setTxSearch]=useState('');
   const[colPendingFilter,setColPendingFilter]=useState('ALL');
   const[editProfile,setEditProfile]=useState(null);
+  const[tdsByClientId,setTdsByClientId]=useState({});
+  const[tdsMetaByClientId,setTdsMetaByClientId]=useState({});
+  const[tdsForm,setTdsForm]=useState({entryScope:'CLIENT',deductionDate:ts(),periodMonth:new Date().toISOString().slice(0,7),grossEmiAmount:'',cashReceivedAmount:'',tdsRatePercent:'',tdsAmount:'',receiptStatus:'PENDING',receivedDate:ts(),collectionId:'',loanId:'',certificateRef:'',sourceType:'CLIENT_COLLECTION',tieUpPartnerName:'',notes:''});
+  const[tdsBusy,setTdsBusy]=useState(false);
   const[backendAuth,setBackendAuth]=useState(null);
   const[backendDash,setBackendDash]=useState({loading:false,error:'',summary:null,risk:null,lastFetchedAt:null});
   const[backendReports,setBackendReports]=useState({loading:false,error:'',pnl:null,efficiency:null,clientArrears:null,dayBook:null,topCollections:null,expenseMix:null,ledgerSummary:null,lastFetchedAt:null});
+  const[backendTdsFollowup,setBackendTdsFollowup]=useState({loading:false,error:'',items:[],summary:null,lastFetchedAt:null});
   const isBackendSession=!!(BACKEND_API_ENABLED&&backendAuth?.accessToken&&backendAuth?.organization?.id);
   const fileRef=useRef(null);
 
@@ -357,6 +372,8 @@ function App(){
         riskGrade:(c.risk_grade||'STANDARD').toUpperCase(),
         notes:c.notes||'',
         address:c.address_line||'',
+        fundingChannel:(c.funding_channel||'DIRECT').toUpperCase(),
+        tieUpPartnerName:c.tie_up_partner_name||'',
         backendId:c.id,
         clientCode:c.client_code||'',
         isActive:c.is_active,
@@ -547,6 +564,34 @@ function App(){
     return()=>{cancel=true;};
   },[loggedIn,isBackendSession,backendAuth?.accessToken,backendAuth?.organization?.id,repMonth,dbDate]);
 
+  useEffect(()=>{
+    let cancel=false;
+    if(!loggedIn||!isBackendSession){
+      setBackendTdsFollowup(prev=>(prev.items.length||prev.error||prev.summary)?{loading:false,error:'',items:[],summary:null,lastFetchedAt:null}:prev);
+      return()=>{};
+    }
+    setBackendTdsFollowup(prev=>({...prev,loading:true,error:''}));
+    (async()=>{
+      try{
+        const token=backendAuth.accessToken;
+        const orgId=backendAuth.organization.id;
+        const pending=await backendApiFetch(`/api/v1/tds?periodMonth=${encodeURIComponent(repMonth)}&status=PENDING&page=1&pageSize=500`,{token,orgId});
+        if(cancel) return;
+        setBackendTdsFollowup({
+          loading:false,
+          error:'',
+          items:Array.isArray(pending?.items)?pending.items:[],
+          summary:pending?.summary||null,
+          lastFetchedAt:new Date().toISOString(),
+        });
+      }catch(e){
+        if(cancel) return;
+        setBackendTdsFollowup(prev=>({...prev,loading:false,error:e?.message||'Failed to load TDS follow-up'}));
+      }
+    })();
+    return()=>{cancel=true;};
+  },[loggedIn,isBackendSession,backendAuth?.accessToken,backendAuth?.organization?.id,repMonth]);
+
   const expData=()=>{
     if(isBackendSession) return alert('Local backup export is disabled in backend mode.');
     const blob=new Blob([localStorage.getItem('ypm_v4')||'{}'],{type:'application/json'});
@@ -690,7 +735,7 @@ function App(){
     const m={};
     loans.forEach(l=>{
       const pf=clientProfiles[l.client]||blankProfile(l.client);
-      if(!m[l.client]) m[l.client]={name:l.client,loans:[],totalP:0,totalI:0,totalDue:0,totalIP:0,totalColl:0,phone:pf.phone||l.clientPhone||'',kycRef:pf.kycRef||l.kycRef||'',address:pf.address||'',riskGrade:pf.riskGrade||'STANDARD',notes:pf.notes||l.notes||'',lastLoanDate:l.startDate||null,backendId:pf.backendId||l.clientId||null};
+      if(!m[l.client]) m[l.client]={name:l.client,loans:[],totalP:0,totalI:0,totalDue:0,totalIP:0,totalColl:0,phone:pf.phone||l.clientPhone||'',kycRef:pf.kycRef||l.kycRef||'',address:pf.address||'',riskGrade:pf.riskGrade||'STANDARD',notes:pf.notes||l.notes||'',fundingChannel:pf.fundingChannel||'DIRECT',tieUpPartnerName:pf.tieUpPartnerName||'',lastLoanDate:l.startDate||null,backendId:pf.backendId||l.clientId||null};
       const c=m[l.client];
       c.backendId=c.backendId||pf.backendId||l.clientId||null;
       c.phone=c.phone||pf.phone||l.clientPhone||'';
@@ -698,6 +743,8 @@ function App(){
       c.address=c.address||pf.address||'';
       c.notes=c.notes||pf.notes||l.notes||'';
       c.riskGrade=pf.riskGrade||c.riskGrade||'STANDARD';
+      c.fundingChannel=pf.fundingChannel||c.fundingChannel||'DIRECT';
+      c.tieUpPartnerName=pf.tieUpPartnerName||c.tieUpPartnerName||'';
       if(l.startDate&&(!c.lastLoanDate||new Date(l.startDate)>new Date(c.lastLoanDate))) c.lastLoanDate=l.startDate;
       c.loans.push(l);c.totalP+=l.principal;c.totalI+=l.interest;
       const pt=l.schedule.reduce((a,p)=>a+(p.paid||0),0);
@@ -706,12 +753,21 @@ function App(){
     });
     Object.values(clientProfiles).forEach(p=>{
       if(!p?.name) return;
-      if(!m[p.name]) m[p.name]={name:p.name,loans:[],totalP:0,totalI:0,totalDue:0,totalIP:0,totalColl:0,phone:p.phone||'',kycRef:p.kycRef||'',address:p.address||'',riskGrade:p.riskGrade||'STANDARD',notes:p.notes||'',lastLoanDate:null,backendId:p.backendId||null};
+      if(!m[p.name]) m[p.name]={name:p.name,loans:[],totalP:0,totalI:0,totalDue:0,totalIP:0,totalColl:0,phone:p.phone||'',kycRef:p.kycRef||'',address:p.address||'',riskGrade:p.riskGrade||'STANDARD',notes:p.notes||'',fundingChannel:p.fundingChannel||'DIRECT',tieUpPartnerName:p.tieUpPartnerName||'',lastLoanDate:null,backendId:p.backendId||null};
     });
     return Object.values(m)
       .filter(c=>c.name.toLowerCase().includes(cSearch.toLowerCase())||(c.phone||'').includes(cSearch.trim())||(c.kycRef||'').toLowerCase().includes(cSearch.toLowerCase()))
       .sort((a,b)=>(b.totalDue-a.totalDue)||(b.totalP-a.totalP)||a.name.localeCompare(b.name));
   },[loans,cSearch,clientProfiles]);
+
+  const tieUpPartyOptions=useMemo(()=>(
+    Array.from(new Set(
+      Object.values(clientProfiles||{})
+        .filter(p=>String(p?.fundingChannel||'DIRECT').toUpperCase()==='TIE_UP')
+        .map(p=>String(p?.tieUpPartnerName||'').trim())
+        .filter(Boolean)
+    )).sort((a,b)=>a.localeCompare(b))
+  ),[clientProfiles]);
 
   const collectionLoansView=useMemo(()=>{
     const now=new Date();
@@ -807,6 +863,78 @@ function App(){
     };
   }),[stats.overdueList,clientProfiles]);
 
+  const loadClientTds=async(clientId)=>{
+    if(!isBackendSession||!clientId) return;
+    setTdsBusy(true);
+    try{
+      const detail=clientMap.find(c=>c.backendId===clientId)||null;
+      const isTieUp=String(detail?.fundingChannel||'DIRECT').toUpperCase()==='TIE_UP';
+      const partner=(detail?.tieUpPartnerName||'').trim();
+      const qs=isTieUp&&partner
+        ? `/api/v1/tds?fundingChannel=TIE_UP&tieUpPartnerName=${encodeURIComponent(partner)}&page=1&pageSize=100`
+        : `/api/v1/tds?clientId=${encodeURIComponent(clientId)}&page=1&pageSize=100`;
+      const data=await backendApiFetch(qs,{
+        token:backendAuth.accessToken,orgId:backendAuth.organization.id,
+      });
+      setTdsByClientId(prev=>({...prev,[clientId]:Array.isArray(data?.items)?data.items:[]}));
+      setTdsMetaByClientId(prev=>({...prev,[clientId]:data?.summary||null}));
+    }catch(e){
+      setTdsMetaByClientId(prev=>({...prev,[clientId]:{error:e?.message||'TDS load failed'}}));
+    }finally{
+      setTdsBusy(false);
+    }
+  };
+  const addTdsEntry=async(client)=>{
+    if(!isBackendSession||!client?.backendId) return;
+    try{
+      const entryScope=tdsForm.entryScope||'CLIENT';
+      const isTieUpMonthly=entryScope==='TIE_UP_PARTY_MONTHLY';
+      const tieUpPartnerName=(tdsForm.tieUpPartnerName||client.tieUpPartnerName||'').trim();
+      const body={
+        clientId:isTieUpMonthly?null:client.backendId,
+        loanId:isTieUpMonthly?null:(tdsForm.loanId||null),
+        collectionId:isTieUpMonthly?null:(tdsForm.collectionId||null),
+        deductionDate:tdsForm.deductionDate,
+        periodMonth:tdsForm.periodMonth,
+        grossEmiAmount:toNum(tdsForm.grossEmiAmount),
+        cashReceivedAmount:toNum(tdsForm.cashReceivedAmount),
+        tdsRatePercent:tdsForm.tdsRatePercent===''?null:toNum(tdsForm.tdsRatePercent),
+        tdsAmount:toNum(tdsForm.tdsAmount),
+        receiptStatus:tdsForm.receiptStatus,
+        receivedDate:tdsForm.receiptStatus==='RECEIVED'?(tdsForm.receivedDate||tdsForm.deductionDate):null,
+        certificateRef:(tdsForm.certificateRef||'').trim()||null,
+        sourceType:isTieUpMonthly?'TIE_UP_SETTLEMENT':tdsForm.sourceType,
+        fundingChannel:isTieUpMonthly?'TIE_UP':(client.fundingChannel||'DIRECT'),
+        tieUpPartnerName:isTieUpMonthly?tieUpPartnerName:null,
+        notes:(tdsForm.notes||'').trim()||null,
+      };
+      await backendApiFetch('/api/v1/tds',{
+        method:'POST',
+        token:backendAuth.accessToken,orgId:backendAuth.organization.id,
+        body,
+      });
+      setTdsForm(f=>({...f,grossEmiAmount:'',cashReceivedAmount:'',tdsRatePercent:'',tdsAmount:'',collectionId:'',loanId:'',certificateRef:'',notes:'',receiptStatus:'PENDING',sourceType:'CLIENT_COLLECTION'}));
+      await loadClientTds(client.backendId);
+    }catch(e){
+      alert(e?.message||'TDS save failed');
+    }
+  };
+  const updateTdsStatus=async(clientId,tdsId,receiptStatus)=>{
+    if(!isBackendSession||!clientId||!tdsId) return;
+    try{
+      await backendApiFetch(`/api/v1/tds/${tdsId}`,{
+        method:'PATCH',
+        token:backendAuth.accessToken,orgId:backendAuth.organization.id,
+        body:{
+          receiptStatus,
+          receivedDate:receiptStatus==='RECEIVED'?ts():null,
+        },
+      });
+      await loadClientTds(clientId);
+    }catch(e){
+      alert(e?.message||'TDS status update failed');
+    }
+  };
   /* ── ACTIONS ── */
   const pushTx=(desc,type,amount,tag,relatedId=null,category=null,extra={})=>[...transactions,{id:Date.now()+Math.random(),date:new Date().toISOString(),desc,type,amount,tag,relatedId,category,...extra}];
   const expReminderCSV=()=>{
@@ -826,6 +954,8 @@ function App(){
       phone:base.phone||loanSeed?.clientPhone||'',
       kycRef:base.kycRef||loanSeed?.kycRef||'',
       notes:base.notes||loanSeed?.notes||'',
+      fundingChannel:base.fundingChannel||'DIRECT',
+      tieUpPartnerName:base.tieUpPartnerName||'',
     });
   };
   const saveProfileEdit=async()=>{
@@ -842,6 +972,8 @@ function App(){
             kycRef:(editProfile.kycRef||'').trim()||null,
             addressLine:(editProfile.address||'').trim()||null,
             riskGrade:editProfile.riskGrade||'STANDARD',
+            fundingChannel:editProfile.fundingChannel||'DIRECT',
+            tieUpPartnerName:(editProfile.tieUpPartnerName||'').trim()||null,
             notes:(editProfile.notes||'').trim()||null,
           },
         });
@@ -863,6 +995,8 @@ function App(){
         kycRef:(editProfile.kycRef||'').trim(),
         address:(editProfile.address||'').trim(),
         riskGrade:editProfile.riskGrade||'STANDARD',
+        fundingChannel:editProfile.fundingChannel||'DIRECT',
+        tieUpPartnerName:(editProfile.tieUpPartnerName||'').trim(),
         notes:(editProfile.notes||'').trim(),
       },
     };
@@ -1049,7 +1183,10 @@ function App(){
     setNL({...newLoan,clientName:'',clientPhone:'',kycRef:'',purpose:'',notes:''});setView('COLLECTIONS');
   };
 
-  const openCollect=(loanId,idx,full,client)=>setCollect({show:true,loanId,idx,partAmt:'',fullAmt:full,client});
+  const openCollect=(loanId,idx,full,client)=>setCollect({
+    ...blankCollect(),
+    show:true,loanId,idx,partAmt:'',fullAmt:full,client,
+  });
 
   const submitCollect=async(partial=false,badDebt=false)=>{
     const{loanId,idx,fullAmt,partAmt}=collect;
@@ -1063,8 +1200,24 @@ function App(){
         const inst=loan?.schedule?.[idx];
         if(!loan?.clientId) return alert('Client mapping missing. Refresh and try again.');
         if(!inst?.id) return alert('Installment mapping missing. Refresh and try again.');
-        const postAmount=badDebt?toNum(fullAmt):toNum(amount);
+        const cashAmount=badDebt?0:toNum(amount);
+        const isTdsShortReceipt=!!(!badDebt&&partial&&String(collect.shortReceiptReason||'PARTIAL').toUpperCase()==='TDS');
+        const tdsAmount=isTdsShortReceipt?Math.max(0,toNum(collect.tdsAmt)):0;
+        const grossAmount=isTdsShortReceipt?toNum(cashAmount+tdsAmount):toNum(badDebt?fullAmt:amount);
+        const clientPf=clientProfiles[loan.client]||blankProfile(loan.client);
+        const clientFundingChannel=String(clientPf.fundingChannel||'DIRECT').toUpperCase();
+        const tieUpPartnerName=(clientPf.tieUpPartnerName||'').trim();
+        const tdsDeducedBy=String(collect.tdsDeducedBy||'AUTO').toUpperCase();
+        const tdsSourceType=isTdsShortReceipt
+          ? ((tdsDeducedBy==='TIE_UP_PARTNER'||(tdsDeducedBy==='AUTO'&&clientFundingChannel==='TIE_UP'&&tieUpPartnerName))
+            ? 'TIE_UP_SETTLEMENT'
+            : 'CLIENT_COLLECTION')
+          : null;
+        const postAmount=grossAmount;
         if(!(postAmount>0)) return alert('Invalid collection amount');
+        if(isTdsShortReceipt&&!(tdsAmount>0)) return alert('TDS short receipt must have TDS amount > 0');
+        if(isTdsShortReceipt&&postAmount>toNum(fullAmt)) return alert('Cash + TDS cannot exceed installment due');
+        if(isTdsShortReceipt&&tdsSourceType==='TIE_UP_SETTLEMENT'&&!tieUpPartnerName) return alert('Tie-up partner name missing for TDS mapping. Update client profile first.');
         await backendApiFetch('/api/v1/collections',{
           method:'POST',
           token:backendAuth.accessToken,
@@ -1075,13 +1228,21 @@ function App(){
             installmentId:inst.id,
             clientId:loan.clientId,
             amount:postAmount,
+            cashReceivedAmount:isTdsShortReceipt?cashAmount:undefined,
+            tdsDeductedAmount:isTdsShortReceipt?tdsAmount:undefined,
+            tdsReceiptStatus:isTdsShortReceipt?(collect.tdsReceiptStatus||'PENDING'):undefined,
+            tdsCertificateRef:isTdsShortReceipt?((collect.tdsCertificateRef||'').trim()||null):undefined,
+            tdsSourceType:isTdsShortReceipt?tdsSourceType:undefined,
+            tdsFundingChannel:isTdsShortReceipt?clientFundingChannel:undefined,
+            tdsTieUpPartnerName:isTdsShortReceipt&&tdsSourceType==='TIE_UP_SETTLEMENT'?(tieUpPartnerName||null):undefined,
+            tdsNotes:isTdsShortReceipt?((collect.tdsNotes||'').trim()||null):undefined,
             isWriteoff:!!badDebt,
             paymentMode:'CASH',
             collectionDate:new Date().toISOString(),
           },
         });
         await refreshBackendSnapshot();
-        setCollect({show:false,loanId:null,idx:null,partAmt:'',fullAmt:0,client:''});
+        setCollect(blankCollect());
       }catch(e){
         alert(e?.message||'Collection posting failed');
       }
@@ -1118,7 +1279,7 @@ function App(){
     let newTx=transactions;
     if(!badDebt) newTx=pushTx(`Collection — ${loans[li].client}`,'CREDIT',amount,'COLLECTION',loanId,null,{principalComponent:postedSplit.principal,interestComponent:postedSplit.interest,splitMethod:'INTEREST_FIRST_EMI_SPLIT'});
     else newTx=pushTx(`Write-off — ${loans[li].client}`,'DEBIT',fullAmt,'BAD_DEBT',loanId);
-    save(undefined,newTx,updated);setCollect({show:false,loanId:null,idx:null,partAmt:'',fullAmt:0,client:''});
+    save(undefined,newTx,updated);setCollect(blankCollect());
   };
 
   const handleCloseLoan=loan=>{
@@ -1254,6 +1415,17 @@ function App(){
     return{...t,runningBalance};
   });
   const detailC=cDetail?clientMap.find(c=>c.name===cDetail):null;
+  useEffect(()=>{
+    if(isBackendSession&&detailC?.backendId) loadClientTds(detailC.backendId);
+  },[isBackendSession,detailC?.backendId]);
+  useEffect(()=>{
+    if(!detailC) return;
+    setTdsForm(f=>({
+      ...f,
+      entryScope:String(detailC.fundingChannel||'DIRECT').toUpperCase()==='TIE_UP'?(f.entryScope||'CLIENT'):'CLIENT',
+      tieUpPartnerName:f.tieUpPartnerName||detailC.tieUpPartnerName||'',
+    }));
+  },[detailC?.name,detailC?.fundingChannel,detailC?.tieUpPartnerName]);
   const calY=calDate.getFullYear(),calM=calDate.getMonth();
   const daysInM=new Date(calY,calM+1,0).getDate(),firstD=new Date(calY,calM,1).getDay();
   const todayFull=ts();
@@ -1295,6 +1467,53 @@ function App(){
   const reportDueInstallmentCount=reportEff?toNum(reportEff.dueInstallmentCount):mDueInstCount;
   const reportFullyPaidInstallmentCount=reportEff?toNum(reportEff.fullyPaidInstallmentCount):mDueInstPaid;
   const reportAvgCollectionTicket=mCollectionsCount?reportCollectionsAmount/mCollectionsCount:0;
+  const reportMonthlyCollectionsByTieUp=Object.entries(mTx.reduce((acc,t)=>{
+    if(t.tag!=='COLLECTION'||t.type!=='CREDIT') return acc;
+    const clientName=loanClientById[t.relatedId]||String(t.desc||'').replace(/^Collection\s+[—-]\s+/,'')||'Unknown';
+    const pf=clientProfiles[clientName]||blankProfile(clientName);
+    const fundingChannel=String(pf.fundingChannel||'DIRECT').toUpperCase();
+    const partnerName=(pf.tieUpPartnerName||'').trim();
+    const key=fundingChannel==='TIE_UP'&&partnerName?`TIE_UP:${partnerName}`:'DIRECT';
+    if(!acc[key]) acc[key]={key,label:key==='DIRECT'?'Direct Clients':partnerName||'Tie-up (Unnamed)',fundingChannel:fundingChannel==='TIE_UP'?'TIE_UP':'DIRECT',collectionsAmount:0,entries:0,clients:new Set()};
+    acc[key].collectionsAmount+=toNum(t.amount);
+    acc[key].entries++;
+    acc[key].clients.add(clientName);
+    return acc;
+  },{})).map(([,r])=>({...r,clientsCount:r.clients.size}))
+    .sort((a,b)=>(b.collectionsAmount-a.collectionsAmount)||a.label.localeCompare(b.label));
+  const reportMonthlyCollectionsTieUpFiltered=reportTieUpFilter==='ALL'
+    ? reportMonthlyCollectionsByTieUp
+    : reportMonthlyCollectionsByTieUp.filter(r=>r.key===reportTieUpFilter);
+  const reportMonthlyCollectionsTieUpCumulative=reportMonthlyCollectionsTieUpFiltered.reduce((a,r)=>a+r.collectionsAmount,0);
+  const reportMonthlyCollectionsTieUpEntries=reportMonthlyCollectionsTieUpFiltered.reduce((a,r)=>a+r.entries,0);
+  const reportTdsPendingRows=(reportApiMode&&Array.isArray(backendTdsFollowup.items))?backendTdsFollowup.items:[];
+  const reportTdsSummary=reportApiMode&&backendTdsFollowup.summary?backendTdsFollowup.summary:null;
+  const reportTdsPendingTotal=reportTdsSummary?toNum(reportTdsSummary.tds_pending):reportTdsPendingRows.reduce((a,r)=>a+toNum(r.tdsAmount),0);
+  const reportTdsGrossCovered=reportTdsSummary?toNum(reportTdsSummary.gross_emi_total):reportTdsPendingRows.reduce((a,r)=>a+toNum(r.grossEmiAmount),0);
+  const reportTdsCashReceived=reportTdsSummary?toNum(reportTdsSummary.cash_received_total):reportTdsPendingRows.reduce((a,r)=>a+toNum(r.cashReceivedAmount),0);
+  const reportTdsFollowupGrouped=Object.values(reportTdsPendingRows.reduce((acc,row)=>{
+    const fundingChannel=String(row?.fundingChannel||'DIRECT').toUpperCase();
+    const partner=(row?.tieUpPartnerName||'').trim();
+    const clientName=(row?.clientName||'Unknown Client').trim()||'Unknown Client';
+    const key=fundingChannel==='TIE_UP'?(partner?`TIE_UP:${partner}`:'TIE_UP:UNNAMED'):`DIRECT:${clientName}`;
+    const label=fundingChannel==='TIE_UP'?(partner||'Tie-up (Unnamed)'):clientName;
+    const bucket=acc[key]||{
+      key,label,fundingChannel,
+      tieUpPartnerName:fundingChannel==='TIE_UP'?(partner||null):null,
+      clients:new Set(),
+      grossEmiAmount:0,cashReceivedAmount:0,tdsAmount:0,entries:0,maxAgeDays:0,
+    };
+    if(clientName) bucket.clients.add(clientName);
+    bucket.grossEmiAmount+=toNum(row.grossEmiAmount);
+    bucket.cashReceivedAmount+=toNum(row.cashReceivedAmount);
+    bucket.tdsAmount+=toNum(row.tdsAmount);
+    bucket.entries+=1;
+    const ageDays=Math.max(0,Math.floor((Date.now()-new Date(row.deductionDate).getTime())/86400000));
+    bucket.maxAgeDays=Math.max(bucket.maxAgeDays,Number.isFinite(ageDays)?ageDays:0);
+    acc[key]=bucket;
+    return acc;
+  },{})).map(r=>({...r,clientsCount:r.clients.size}))
+    .sort((a,b)=>(b.tdsAmount-a.tdsAmount)||a.label.localeCompare(b.label));
   const reportDbTx=(reportApiMode&&Array.isArray(backendReports.dayBook?.items))
     ? backendReports.dayBook.items.map(t=>({
         id:t.id,
@@ -1760,7 +1979,7 @@ function App(){
       </div>
     </Modal>
 
-    <Modal show={collect.show} onClose={()=>setCollect({...collect,show:false})} title="Record Collection">
+    <Modal show={collect.show} onClose={()=>setCollect(blankCollect())} title="Record Collection">
       <div style={{background:'var(--ob3)',borderRadius:10,padding:'11px 14px',marginBottom:14}}>
         <p style={{fontSize:11,color:'var(--st)',marginBottom:2}}>Client</p>
         <p style={{fontSize:15,fontWeight:700}}>{collect.client}</p>
@@ -1772,6 +1991,89 @@ function App(){
           <input className="inp" type="number" placeholder="Partial amount" value={collect.partAmt} onChange={e=>setCollect({...collect,partAmt:e.target.value})} style={{flex:1}}/>
           <button className="bg" onClick={()=>submitCollect(true)}>Partial</button>
         </div>
+        {isBackendSession&&toNum(collect.partAmt)>0&&toNum(collect.partAmt)<toNum(collect.fullAmt)&&(
+          <div className="card" style={{padding:11,borderStyle:'dashed'}}>
+            {(() => {
+              const cashVal=toNum(collect.partAmt);
+              const tdsVal=toNum(collect.tdsAmt);
+              const grossVal=cashVal+tdsVal;
+              const remVal=Math.max(0,toNum(collect.fullAmt)-grossVal);
+              return (
+                <>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+              <p style={{fontSize:12,fontWeight:700}}>Short Receipt Handling</p>
+              <span className="mono sn" style={{fontSize:12}}>Cash shortfall {fc(Math.max(0,toNum(collect.fullAmt)-cashVal))}</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div>
+                <span className="lbl">Reason</span>
+                <select className="inp" value={collect.shortReceiptReason||'PARTIAL'} onChange={e=>{
+                  const next=e.target.value;
+                  setCollect(c=>({
+                    ...c,
+                    shortReceiptReason:next,
+                    tdsAmt:next==='TDS' && !String(c.tdsAmt||'').trim()
+                      ? String(Math.max(0,toNum(c.fullAmt)-toNum(c.partAmt))||'')
+                      : c.tdsAmt,
+                  }));
+                }}>
+                  <option value="PARTIAL">Partial Payment</option>
+                  <option value="TDS">TDS Deducted</option>
+                </select>
+              </div>
+              {String(collect.shortReceiptReason||'PARTIAL').toUpperCase()==='TDS'&&(
+                <div>
+                  <span className="lbl">TDS Status</span>
+                  <select className="inp" value={collect.tdsReceiptStatus||'PENDING'} onChange={e=>setCollect({...collect,tdsReceiptStatus:e.target.value})}>
+                    <option value="PENDING">Pending</option>
+                    <option value="RECEIVED">Received</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            {String(collect.shortReceiptReason||'PARTIAL').toUpperCase()==='TDS'&&(
+              <>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+                  <div>
+                    <span className="lbl">Cash Received (editable)</span>
+                    <input className="inp" type="number" value={collect.partAmt} onChange={e=>setCollect({...collect,partAmt:e.target.value})} placeholder="Cash amount"/>
+                  </div>
+                  <div>
+                    <span className="lbl">TDS Amount (editable)</span>
+                    <input className="inp" type="number" value={collect.tdsAmt||''} onChange={e=>setCollect({...collect,tdsAmt:e.target.value})} placeholder="TDS deducted"/>
+                  </div>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:8}}>
+                  <div><span className="lbl">Gross EMI Settled</span><input className="inp" value={fc(grossVal)} readOnly/></div>
+                  <div><span className="lbl">Installment Due</span><input className="inp" value={fc(collect.fullAmt)} readOnly/></div>
+                  <div><span className="lbl">Still Pending</span><input className="inp" value={fc(remVal)} readOnly/></div>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+                  <div>
+                    <span className="lbl">Deducted By</span>
+                    <select className="inp" value={collect.tdsDeducedBy||'AUTO'} onChange={e=>setCollect({...collect,tdsDeducedBy:e.target.value})}>
+                      <option value="AUTO">Auto (Client/Tie-up)</option>
+                      <option value="CLIENT">Client</option>
+                      <option value="TIE_UP_PARTNER">Tie-up Partner</option>
+                    </select>
+                  </div>
+                  <div>
+                    <span className="lbl">Certificate Ref (optional)</span>
+                    <input className="inp" value={collect.tdsCertificateRef||''} onChange={e=>setCollect({...collect,tdsCertificateRef:e.target.value})} placeholder="TDS cert / challan ref"/>
+                  </div>
+                </div>
+                <div>
+                  <span className="lbl">TDS Notes (optional)</span>
+                  <input className="inp" value={collect.tdsNotes||''} onChange={e=>setCollect({...collect,tdsNotes:e.target.value})} placeholder="Who deducted / month-end note"/>
+                </div>
+                <p style={{fontSize:11,color:'var(--st)',marginTop:8,lineHeight:1.4}}>This will settle the installment on gross EMI and auto-create a linked TDS receivable follow-up entry.</p>
+              </>
+            )}
+                </>
+              );
+            })()}
+          </div>
+        )}
         <button className="bd" style={{justifyContent:'center'}} onClick={()=>submitCollect(false,true)}><I n="alert" s={14}/> Mark as Bad Debt</button>
       </div>
     </Modal>
@@ -1823,6 +2125,16 @@ function App(){
           <div><span className="lbl">KYC / ID Ref</span><input className="inp" value={editProfile.kycRef} onChange={e=>setEditProfile({...editProfile,kycRef:e.target.value})} placeholder="PAN / Aadhaar / File Ref"/></div>
           <div><span className="lbl">Risk Grade</span><select className="inp" value={editProfile.riskGrade||'STANDARD'} onChange={e=>setEditProfile({...editProfile,riskGrade:e.target.value})}>{Object.entries(RISK_META).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
         </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div><span className="lbl">Funding Type</span><select className="inp" value={editProfile.fundingChannel||'DIRECT'} onChange={e=>setEditProfile({...editProfile,fundingChannel:e.target.value})}><option value="DIRECT">DIRECT</option><option value="TIE_UP">TIE_UP</option></select></div>
+          <div>
+            <span className="lbl">Tie-up Partner (Choose / Add)</span>
+            <input className="inp" list="tieup-party-list" value={editProfile.tieUpPartnerName||''} onChange={e=>setEditProfile({...editProfile,tieUpPartnerName:e.target.value})} placeholder="Partner / intermediary name" disabled={(editProfile.fundingChannel||'DIRECT')!=='TIE_UP'}/>
+            <datalist id="tieup-party-list">
+              {tieUpPartyOptions.map(n=><option key={n} value={n}/>)}
+            </datalist>
+          </div>
+        </div>
         <div style={{marginBottom:10}}><span className="lbl">Address</span><input className="inp" value={editProfile.address} onChange={e=>setEditProfile({...editProfile,address:e.target.value})} placeholder="Address / locality"/></div>
         <div style={{marginBottom:14}}><span className="lbl">Notes</span><textarea className="inp" value={editProfile.notes} onChange={e=>setEditProfile({...editProfile,notes:e.target.value})} rows="3" placeholder="Risk notes, guarantor details, follow-up remarks..." style={{resize:'vertical'}}/></div>
         <div style={{display:'flex',gap:10}}>
@@ -1862,6 +2174,8 @@ function App(){
                 {detailC.phone&&<span className="badge bg-b">{detailC.phone}</span>}
                 {detailC.kycRef&&<span className="badge bg-go">KYC: {detailC.kycRef}</span>}
                 <span className={`badge ${RISK_META[detailC.riskGrade||'STANDARD']?.cls||'bg-g'}`}>{RISK_META[detailC.riskGrade||'STANDARD']?.label||'Standard'}</span>
+                <span className={`badge ${detailC.fundingChannel==='TIE_UP'?'bg-go':'bg-b'}`}>{detailC.fundingChannel==='TIE_UP'?'Tie-up Client':'Direct Client'}</span>
+                {detailC.fundingChannel==='TIE_UP'&&detailC.tieUpPartnerName&&<span className="badge bg-gr">Partner: {detailC.tieUpPartnerName}</span>}
               </div>
               {(detailC.address||detailC.notes)&&<p style={{fontSize:11,color:'var(--st)',marginTop:7,maxWidth:540,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={[detailC.address,detailC.notes].filter(Boolean).join(' | ')}>{detailC.address||detailC.notes}</p>}
             </div>
@@ -1876,6 +2190,86 @@ function App(){
             ))}
           </div>
           <div style={{overflowY:'auto',flex:1}}>
+            {isBackendSession&&detailC.backendId&&(
+              <div className="card" style={{marginBottom:12,padding:14}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10}}>
+                  <div>
+                    <h4 style={{fontSize:14,fontWeight:700}}>TDS Tracker (Client-wise)</h4>
+                    <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>Record TDS deducted on interest. EMI reconciliation uses: cash received + TDS = gross EMI covered.</p>
+                  </div>
+                  <button className="bgh" style={{padding:'6px 10px',fontSize:11}} onClick={()=>loadClientTds(detailC.backendId)}>{tdsBusy?'Loading...':'Refresh TDS'}</button>
+                </div>
+                {tdsMetaByClientId[detailC.backendId]?.error&&<div style={{fontSize:11,color:'var(--red)',marginBottom:8}}>{tdsMetaByClientId[detailC.backendId].error}</div>}
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:10}}>
+                  {detailC.fundingChannel==='TIE_UP'&&(
+                    <>
+                      <div><span className="lbl">TDS Entry Basis</span><select className="inp" value={tdsForm.entryScope} onChange={e=>setTdsForm({...tdsForm,entryScope:e.target.value})}><option value="CLIENT">CLIENT_WISE</option><option value="TIE_UP_PARTY_MONTHLY">TIE_UP_PARTY_MONTHLY</option></select></div>
+                      <div><span className="lbl">Tie-up Partner</span><input className="inp" list="tieup-party-list" value={tdsForm.tieUpPartnerName||detailC.tieUpPartnerName||''} onChange={e=>setTdsForm({...tdsForm,tieUpPartnerName:e.target.value})} placeholder="Tie-up partner name"/></div>
+                    </>
+                  )}
+                  <div><span className="lbl">Deduction Date</span><input className="inp" type="date" value={tdsForm.deductionDate} onChange={e=>setTdsForm({...tdsForm,deductionDate:e.target.value,periodMonth:e.target.value?.slice(0,7)||tdsForm.periodMonth})}/></div>
+                  <div><span className="lbl">Period Month</span><input className="inp" type="month" value={tdsForm.periodMonth} onChange={e=>setTdsForm({...tdsForm,periodMonth:e.target.value})}/></div>
+                  <div><span className="lbl">Gross EMI (Cash+TDS)</span><input className="inp" type="number" value={tdsForm.grossEmiAmount} onChange={e=>setTdsForm({...tdsForm,grossEmiAmount:e.target.value})}/></div>
+                  <div><span className="lbl">Cash Received (EMI)</span><input className="inp" type="number" value={tdsForm.cashReceivedAmount} onChange={e=>setTdsForm({...tdsForm,cashReceivedAmount:e.target.value})}/></div>
+                  <div><span className="lbl">TDS Deducted</span><input className="inp" type="number" value={tdsForm.tdsAmount} onChange={e=>setTdsForm({...tdsForm,tdsAmount:e.target.value})}/></div>
+                  <div><span className="lbl">TDS % (optional)</span><input className="inp" type="number" value={tdsForm.tdsRatePercent} onChange={e=>setTdsForm({...tdsForm,tdsRatePercent:e.target.value})}/></div>
+                  <div><span className="lbl">TDS Receipt Status</span><select className="inp" value={tdsForm.receiptStatus} onChange={e=>setTdsForm({...tdsForm,receiptStatus:e.target.value})}><option value="PENDING">PENDING</option><option value="RECEIVED">RECEIVED</option></select></div>
+                  <div><span className="lbl">Received Date (ITR)</span><input className="inp" type="date" value={tdsForm.receivedDate} onChange={e=>setTdsForm({...tdsForm,receivedDate:e.target.value})} disabled={tdsForm.receiptStatus!=='RECEIVED'}/></div>
+                  <div><span className="lbl">Source Type</span><select className="inp" value={tdsForm.entryScope==='TIE_UP_PARTY_MONTHLY'?'TIE_UP_SETTLEMENT':tdsForm.sourceType} onChange={e=>setTdsForm({...tdsForm,sourceType:e.target.value})} disabled={tdsForm.entryScope==='TIE_UP_PARTY_MONTHLY'}><option value="CLIENT_COLLECTION">CLIENT_COLLECTION</option><option value="TIE_UP_SETTLEMENT">TIE_UP_SETTLEMENT</option><option value="MANUAL">MANUAL</option></select></div>
+                  {tdsForm.entryScope!=='TIE_UP_PARTY_MONTHLY'&&<div><span className="lbl">Loan ID (optional)</span><input className="inp" value={tdsForm.loanId} onChange={e=>setTdsForm({...tdsForm,loanId:e.target.value})}/></div>}
+                  {tdsForm.entryScope!=='TIE_UP_PARTY_MONTHLY'&&<div><span className="lbl">Collection ID (optional)</span><input className="inp" value={tdsForm.collectionId} onChange={e=>setTdsForm({...tdsForm,collectionId:e.target.value})}/></div>}
+                  <div><span className="lbl">Certificate Ref</span><input className="inp" value={tdsForm.certificateRef} onChange={e=>setTdsForm({...tdsForm,certificateRef:e.target.value})}/></div>
+                  <div style={{gridColumn:'span 4'}}><span className="lbl">Notes</span><input className="inp" value={tdsForm.notes} onChange={e=>setTdsForm({...tdsForm,notes:e.target.value})} placeholder="Quarter, challan/certificate note, tie-up narration..." /></div>
+                </div>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10}}>
+                  <div style={{fontSize:11,color:'var(--st)'}}>
+                    Reconciliation check: <span className={`mono ${Math.abs((toNum(tdsForm.grossEmiAmount)-toNum(tdsForm.cashReceivedAmount)-toNum(tdsForm.tdsAmount)))<=0.01?'sp':'sn'}`}>{fc(toNum(tdsForm.grossEmiAmount)-toNum(tdsForm.cashReceivedAmount)-toNum(tdsForm.tdsAmount))}</span> variance
+                  </div>
+                  <button className="bg" style={{padding:'7px 12px',fontSize:12}} onClick={()=>addTdsEntry(detailC)}>Save TDS Entry</button>
+                </div>
+                {(()=>{const sum=tdsMetaByClientId[detailC.backendId]||{};return(
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:10}}>
+                    <div className="card" style={{padding:'9px 10px'}}><p style={{fontSize:9,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>Gross EMI Tagged</p><p className="mono">{fc(toNum(sum.gross_emi_total))}</p></div>
+                    <div className="card" style={{padding:'9px 10px'}}><p style={{fontSize:9,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>TDS Total</p><p className="mono">{fc(toNum(sum.tds_total))}</p></div>
+                    <div className="card" style={{padding:'9px 10px'}}><p style={{fontSize:9,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>TDS Pending (ITR)</p><p className="mono sn">{fc(toNum(sum.tds_pending))}</p></div>
+                    <div className="card" style={{padding:'9px 10px'}}><p style={{fontSize:9,color:'var(--st)',textTransform:'uppercase',fontWeight:700}}>TDS Received (ITR)</p><p className="mono sp">{fc(toNum(sum.tds_received))}</p></div>
+                  </div>
+                );})()}
+                <div style={{maxHeight:220,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8}}>
+                  <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead><tr><th>Date</th><th>Period</th><th>Type</th><th style={{textAlign:'right'}}>Cash EMI</th><th style={{textAlign:'right'}}>TDS</th><th style={{textAlign:'right'}}>Gross EMI</th><th>Status</th><th>Tag</th></tr></thead>
+                    <tbody>
+                      {(tdsByClientId[detailC.backendId]||[]).map(r=>{
+                        const variance=toNum(r.reconciliationVariance);
+                        return(
+                          <tr key={r.id}>
+                            <td>{fd(r.deductionDate)}</td>
+                            <td>{r.periodMonth||'—'}</td>
+                            <td style={{fontSize:10}}>{r.sourceType}</td>
+                            <td className="mono" style={{textAlign:'right'}}>{fc(r.cashReceivedAmount)}</td>
+                            <td className="mono" style={{textAlign:'right'}}>{fc(r.tdsAmount)}</td>
+                            <td className="mono" style={{textAlign:'right'}}>{fc(r.grossEmiAmount)}</td>
+                            <td>
+                              <button className={r.receiptStatus==='RECEIVED'?'bb':'bd'} style={{padding:'3px 7px',fontSize:10}} onClick={()=>updateTdsStatus(detailC.backendId,r.id,r.receiptStatus==='RECEIVED'?'PENDING':'RECEIVED')}>
+                                {r.receiptStatus}
+                              </button>
+                            </td>
+                            <td>
+                              <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                                <span className={`badge ${r.fundingChannel==='TIE_UP'?'bg-go':'bg-b'}`}>{r.fundingChannel==='TIE_UP'?'Tie-up':'Direct'}</span>
+                                {r.tieUpPartnerName&&<span className="badge bg-gr" title={r.tieUpPartnerName}>{r.tieUpPartnerName}</span>}
+                                {Math.abs(variance)>0.01&&<span className="badge bg-r">VAR {fc(variance)}</span>}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!(tdsByClientId[detailC.backendId]||[]).length&&<tr><td colSpan="8" style={{padding:14,textAlign:'center',color:'var(--st)'}}>No TDS entries for this client yet.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             {detailC.loans.map(l=>{
               const coll=l.schedule.reduce((a,p)=>a+(p.paid||0),0);
               const pct=l.total?Math.round((coll/l.total)*100):0;
@@ -2297,8 +2691,10 @@ function App(){
                     <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       <h3 style={{fontSize:15,fontWeight:700}}>{c.name}</h3>
                       <span className={`badge ${RISK_META[c.riskGrade||'STANDARD']?.cls||'bg-g'}`}>{RISK_META[c.riskGrade||'STANDARD']?.label||'Standard'}</span>
+                      <span className={`badge ${c.fundingChannel==='TIE_UP'?'bg-go':'bg-b'}`}>{c.fundingChannel==='TIE_UP'?'Tie-up':'Direct'}</span>
                     </div>
                     <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>{c.loans.length} loan(s) · {c.loans.filter(l=>l.status==='Active').length} active</p>
+                    {c.fundingChannel==='TIE_UP'&&!!c.tieUpPartnerName&&<p style={{fontSize:10,color:'var(--st)',marginTop:2}}>Partner: {c.tieUpPartnerName}</p>}
                   </div>
                   {c.totalDue>0&&<span className="badge bg-r">{fc(c.totalDue)}</span>}
                 </div>
@@ -2484,10 +2880,101 @@ function App(){
               </div>
               <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
                 <div><span className="lbl">Month</span><input type="month" className="inp" value={repMonth} onChange={e=>setRepMonth(e.target.value)} style={{width:170}}/></div>
+                <div>
+                  <span className="lbl">Tie-up Collection View</span>
+                  <select className="inp" value={reportTieUpFilter} onChange={e=>setReportTieUpFilter(e.target.value)} style={{width:220}}>
+                    <option value="ALL">All (Direct + Tie-up)</option>
+                    <option value="DIRECT">Direct Clients Only</option>
+                    {tieUpPartyOptions.map(name=><option key={name} value={`TIE_UP:${name}`}>Tie-up: {name}</option>)}
+                  </select>
+                </div>
                 <button className="bgh" onClick={()=>setView('PDF')}><I n="printer" s={14}/> PDF View</button>
               </div>
             </div>
           </div>
+          <div className="card" style={{padding:14,marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:10,flexWrap:'wrap',marginBottom:10}}>
+              <div>
+                <h3 style={{fontSize:14,fontWeight:700}}>Monthly Collection Split by Tie-up / Direct</h3>
+                <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>Cumulative view for {reportMonthLabel}. Use dropdown above to filter by tie-up party.</p>
+              </div>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                <div style={{textAlign:'right'}}><p style={{fontSize:10,color:'var(--st)'}}>Cumulative Collections</p><p className="mono sp" style={{fontSize:14,fontWeight:700}}>{fc(reportMonthlyCollectionsTieUpCumulative)}</p></div>
+                <div style={{textAlign:'right'}}><p style={{fontSize:10,color:'var(--st)'}}>Collection Entries</p><p className="mono sb" style={{fontSize:14,fontWeight:700}}>{reportMonthlyCollectionsTieUpEntries}</p></div>
+              </div>
+            </div>
+            <div style={{maxHeight:220,overflow:'auto',border:'1px solid var(--border)',borderRadius:8}}>
+              <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                <thead><tr><th>Bucket</th><th>Type</th><th style={{textAlign:'right'}}>Clients</th><th style={{textAlign:'right'}}>Entries</th><th style={{textAlign:'right'}}>Collections</th></tr></thead>
+                <tbody>
+                  {reportMonthlyCollectionsTieUpFiltered.map(r=>(
+                    <tr key={r.key}>
+                      <td>{r.label}</td>
+                      <td><span className={`badge ${r.fundingChannel==='TIE_UP'?'bg-go':'bg-b'}`}>{r.fundingChannel==='TIE_UP'?'Tie-up':'Direct'}</span></td>
+                      <td style={{textAlign:'right'}} className="mono">{r.clientsCount}</td>
+                      <td style={{textAlign:'right'}} className="mono">{r.entries}</td>
+                      <td style={{textAlign:'right'}} className="mono sp">{fc(r.collectionsAmount)}</td>
+                    </tr>
+                  ))}
+                  {reportMonthlyCollectionsTieUpFiltered.length===0&&<tr><td colSpan="5" style={{padding:14,textAlign:'center',color:'var(--st)'}}>No collection entries for selected filter in {reportMonthLabel}.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {reportApiMode&&(
+            <div className="card" style={{padding:14,marginBottom:14}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:10,flexWrap:'wrap',marginBottom:10}}>
+                <div>
+                  <h3 style={{fontSize:14,fontWeight:700}}>TDS Receivable Follow-up ({reportMonthLabel})</h3>
+                  <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>Pending TDS to follow up for receipt / ITR reconciliation. Shows direct clients and tie-up partners.</p>
+                </div>
+                <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'flex-end'}}>
+                  <div style={{textAlign:'right'}}><p style={{fontSize:10,color:'var(--st)'}}>Pending TDS</p><p className="mono sn" style={{fontSize:14,fontWeight:700}}>{fc(reportTdsPendingTotal)}</p></div>
+                  <div style={{textAlign:'right'}}><p style={{fontSize:10,color:'var(--st)'}}>Gross EMI Covered</p><p className="mono sb" style={{fontSize:14,fontWeight:700}}>{fc(reportTdsGrossCovered)}</p></div>
+                  <div style={{textAlign:'right'}}><p style={{fontSize:10,color:'var(--st)'}}>Cash Received</p><p className="mono sp" style={{fontSize:14,fontWeight:700}}>{fc(reportTdsCashReceived)}</p></div>
+                </div>
+              </div>
+              {backendTdsFollowup.error&&<div style={{fontSize:11,color:'var(--red)',marginBottom:8}}>{backendTdsFollowup.error}</div>}
+              {backendTdsFollowup.loading&&<div style={{fontSize:11,color:'var(--st)',marginBottom:8}}>Loading TDS follow-up...</div>}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1.2fr',gap:12}}>
+                <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'auto',maxHeight:250}}>
+                  <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead><tr><th>From Whom</th><th>Type</th><th style={{textAlign:'right'}}>Entries</th><th style={{textAlign:'right'}}>Pending TDS</th><th style={{textAlign:'right'}}>Max Age</th></tr></thead>
+                    <tbody>
+                      {reportTdsFollowupGrouped.map(g=>(
+                        <tr key={g.key}>
+                          <td>{g.label}</td>
+                          <td><span className={`badge ${g.fundingChannel==='TIE_UP'?'bg-go':'bg-b'}`}>{g.fundingChannel==='TIE_UP'?'Tie-up':'Direct'}</span></td>
+                          <td style={{textAlign:'right'}} className="mono">{g.entries}</td>
+                          <td style={{textAlign:'right'}} className="mono sn">{fc(g.tdsAmount)}</td>
+                          <td style={{textAlign:'right'}} className="mono">{g.maxAgeDays}d</td>
+                        </tr>
+                      ))}
+                      {!reportTdsFollowupGrouped.length&&<tr><td colSpan="5" style={{padding:14,textAlign:'center',color:'var(--st)'}}>No pending TDS follow-up for {reportMonthLabel}.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'auto',maxHeight:250}}>
+                  <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead><tr><th>Date</th><th>Client / Partner</th><th>Type</th><th style={{textAlign:'right'}}>Gross</th><th style={{textAlign:'right'}}>Cash</th><th style={{textAlign:'right'}}>TDS</th></tr></thead>
+                    <tbody>
+                      {reportTdsPendingRows.map(r=>(
+                        <tr key={r.id}>
+                          <td className="mono">{fd(r.deductionDate)}</td>
+                          <td>{String(r.fundingChannel||'').toUpperCase()==='TIE_UP'?(r.tieUpPartnerName||r.clientName||'Tie-up (Unnamed)'):(r.clientName||'Unknown Client')}</td>
+                          <td><span className={`badge ${String(r.fundingChannel||'').toUpperCase()==='TIE_UP'?'bg-go':'bg-b'}`}>{String(r.fundingChannel||'').toUpperCase()==='TIE_UP'?'Tie-up':'Direct'}</span></td>
+                          <td style={{textAlign:'right'}} className="mono">{fc(toNum(r.grossEmiAmount))}</td>
+                          <td style={{textAlign:'right'}} className="mono sp">{fc(toNum(r.cashReceivedAmount))}</td>
+                          <td style={{textAlign:'right'}} className="mono sn">{fc(toNum(r.tdsAmount))}</td>
+                        </tr>
+                      ))}
+                      {!reportTdsPendingRows.length&&<tr><td colSpan="6" style={{padding:14,textAlign:'center',color:'var(--st)'}}>No pending TDS entries in selected month.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
             {[
               ['Payments Done',String(mCollectionsCount),'sb'],

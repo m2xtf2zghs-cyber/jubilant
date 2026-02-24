@@ -5,6 +5,8 @@ const {
   xnpv,
   buildChitCostCashflows,
   buildChitYieldCashflows,
+  buildAutoAttributedReturnsLoanLinked,
+  buildTreasuryPoolAttributedReturns,
   summarizeChit,
   summarizePortfolio,
 } = require('../src/services/chit-calculations');
@@ -99,4 +101,114 @@ test('summarizePortfolio returns required structured JSON keys', () => {
   assert.ok(Array.isArray(out.stress_table_monthly));
   assert.ok(Array.isArray(out.cashflow_series_per_chit));
   assert.ok(Array.isArray(out.audit_log));
+});
+
+test('auto attribution derives loan-linked principal and interest by chit funding share', () => {
+  const out = buildAutoAttributedReturnsLoanLinked({
+    chit: { id: 'ch1' },
+    mode: 'AUTO',
+    allocations: [
+      { id: 'a1', purpose: 'LENDING', linked_loan_id: 'l1', amount_allocated: 50000 },
+    ],
+    manualReturns: [],
+    loansById: {
+      l1: { id: 'l1', principal_amount: 100000, interest_amount: 20000, total_amount: 120000 },
+    },
+    collections: [
+      { id: 'c1', loan_id: 'l1', amount: 12000, principal_component: 10000, interest_component: 2000, collection_date: '2026-05-01' },
+      { id: 'c2', loan_id: 'l1', amount: 12000, principal_component: 10000, interest_component: 2000, collection_date: '2026-06-01' },
+    ],
+  });
+
+  assert.equal(out.returnsMode, 'AUTO');
+  assert.equal(out.effectiveReturns.length, 2);
+  assert.equal(out.attribution.linkedLendingAllocationAmount, 50000);
+  assert.equal(out.attribution.autoDerivedCapitalReturned, 10000);
+  assert.equal(out.attribution.autoDerivedInterestIncome, 2000);
+  assert.equal(out.attribution.warnings.length, 0);
+});
+
+test('hybrid mode manual return with linked collection overrides auto row for same collection', () => {
+  const out = buildAutoAttributedReturnsLoanLinked({
+    chit: { id: 'ch1' },
+    mode: 'HYBRID',
+    allocations: [{ purpose: 'LENDING', linked_loan_id: 'l1', amount_allocated: 100000 }],
+    loansById: { l1: { id: 'l1', principal_amount: 100000, interest_amount: 10000, total_amount: 110000 } },
+    collections: [
+      { id: 'c1', loan_id: 'l1', amount: 11000, principal_component: 10000, interest_component: 1000, collection_date: '2026-07-01' },
+    ],
+    manualReturns: [
+      {
+        id: 'mr1',
+        return_date: '2026-07-01',
+        amount_returned: 9000,
+        interest_income_amount: 1500,
+        other_income_amount: 0,
+        linked_collection_id: 'c1',
+      },
+    ],
+  });
+
+  assert.equal(out.effectiveReturns.length, 1);
+  assert.equal(out.effectiveReturns[0].id, 'mr1');
+  assert.equal(out.autoDerivedReturns.length, 1);
+  assert.equal(out.attribution.method, 'LOAN_LINKED_EXACT_WITH_MANUAL_OVERRIDE');
+});
+
+test('auto attribution warns when non-loan allocations exist', () => {
+  const out = buildAutoAttributedReturnsLoanLinked({
+    chit: { id: 'ch1' },
+    mode: 'AUTO',
+    allocations: [{ purpose: 'OTHER', amount_allocated: 25000 }],
+    manualReturns: [],
+    loansById: {},
+    collections: [],
+  });
+  assert.ok(out.attribution.nonLoanAllocationAmount > 0);
+  assert.ok(out.attribution.warnings.some((w) => /Non-loan/i.test(w)));
+});
+
+test('treasury pool PRO_RATA allocates residual collections across chits by open balance', () => {
+  const out = buildTreasuryPoolAttributedReturns({
+    policy: 'PRO_RATA',
+    treasuryAllocations: [
+      { id: 'a1', chitId: 'c1', allocation_date: '2026-01-01', amount_allocated: 100000 },
+      { id: 'a2', chitId: 'c2', allocation_date: '2026-01-01', amount_allocated: 50000 },
+    ],
+    residualCollections: [
+      { collectionId: 'col1', date: '2026-02-01', principalResidual: 15000, interestResidual: 3000 },
+    ],
+  });
+
+  const c1 = out.autoReturnsByChit.get('c1') || [];
+  const c2 = out.autoReturnsByChit.get('c2') || [];
+  assert.equal(out.treasuryPolicy, 'PRO_RATA');
+  assert.equal(c1.length, 1);
+  assert.equal(c2.length, 1);
+  const c1Amt = (c1[0].amount_returned + c1[0].interest_income_amount);
+  const c2Amt = (c2[0].amount_returned + c2[0].interest_income_amount);
+  assert.ok(c1Amt > c2Amt);
+  assert.equal(
+    Number((c1[0].amount_returned + c2[0].amount_returned).toFixed(2)),
+    15000,
+  );
+});
+
+test('treasury pool FIFO allocates principal to oldest chit allocation first', () => {
+  const out = buildTreasuryPoolAttributedReturns({
+    policy: 'FIFO',
+    treasuryAllocations: [
+      { id: 'a1', chitId: 'c1', allocation_date: '2026-01-01', amount_allocated: 10000 },
+      { id: 'a2', chitId: 'c2', allocation_date: '2026-02-01', amount_allocated: 10000 },
+    ],
+    residualCollections: [
+      { collectionId: 'col1', date: '2026-03-01', principalResidual: 6000, interestResidual: 0 },
+      { collectionId: 'col2', date: '2026-04-01', principalResidual: 6000, interestResidual: 0 },
+    ],
+  });
+  const c1 = (out.autoReturnsByChit.get('c1') || []).reduce((s, r) => s + r.amount_returned, 0);
+  const c2 = (out.autoReturnsByChit.get('c2') || []).reduce((s, r) => s + r.amount_returned, 0);
+  assert.equal(out.treasuryPolicy, 'FIFO');
+  assert.equal(c1, 10000);
+  assert.equal(c2, 2000);
 });

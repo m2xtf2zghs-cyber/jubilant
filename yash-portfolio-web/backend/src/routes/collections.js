@@ -18,6 +18,17 @@ function parseJsonObject(value) {
   }
 }
 
+function asDateOnly(value, fieldName) {
+  if (!value) throw new ApiError(422, 'VALIDATION_ERROR', `${fieldName} is required`);
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) throw new ApiError(422, 'VALIDATION_ERROR', `${fieldName} is invalid`);
+  return d.toISOString().slice(0, 10);
+}
+
+function monthFromDate(dateOnly) {
+  return String(dateOnly).slice(0, 7);
+}
+
 function deriveInstallmentSplit(loan, installment) {
   const metadata = parseJsonObject(installment.metadata);
   const scheduled = toPaise(installment.scheduled_amount);
@@ -115,6 +126,17 @@ router.post('/', asyncHandler(async (req, res) => {
   const installmentId = String(body.installmentId || '').trim();
   const clientId = String(body.clientId || '').trim();
   const amountPaise = toPaise(body.amount || 0);
+  const cashReceivedAmountPaiseInput = body.cashReceivedAmount == null || body.cashReceivedAmount === ''
+    ? null
+    : toPaise(body.cashReceivedAmount);
+  const tdsDeductedAmountPaise = toPaise(body.tdsDeductedAmount || 0);
+  const tdsReceiptStatus = String(body.tdsReceiptStatus || 'PENDING').trim().toUpperCase();
+  const tdsReceivedDate = body.tdsReceivedDate == null || body.tdsReceivedDate === '' ? null : body.tdsReceivedDate;
+  const tdsCertificateRef = body.tdsCertificateRef == null ? null : String(body.tdsCertificateRef).trim() || null;
+  const tdsSourceTypeInput = String(body.tdsSourceType || '').trim().toUpperCase();
+  const tdsFundingChannelInput = body.tdsFundingChannel == null ? null : String(body.tdsFundingChannel).trim().toUpperCase();
+  const tdsTieUpPartnerNameInput = body.tdsTieUpPartnerName == null ? null : String(body.tdsTieUpPartnerName).trim() || null;
+  const tdsNotes = body.tdsNotes == null ? null : String(body.tdsNotes);
   const isWriteoff = !!body.isWriteoff;
   const paymentMode = String(body.paymentMode || 'CASH').trim() || 'CASH';
   const notes = body.notes == null ? null : String(body.notes);
@@ -130,8 +152,34 @@ router.post('/', asyncHandler(async (req, res) => {
   if (amountPaise <= 0) {
     throw new ApiError(422, 'VALIDATION_ERROR', 'amount must be greater than zero');
   }
+  if (cashReceivedAmountPaiseInput != null && cashReceivedAmountPaiseInput < 0) {
+    throw new ApiError(422, 'VALIDATION_ERROR', 'cashReceivedAmount cannot be negative');
+  }
+  if (tdsDeductedAmountPaise < 0) {
+    throw new ApiError(422, 'VALIDATION_ERROR', 'tdsDeductedAmount cannot be negative');
+  }
+  if (tdsDeductedAmountPaise > 0 && !['PENDING', 'RECEIVED'].includes(tdsReceiptStatus)) {
+    throw new ApiError(422, 'VALIDATION_ERROR', 'tdsReceiptStatus must be PENDING or RECEIVED');
+  }
   if (Number.isNaN(collectionDate.getTime())) {
     throw new ApiError(422, 'VALIDATION_ERROR', 'Invalid collectionDate');
+  }
+  if (tdsReceivedDate != null) {
+    asDateOnly(tdsReceivedDate, 'tdsReceivedDate');
+  }
+
+  const cashReceivedAmountPaise = cashReceivedAmountPaiseInput == null
+    ? (isWriteoff ? 0 : amountPaise)
+    : cashReceivedAmountPaiseInput;
+  if (!isWriteoff && (cashReceivedAmountPaise + tdsDeductedAmountPaise !== amountPaise)) {
+    throw new ApiError(422, 'VALIDATION_ERROR', 'For TDS short receipt, amount must equal cashReceivedAmount + tdsDeductedAmount', {
+      amount: fromPaise(amountPaise),
+      cashReceivedAmount: fromPaise(cashReceivedAmountPaise),
+      tdsDeductedAmount: fromPaise(tdsDeductedAmountPaise),
+    });
+  }
+  if (isWriteoff && (cashReceivedAmountPaise > 0 || tdsDeductedAmountPaise > 0)) {
+    throw new ApiError(422, 'VALIDATION_ERROR', 'Write-off cannot include cashReceivedAmount or tdsDeductedAmount');
   }
 
   const result = await withTransaction(async (client) => {
@@ -170,7 +218,9 @@ router.post('/', asyncHandler(async (req, res) => {
         i.paid_amount,
         i.status as installment_status,
         i.metadata,
-        c.name as client_name
+        c.name as client_name,
+        c.funding_channel as client_funding_channel,
+        c.tie_up_partner_name as client_tie_up_partner_name
       from loans l
       join installments i on i.loan_id = l.id and i.organization_id = l.organization_id
       join clients c on c.id = l.client_id and c.organization_id = l.organization_id
@@ -264,14 +314,16 @@ router.post('/', asyncHandler(async (req, res) => {
       `
       insert into collections (
         organization_id, loan_id, installment_id, client_id, amount,
+        cash_received_amount, tds_deducted_amount,
         principal_component, interest_component, split_method,
         collection_date, payment_mode, receipt_number, is_partial, is_writeoff, notes,
         agent_user_id, idempotency_key, source_device_id, created_by
       ) values (
         $1,$2,$3,$4,$5,
-        $6,$7,$8,
-        $9,$10,$11,$12,$13,$14,
-        $15,$16,$17,$18
+        $6,$7,
+        $8,$9,$10,
+        $11,$12,$13,$14,$15,$16,
+        $17,$18,$19,$20
       )
       returning *
       `,
@@ -281,6 +333,8 @@ router.post('/', asyncHandler(async (req, res) => {
         row.installment_id,
         row.client_id,
         fromPaise(amountPaise),
+        fromPaise(cashReceivedAmountPaise),
+        fromPaise(tdsDeductedAmountPaise),
         isWriteoff ? null : fromPaise(principalComponentPaise),
         isWriteoff ? null : fromPaise(interestComponentPaise),
         isWriteoff ? null : 'INTEREST_FIRST_EMI_SPLIT',
@@ -298,6 +352,59 @@ router.post('/', asyncHandler(async (req, res) => {
       client
     );
     const collection = collectionInsert.rows[0];
+
+    let tdsEntry = null;
+    if (!isWriteoff && tdsDeductedAmountPaise > 0) {
+      const deductionDate = collectionDate.toISOString().slice(0, 10);
+      const fundingChannel = ['DIRECT', 'TIE_UP'].includes(String(tdsFundingChannelInput || ''))
+        ? tdsFundingChannelInput
+        : String(row.client_funding_channel || 'DIRECT').toUpperCase();
+      const tieUpPartnerName = (tdsTieUpPartnerNameInput != null)
+        ? tdsTieUpPartnerNameInput
+        : (row.client_tie_up_partner_name || null);
+      const sourceType = (() => {
+        if (['CLIENT_COLLECTION', 'TIE_UP_SETTLEMENT', 'MANUAL'].includes(tdsSourceTypeInput)) return tdsSourceTypeInput;
+        if (fundingChannel === 'TIE_UP' && tieUpPartnerName) return 'TIE_UP_SETTLEMENT';
+        return 'CLIENT_COLLECTION';
+      })();
+      const insertTds = await query(
+        `
+        insert into client_tds_entries (
+          organization_id, client_id, loan_id, collection_id, deduction_date, period_month,
+          gross_emi_amount, cash_received_amount, tds_amount,
+          receipt_status, received_date, certificate_ref, source_type,
+          client_funding_channel_snapshot, tie_up_partner_name_snapshot, notes, created_by
+        ) values (
+          $1,$2,$3,$4,$5,$6,
+          $7,$8,$9,
+          $10,$11,$12,$13,
+          $14,$15,$16,$17
+        )
+        returning *
+        `,
+        [
+          orgId,
+          row.client_id,
+          row.loan_id,
+          collection.id,
+          deductionDate,
+          monthFromDate(deductionDate),
+          fromPaise(amountPaise),
+          fromPaise(cashReceivedAmountPaise),
+          fromPaise(tdsDeductedAmountPaise),
+          tdsReceiptStatus,
+          tdsReceiptStatus === 'RECEIVED' ? asDateOnly(tdsReceivedDate || deductionDate, 'tdsReceivedDate') : null,
+          tdsCertificateRef,
+          sourceType,
+          fundingChannel,
+          fundingChannel === 'TIE_UP' ? (tieUpPartnerName || null) : null,
+          tdsNotes,
+          userId,
+        ],
+        client
+      );
+      tdsEntry = insertTds.rows[0] || null;
+    }
 
     await query(
       `
@@ -337,7 +444,7 @@ router.post('/', asyncHandler(async (req, res) => {
         collectionDate.toISOString(),
         isWriteoff ? 'DEBIT' : 'CREDIT',
         isWriteoff ? 'BAD_DEBT' : 'COLLECTION',
-        fromPaise(amountPaise),
+        fromPaise(isWriteoff ? amountPaise : cashReceivedAmountPaise),
         `${isWriteoff ? 'Write-off' : 'Collection'} — ${row.client_name}`,
         row.client_id,
         row.loan_id,
@@ -389,9 +496,14 @@ router.post('/', asyncHandler(async (req, res) => {
           loanId: row.loan_id,
           installmentId: row.installment_id,
           splitMethod: isWriteoff ? null : 'INTEREST_FIRST_EMI_SPLIT',
+          grossSettlementAmount: fromPaise(amountPaise),
+          cashReceivedAmount: isWriteoff ? 0 : fromPaise(cashReceivedAmountPaise),
+          tdsDeductedAmount: isWriteoff ? 0 : fromPaise(tdsDeductedAmountPaise),
         }),
         JSON.stringify({
           amount: fromPaise(amountPaise),
+          cashReceivedAmount: isWriteoff ? 0 : fromPaise(cashReceivedAmountPaise),
+          tdsDeductedAmount: isWriteoff ? 0 : fromPaise(tdsDeductedAmountPaise),
           principalComponent: isWriteoff ? null : fromPaise(principalComponentPaise),
           interestComponent: isWriteoff ? null : fromPaise(interestComponentPaise),
           installmentStatus: nextInstallmentStatus,
@@ -435,6 +547,18 @@ router.post('/', asyncHandler(async (req, res) => {
         interestComponent: fromPaise(interestComponentPaise),
         splitMethod: 'INTEREST_FIRST_EMI_SPLIT',
       },
+      settlement: {
+        grossAmount: fromPaise(amountPaise),
+        cashReceivedAmount: isWriteoff ? 0 : fromPaise(cashReceivedAmountPaise),
+        tdsDeductedAmount: isWriteoff ? 0 : fromPaise(tdsDeductedAmountPaise),
+      },
+      tds: tdsEntry ? {
+        id: tdsEntry.id,
+        tdsAmount: Number(tdsEntry.tds_amount),
+        receiptStatus: tdsEntry.receipt_status,
+        fundingChannel: tdsEntry.client_funding_channel_snapshot,
+        tieUpPartnerName: tdsEntry.tie_up_partner_name_snapshot,
+      } : null,
     };
   });
 
