@@ -109,6 +109,68 @@ Recommended:
 - Run this daily/weekly and store a copy in secure cloud storage (private drive/S3)
 - Also keep periodic PostgreSQL physical dumps (`pg_dump`) for disaster recovery
 
+## S3 Backup Upload (recommended)
+Upload a generated JSON backup directly to Amazon S3:
+
+```bash
+npm run backup:json:s3 -- --orgCode=ymjcapital
+```
+
+Required env vars (local/Render Cron):
+- `AWS_REGION`
+- `S3_BACKUP_BUCKET`
+- `S3_BACKUP_PREFIX` (optional, default: `yash-portfolio`)
+- Standard AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`)
+
+S3 object naming (retention-friendly):
+- Daily timestamped: `.../json/daily/YYYY/MM/ymjcapital-YYYYMMDDTHHMMSSZ.json`
+- Daily latest pointer: `.../json/daily/ymjcapital-latest.json`
+- Month-end snapshot (auto on last day): `.../json/monthly/YYYY/ymjcapital-YYYY-MM.json`
+- Year-end snapshot (auto on Dec 31): `.../json/yearly/YYYY/ymjcapital-YYYY.json`
+
+Use S3 Lifecycle rules for retention:
+- Daily (`/json/daily/`): expire after 30 days
+- Monthly (`/json/monthly/`): expire after 365 days
+- Yearly (`/json/yearly/`): expire after 2555 days (7 years)
+
+## Weekly pg_dump Script (full DB backup)
+Script file:
+- `scripts/pgdump-weekly.sh`
+
+Example run (from environment that has `pg_dump` installed):
+```bash
+chmod +x scripts/pgdump-weekly.sh
+./scripts/pgdump-weekly.sh
+```
+
+Optional envs:
+- `PGDUMP_BACKUP_DIR` (default `./backups/pgdump`)
+- `PGDUMP_RETENTION_WEEKS` (default `12`)
+- `PGDUMP_NAME_PREFIX` (default `yash-portfolio-db`)
+
+Filename pattern (retention-friendly):
+- `yash-portfolio-db-weekly-YYYY-Www.sql.gz`
+
+Note:
+- Render native Node services/cron jobs may not include `pg_dump`. Run this from:
+  - a small VM
+  - GitHub Actions runner
+  - local machine with PostgreSQL client tools installed
+
+## Render Cron Job (daily JSON -> S3)
+Prepared Blueprint file:
+- `../render-backup-cron.yaml`
+
+Suggested schedule:
+- `0 17 * * *` (runs at `10:30 PM IST`, Render cron uses UTC)
+
+Set these env vars on the cron service:
+- `DATABASE_URL` (use Render Postgres external URL unless cron is in same region and using internal networking)
+- `AWS_REGION`
+- `S3_BACKUP_BUCKET`
+- `S3_BACKUP_PREFIX`
+- AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
+
 ## Frontend integration notes
 - Base URL: `/api/v1`
 - Use `Authorization: Bearer <accessToken>`

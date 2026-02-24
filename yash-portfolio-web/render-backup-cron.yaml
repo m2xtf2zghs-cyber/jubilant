@@ -1,0 +1,32 @@
+services:
+  - type: cron
+    name: yash-portfolio-backup-daily
+    runtime: node
+    rootDir: yash-portfolio-web/backend
+    region: singapore
+    plan: starter
+    schedule: "0 17 * * *" # 10:30 PM IST (Render cron uses UTC)
+    buildCommand: npm ci
+    startCommand: npm run backup:json:s3 -- --orgCode=ymjcapital
+    autoDeployTrigger: commit
+    buildFilter:
+      paths:
+        - yash-portfolio-web/backend/**
+        - yash-portfolio-web/render-backup-cron.yaml
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: S3_BACKUP_BUCKET
+        sync: false
+      - key: S3_BACKUP_PREFIX
+        value: yash-portfolio
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_SESSION_TOKEN
+        sync: false

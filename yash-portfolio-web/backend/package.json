@@ -10,9 +10,11 @@
     "check": "node --check src/server.js",
     "db:apply-schema": "node scripts/apply-schema.js",
     "seed:admin": "node scripts/seed-admin.js",
-    "backup:json": "node scripts/backup-json.js"
+    "backup:json": "node scripts/backup-json.js",
+    "backup:json:s3": "node scripts/backup-json-s3.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.893.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
