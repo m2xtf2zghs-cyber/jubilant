@@ -1289,6 +1289,11 @@ function App(){
     const{loanId,idx,fullAmt,partAmt}=collect;
     const amount=badDebt?0:(partial?parseFloat(partAmt):fullAmt);
     if(partial&&(amount<=0||amount>fullAmt))return alert('Invalid partial amount');
+    if(partial&&!badDebt&&String(collect.shortReceiptReason||'PARTIAL').toUpperCase()==='TDS'){
+      const gross=toNum(amount)+Math.max(0,toNum(collect.tdsAmt));
+      if(gross<=0) return alert('Enter valid cash/TDS amounts');
+      if(gross>toNum(fullAmt)) return alert('Cash + TDS cannot exceed installment due');
+    }
     const li=loans.findIndex(l=>l.id===loanId);
     if(li<0) return alert('Loan not found');
     if(isBackendSession){
@@ -2172,6 +2177,18 @@ function App(){
               );
             })()}
           </div>
+        )}
+        {isBackendSession&&toNum(collect.partAmt)>0&&toNum(collect.partAmt)<toNum(collect.fullAmt)&&(
+          <button
+            className="bg"
+            style={{justifyContent:'center'}}
+            onClick={()=>submitCollect(true)}
+          >
+            <I n="check" s={14}/>
+            {String(collect.shortReceiptReason||'PARTIAL').toUpperCase()==='TDS'
+              ? `Save Collection + TDS (${fc(toNum(collect.partAmt)+Math.max(0,toNum(collect.tdsAmt)))})`
+              : `Save Partial Collection (${fc(toNum(collect.partAmt))})`}
+          </button>
         )}
         <button className="bd" style={{justifyContent:'center'}} onClick={()=>submitCollect(false,true)}><I n="alert" s={14}/> Mark as Bad Debt</button>
       </div>
