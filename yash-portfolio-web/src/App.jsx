@@ -2452,6 +2452,7 @@ function App(){
           {id:'CALENDAR',   icon:'calendar',  label:'Calendar'},
           {id:'EXPENSES',   icon:'card',      label:'Expenses'},
           {id:'CHITS',      icon:'percent',   label:'Chits ROI'},
+          {id:'TDS',        icon:'report',    label:'TDS'},
           {id:'REPORTS',    icon:'report',    label:'Reports'},
           {id:'PDF',        icon:'printer',   label:'PDF Generator'},
         ].map(item=>(
@@ -2969,6 +2970,111 @@ function App(){
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* TDS */}
+      {view==='TDS'&&(
+        <div className="fade-in">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:12,flexWrap:'wrap',marginBottom:20}}>
+            <div>
+              <h2 style={{fontSize:24,fontWeight:800}}>TDS Tracker</h2>
+              <p style={{color:'var(--st)',fontSize:13,marginTop:2}}>Month-end TDS receivable follow-up (Direct + Tie-up) for ITR reconciliation.</p>
+            </div>
+            <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+              <div><span className="lbl">Month</span><input type="month" className="inp" value={repMonth} onChange={e=>setRepMonth(e.target.value)} style={{width:170}}/></div>
+              <button className="bgh" onClick={()=>setView('REPORTS')}><I n="report" s={14}/> Open Reports</button>
+              <button className="bgh" onClick={()=>setView('COLLECTIONS')}><I n="coins" s={14}/> Collections</button>
+            </div>
+          </div>
+
+          {!reportApiMode&&(
+            <div className="card" style={{padding:16}}>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:4}}>Backend mode required</p>
+              <p style={{fontSize:12,color:'var(--st)'}}>TDS follow-up uses backend API data. Log in using backend mode to use this screen.</p>
+            </div>
+          )}
+
+          {reportApiMode&&(
+            <>
+              <div className="card" style={{padding:12,marginBottom:14,borderColor:'rgba(96,165,250,.2)',background:'linear-gradient(180deg, rgba(96,165,250,.04), rgba(96,165,250,.01))'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                  <div>
+                    <p style={{fontSize:12,fontWeight:700}}>Backend TDS Follow-up API</p>
+                    <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>
+                      Pending TDS receivables by client / tie-up partner for {reportMonthLabel}.
+                      {backendTdsFollowup.lastFetchedAt?` Updated ${new Date(backendTdsFollowup.lastFetchedAt).toLocaleTimeString('en-IN')}.`:''}
+                    </p>
+                  </div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    <span className="badge bg-b">{backendTdsFollowup.loading?'Syncing TDS...':'API Mode'}</span>
+                    {backendTdsFollowup.error&&<span className="badge bg-r" title={backendTdsFollowup.error}>TDS API Error</span>}
+                  </div>
+                </div>
+                {backendTdsFollowup.error&&<div style={{marginTop:8,fontSize:11,color:'var(--red)'}}>{backendTdsFollowup.error}</div>}
+              </div>
+
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10,marginBottom:14}}>
+                <div className="card" style={{padding:'11px 12px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Pending TDS</p><p className="mono sn" style={{fontSize:14,fontWeight:700}}>{fc(reportTdsPendingTotal)}</p></div>
+                <div className="card" style={{padding:'11px 12px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Gross EMI Covered</p><p className="mono sb" style={{fontSize:14,fontWeight:700}}>{fc(reportTdsGrossCovered)}</p></div>
+                <div className="card" style={{padding:'11px 12px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Cash Received</p><p className="mono sp" style={{fontSize:14,fontWeight:700}}>{fc(reportTdsCashReceived)}</p></div>
+                <div className="card" style={{padding:'11px 12px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Pending Entries</p><p className="mono" style={{fontSize:14,fontWeight:700}}>{reportTdsPendingRows.length}</p></div>
+              </div>
+
+              <div className="card" style={{padding:14,marginBottom:14}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:10,flexWrap:'wrap',marginBottom:10}}>
+                  <div>
+                    <h3 style={{fontSize:14,fontWeight:700}}>Pending TDS by Client / Tie-up Partner</h3>
+                    <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>Shows from whom TDS amount is still receivable in {reportMonthLabel}.</p>
+                  </div>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1.2fr',gap:12}}>
+                  <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'auto',maxHeight:360}}>
+                    <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                      <thead><tr><th>From Whom</th><th>Type</th><th style={{textAlign:'right'}}>Entries</th><th style={{textAlign:'right'}}>Pending TDS</th><th style={{textAlign:'right'}}>Max Age</th></tr></thead>
+                      <tbody>
+                        {reportTdsFollowupGrouped.map(g=>(
+                          <tr key={g.key}>
+                            <td>{g.label}</td>
+                            <td><span className={`badge ${g.fundingChannel==='TIE_UP'?'bg-go':'bg-b'}`}>{g.fundingChannel==='TIE_UP'?'Tie-up':'Direct'}</span></td>
+                            <td style={{textAlign:'right'}} className="mono">{g.entries}</td>
+                            <td style={{textAlign:'right'}} className="mono sn">{fc(g.tdsAmount)}</td>
+                            <td style={{textAlign:'right'}} className="mono">{g.maxAgeDays}d</td>
+                          </tr>
+                        ))}
+                        {!reportTdsFollowupGrouped.length&&<tr><td colSpan="5" style={{padding:14,textAlign:'center',color:'var(--st)'}}>No pending TDS follow-up for {reportMonthLabel}.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'auto',maxHeight:360}}>
+                    <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                      <thead><tr><th>Date</th><th>Client / Partner</th><th>Type</th><th style={{textAlign:'right'}}>Gross</th><th style={{textAlign:'right'}}>Cash</th><th style={{textAlign:'right'}}>TDS</th></tr></thead>
+                      <tbody>
+                        {reportTdsPendingRows.map(r=>(
+                          <tr key={r.id}>
+                            <td className="mono">{fd(r.deductionDate)}</td>
+                            <td>{String(r.fundingChannel||'').toUpperCase()==='TIE_UP'?(r.tieUpPartnerName||r.clientName||'Tie-up (Unnamed)'):(r.clientName||'Unknown Client')}</td>
+                            <td><span className={`badge ${String(r.fundingChannel||'').toUpperCase()==='TIE_UP'?'bg-go':'bg-b'}`}>{String(r.fundingChannel||'').toUpperCase()==='TIE_UP'?'Tie-up':'Direct'}</span></td>
+                            <td style={{textAlign:'right'}} className="mono">{fc(toNum(r.grossEmiAmount))}</td>
+                            <td style={{textAlign:'right'}} className="mono sp">{fc(toNum(r.cashReceivedAmount))}</td>
+                            <td style={{textAlign:'right'}} className="mono sn">{fc(toNum(r.tdsAmount))}</td>
+                          </tr>
+                        ))}
+                        {!reportTdsPendingRows.length&&<tr><td colSpan="6" style={{padding:14,textAlign:'center',color:'var(--st)'}}>No pending TDS entries in selected month.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card" style={{padding:14}}>
+                <p style={{fontSize:12,fontWeight:700,marginBottom:6}}>Where to enter / update TDS</p>
+                <p style={{fontSize:11,color:'var(--st)',lineHeight:1.5}}>
+                  Use <b>Collections</b> for EMI short-receipt TDS (`Cash + TDS` settlement), and use <b>Client Master → History</b> for client-wise / tie-up monthly cumulative TDS entries and status updates (`PENDING` / `RECEIVED`).
+                </p>
+              </div>
+            </>
+          )}
         </div>
       )}
 
