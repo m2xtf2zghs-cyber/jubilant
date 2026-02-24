@@ -1,8 +1,26 @@
 const { Pool } = require('pg');
 const { config } = require('./config');
 
+function getSslConfig(connectionString) {
+  if (!connectionString) return undefined;
+  try {
+    const u = new URL(connectionString);
+    const host = String(u.hostname || '');
+    const sslmode = (u.searchParams.get('sslmode') || '').toLowerCase();
+    if (sslmode === 'require' || host.endsWith('.render.com')) {
+      return { rejectUnauthorized: false };
+    }
+  } catch (_) {
+    // ignore URL parse errors and fall back to plain connection
+  }
+  return undefined;
+}
+
+const ssl = getSslConfig(config.databaseUrl);
+
 const pool = new Pool({
   connectionString: config.databaseUrl,
+  ...(ssl ? { ssl } : {}),
 });
 
 async function query(text, params = [], client) {
