@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import './styles.css';
+import ChitModule from './ChitModule';
 
 /* ── ICONS ── */
 const I=({n,s=18,c=''})=>{
@@ -1939,6 +1940,7 @@ function App(){
           {id:'LEDGER',     icon:'list',      label:'Full Ledger'},
           {id:'CALENDAR',   icon:'calendar',  label:'Calendar'},
           {id:'EXPENSES',   icon:'card',      label:'Expenses'},
+          {id:'CHITS',      icon:'percent',   label:'Chits ROI'},
           {id:'REPORTS',    icon:'report',    label:'Reports'},
           {id:'PDF',        icon:'printer',   label:'PDF Generator'},
         ].map(item=>(
@@ -2729,6 +2731,15 @@ function App(){
             </table>
           </div>
         </div>
+      )}
+
+      {/* PDF */}
+      {view==='CHITS'&&(
+        <ChitModule
+          isBackendSession={isBackendSession}
+          backendAuth={backendAuth}
+          backendApiFetch={backendApiFetch}
+        />
       )}
 
       {/* PDF */}
