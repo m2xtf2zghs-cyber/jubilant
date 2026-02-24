@@ -609,7 +609,7 @@ router.get('/', asyncHandler(async (req, res) => {
       select
         c.*,
         coalesce(sum(cp.amount_paid),0) as total_paid,
-        coalesce(sum(ci.expected_amount - ci.paid_amount),0) filter (where ci.status in ('UNPAID','PARTIAL')) as remaining_due,
+        coalesce(sum(ci.expected_amount - ci.paid_amount) filter (where ci.status in ('UNPAID','PARTIAL')),0) as remaining_due,
         coalesce(cr.amount_received,0) - coalesce((select sum(a.amount_allocated) from fund_source_allocations a where a.organization_id=c.organization_id and a.source_type='CHIT' and a.chit_id=c.id),0)
           + coalesce((select sum(r.amount_returned) from chit_capital_returns r where r.organization_id=c.organization_id and r.chit_id=c.id),0) as available_chit_balance,
         count(*) over()::int as total_count
