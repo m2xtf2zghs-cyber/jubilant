@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Component, useEffect, useMemo, useRef, useState } from 'react';
 import './styles.css';
 import ChitModule from './ChitModule';
 
@@ -128,6 +128,33 @@ const Modal=({show,onClose,title,children,wide=false})=>{
   );
 };
 
+class AppErrorBoundary extends Component{
+  constructor(props){
+    super(props);
+    this.state={error:null};
+  }
+  static getDerivedStateFromError(error){
+    return{error};
+  }
+  componentDidCatch(error,info){
+    console.error('App render error',error,info);
+  }
+  render(){
+    if(this.state.error){
+      return(
+        <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'#07090f',padding:20,color:'#E5E7EB'}}>
+          <div style={{maxWidth:720,width:'100%',background:'rgba(17,24,39,.92)',border:'1px solid rgba(239,68,68,.25)',borderRadius:14,padding:18}}>
+            <h2 style={{fontSize:20,fontWeight:800,marginBottom:8,color:'#FCA5A5'}}>Screen Error</h2>
+            <p style={{fontSize:13,color:'#CBD5E1',marginBottom:10}}>A runtime error occurred after login. Please share this message so it can be fixed quickly.</p>
+            <pre style={{whiteSpace:'pre-wrap',wordBreak:'break-word',fontSize:12,lineHeight:1.45,background:'rgba(0,0,0,.25)',borderRadius:8,padding:12,margin:0}}>{String(this.state.error?.stack||this.state.error?.message||this.state.error)}</pre>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ── LOGIN ── */
 const Login=({onLogin,loginConfigured,authMode='demo'})=>{
   const [u,setU]=useState('');
@@ -217,6 +244,7 @@ function App(){
   const[backendTdsFollowup,setBackendTdsFollowup]=useState({loading:false,error:'',items:[],summary:null,lastFetchedAt:null});
   const isBackendSession=!!(BACKEND_API_ENABLED&&backendAuth?.accessToken&&backendAuth?.organization?.id);
   const fileRef=useRef(null);
+  const backendRefreshPromiseRef=useRef(null);
 
   useEffect(()=>{
     try{
@@ -274,7 +302,43 @@ function App(){
     if(cp!==undefined) setClientProfiles(cp);
   };
 
-  const backendApiFetch=async(path,{method='GET',body,token,orgId,headers={}}={})=>{
+  const refreshBackendAccessToken=async()=>{
+    if(!BACKEND_API_ENABLED) throw new Error('Backend API not configured');
+    if(backendRefreshPromiseRef.current) return backendRefreshPromiseRef.current;
+    const refreshToken=backendAuth?.refreshToken;
+    const org=backendAuth?.organization||null;
+    if(!refreshToken||!org?.id) throw new Error('Session expired. Please login again.');
+    backendRefreshPromiseRef.current=(async()=>{
+      const res=await fetch(`${BACKEND_API_BASE}/api/v1/auth/refresh`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({refreshToken}),
+      });
+      let data=null;
+      try{data=await res.json();}catch(_){}
+      if(!res.ok){
+        sessionStorage.removeItem(BACKEND_SESSION_KEY);
+        setBackendAuth(null);
+        setLoggedIn(false);
+        throw new Error(data?.error?.message||'Session expired. Please login again.');
+      }
+      const nextSession={
+        ...backendAuth,
+        accessToken:data.accessToken,
+        refreshToken:data.refreshToken||refreshToken,
+      };
+      sessionStorage.setItem(BACKEND_SESSION_KEY,JSON.stringify(nextSession));
+      setBackendAuth(nextSession);
+      return nextSession;
+    })();
+    try{
+      return await backendRefreshPromiseRef.current;
+    }finally{
+      backendRefreshPromiseRef.current=null;
+    }
+  };
+
+  const backendApiFetch=async(path,{method='GET',body,token,orgId,headers={},_retryAfterRefresh=true}={})=>{
     if(!BACKEND_API_ENABLED) throw new Error('Backend API not configured');
     const res=await fetch(`${BACKEND_API_BASE}${path}`,{
       method,
@@ -290,6 +354,23 @@ function App(){
     let data=null;
     try{data=await res.json();}catch(_){}
     if(!res.ok){
+      if(
+        _retryAfterRefresh&&token&&res.status===401&&
+        !String(path).includes('/api/v1/auth/login')&&
+        !String(path).includes('/api/v1/auth/refresh')
+      ){
+        const code=String(data?.error?.code||'');
+        if(code==='INVALID_ACCESS_TOKEN'||/expired|invalid/i.test(String(data?.error?.message||''))){
+          const nextSession=await refreshBackendAccessToken();
+          return backendApiFetch(path,{
+            method,body,
+            token:nextSession.accessToken,
+            orgId:orgId||nextSession.organization?.id,
+            headers,
+            _retryAfterRefresh:false,
+          });
+        }
+      }
       const msg=data?.error?.message||`Request failed (${res.status})`;
       throw new Error(msg);
     }
@@ -756,9 +837,17 @@ function App(){
       if(!m[p.name]) m[p.name]={name:p.name,loans:[],totalP:0,totalI:0,totalDue:0,totalIP:0,totalColl:0,phone:p.phone||'',kycRef:p.kycRef||'',address:p.address||'',riskGrade:p.riskGrade||'STANDARD',notes:p.notes||'',fundingChannel:p.fundingChannel||'DIRECT',tieUpPartnerName:p.tieUpPartnerName||'',lastLoanDate:null,backendId:p.backendId||null};
     });
     return Object.values(m)
-      .filter(c=>c.name.toLowerCase().includes(cSearch.toLowerCase())||(c.phone||'').includes(cSearch.trim())||(c.kycRef||'').toLowerCase().includes(cSearch.toLowerCase()))
+      .filter(c=>{
+        // In backend mode, Client Master should hide soft-deleted (inactive) clients even if historical loans still exist.
+        if(isBackendSession&&c.backendId){
+          const pf=clientProfiles[c.name];
+          if(!pf?.backendId) return false;
+          if(pf.isActive===false) return false;
+        }
+        return c.name.toLowerCase().includes(cSearch.toLowerCase())||(c.phone||'').includes(cSearch.trim())||(c.kycRef||'').toLowerCase().includes(cSearch.toLowerCase());
+      })
       .sort((a,b)=>(b.totalDue-a.totalDue)||(b.totalP-a.totalP)||a.name.localeCompare(b.name));
-  },[loans,cSearch,clientProfiles]);
+  },[loans,cSearch,clientProfiles,isBackendSession]);
 
   const tieUpPartyOptions=useMemo(()=>(
     Array.from(new Set(
@@ -1007,16 +1096,37 @@ function App(){
     if(!client?.name) return;
     if(isBackendSession){
       const backendId=client.backendId||clientProfiles[client.name]?.backendId||client.loans?.find(l=>l.clientId)?.clientId||null;
-      const msg=`Archive client "${client.name}" in backend?\n\nThis will mark the client inactive (soft delete). Existing loans and ledger entries will remain for accounting records.`;
-      if(!window.confirm(msg)) return;
       if(!backendId) return alert('Backend client ID not found for this client.');
+      const choiceRaw=window.prompt(
+        `Delete action for "${client.name}"\n\nType ARCHIVE (safe, accounting records kept)\nType FORCE (permanent delete for trial data only)`,
+        'ARCHIVE'
+      );
+      if(choiceRaw==null) return;
+      const choice=String(choiceRaw).trim().toUpperCase();
+      if(!choice) return;
       (async()=>{
         try{
-          await backendApiFetch(`/api/v1/clients/${backendId}`,{
-            method:'DELETE',
-            token:backendAuth.accessToken,
-            orgId:backendAuth.organization.id,
-          });
+          if(choice==='ARCHIVE'){
+            const msg=`Archive client "${client.name}" in backend?\n\nThis will mark the client inactive (soft delete). Existing loans and ledger entries will remain for accounting records.`;
+            if(!window.confirm(msg)) return;
+            await backendApiFetch(`/api/v1/clients/${backendId}`,{
+              method:'DELETE',
+              token:backendAuth.accessToken,
+              orgId:backendAuth.organization.id,
+            });
+          }else if(choice==='FORCE'){
+            const msg=`PERMANENTLY DELETE "${client.name}" and linked trial records?\n\nThis removes client + linked loans/installments/collections and cannot be undone.`;
+            if(!window.confirm(msg)) return;
+            const confirmName=window.prompt(`Type client name exactly to confirm force delete:\n${client.name}`,'');
+            if((confirmName||'').trim()!==client.name) return alert('Force delete cancelled: name did not match.');
+            await backendApiFetch(`/api/v1/clients/${backendId}/force`,{
+              method:'DELETE',
+              token:backendAuth.accessToken,
+              orgId:backendAuth.organization.id,
+            });
+          }else{
+            return alert('Invalid choice. Type ARCHIVE or FORCE.');
+          }
           if(cDetail===client.name) setCDetail(null);
           if(editProfile?.name===client.name) setEditProfile(null);
           await refreshBackendSnapshot();
@@ -1316,6 +1426,19 @@ function App(){
     setNE({desc:'',amount:'',category:'Other Indirect Expenses'});
   };
 
+  const detailC=cDetail?clientMap.find(c=>c.name===cDetail):null;
+  useEffect(()=>{
+    if(isBackendSession&&detailC?.backendId) loadClientTds(detailC.backendId);
+  },[isBackendSession,detailC?.backendId]);
+  useEffect(()=>{
+    if(!detailC) return;
+    setTdsForm(f=>({
+      ...f,
+      entryScope:String(detailC.fundingChannel||'DIRECT').toUpperCase()==='TIE_UP'?(f.entryScope||'CLIENT'):'CLIENT',
+      tieUpPartnerName:f.tieUpPartnerName||detailC.tieUpPartnerName||'',
+    }));
+  },[detailC?.name,detailC?.fundingChannel,detailC?.tieUpPartnerName]);
+
   if(!loggedIn) return <Login onLogin={handleLogin} loginConfigured={BACKEND_API_ENABLED||DEMO_LOGIN_ENABLED} authMode={BACKEND_API_ENABLED?'backend':'demo'}/>;
 
   /* ── PRE-RENDER ── */
@@ -1414,18 +1537,6 @@ function App(){
     runningBalance+=(t.type==='CREDIT'?t.amount:-t.amount);
     return{...t,runningBalance};
   });
-  const detailC=cDetail?clientMap.find(c=>c.name===cDetail):null;
-  useEffect(()=>{
-    if(isBackendSession&&detailC?.backendId) loadClientTds(detailC.backendId);
-  },[isBackendSession,detailC?.backendId]);
-  useEffect(()=>{
-    if(!detailC) return;
-    setTdsForm(f=>({
-      ...f,
-      entryScope:String(detailC.fundingChannel||'DIRECT').toUpperCase()==='TIE_UP'?(f.entryScope||'CLIENT'):'CLIENT',
-      tieUpPartnerName:f.tieUpPartnerName||detailC.tieUpPartnerName||'',
-    }));
-  },[detailC?.name,detailC?.fundingChannel,detailC?.tieUpPartnerName]);
   const calY=calDate.getFullYear(),calM=calDate.getMonth();
   const daysInM=new Date(calY,calM+1,0).getDate(),firstD=new Date(calY,calM,1).getDay();
   const todayFull=ts();
@@ -1492,6 +1603,7 @@ function App(){
   const reportTdsGrossCovered=reportTdsSummary?toNum(reportTdsSummary.gross_emi_total):reportTdsPendingRows.reduce((a,r)=>a+toNum(r.grossEmiAmount),0);
   const reportTdsCashReceived=reportTdsSummary?toNum(reportTdsSummary.cash_received_total):reportTdsPendingRows.reduce((a,r)=>a+toNum(r.cashReceivedAmount),0);
   const reportTdsFollowupGrouped=Object.values(reportTdsPendingRows.reduce((acc,row)=>{
+    if(!row||typeof row!=='object') return acc;
     const fundingChannel=String(row?.fundingChannel||'DIRECT').toUpperCase();
     const partner=(row?.tieUpPartnerName||'').trim();
     const clientName=(row?.clientName||'Unknown Client').trim()||'Unknown Client';
@@ -1504,11 +1616,11 @@ function App(){
       grossEmiAmount:0,cashReceivedAmount:0,tdsAmount:0,entries:0,maxAgeDays:0,
     };
     if(clientName) bucket.clients.add(clientName);
-    bucket.grossEmiAmount+=toNum(row.grossEmiAmount);
-    bucket.cashReceivedAmount+=toNum(row.cashReceivedAmount);
-    bucket.tdsAmount+=toNum(row.tdsAmount);
+    bucket.grossEmiAmount+=toNum(row?.grossEmiAmount);
+    bucket.cashReceivedAmount+=toNum(row?.cashReceivedAmount);
+    bucket.tdsAmount+=toNum(row?.tdsAmount);
     bucket.entries+=1;
-    const ageDays=Math.max(0,Math.floor((Date.now()-new Date(row.deductionDate).getTime())/86400000));
+    const ageDays=Math.max(0,Math.floor((Date.now()-new Date(row?.deductionDate).getTime())/86400000));
     bucket.maxAgeDays=Math.max(bucket.maxAgeDays,Number.isFinite(ageDays)?ageDays:0);
     acc[key]=bucket;
     return acc;
@@ -3353,4 +3465,10 @@ function App(){
   );
 }
 
-export default App;
+export default function AppWithBoundary(){
+  return(
+    <AppErrorBoundary>
+      <App/>
+    </AppErrorBoundary>
+  );
+}

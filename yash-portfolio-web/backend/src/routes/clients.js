@@ -1,7 +1,8 @@
 const express = require('express');
-const { query } = require('../db');
+const { query, withTransaction } = require('../db');
 const { ApiError, asyncHandler, parsePagination, parseBool } = require('../utils/http');
 const { ilikeTerm } = require('../utils/sql');
+const { requireRoles } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -234,6 +235,201 @@ router.delete('/:clientId', asyncHandler(async (req, res) => {
   if (!result.rows.length) throw new ApiError(404, 'CLIENT_NOT_FOUND', 'Client not found');
 
   res.json({ item: result.rows[0], softDeleted: true });
+}));
+
+router.delete('/:clientId/force', requireRoles('OWNER'), asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.auth.sub;
+  const { clientId } = req.params;
+
+  const out = await withTransaction(async (dbClient) => {
+    const hasClientTdsTable = !!(await query(`select to_regclass('public.client_tds_entries') as t`, [], dbClient)).rows[0]?.t;
+    const hasChitReturnsTable = !!(await query(`select to_regclass('public.chit_capital_returns') as t`, [], dbClient)).rows[0]?.t;
+    const hasFundAllocTable = !!(await query(`select to_regclass('public.fund_source_allocations') as t`, [], dbClient)).rows[0]?.t;
+
+    const clientRes = await query(
+      `select id, name from clients where organization_id = $1 and id = $2 for update`,
+      [orgId, clientId],
+      dbClient
+    );
+    const clientRow = clientRes.rows[0];
+    if (!clientRow) throw new ApiError(404, 'CLIENT_NOT_FOUND', 'Client not found');
+
+    const loanRes = await query(
+      `select id from loans where organization_id = $1 and client_id = $2`,
+      [orgId, clientId],
+      dbClient
+    );
+    const loanIds = loanRes.rows.map((r) => r.id);
+
+    const instRes = loanIds.length
+      ? await query(
+        `select id from installments where organization_id = $1 and loan_id = any($2::uuid[])`,
+        [orgId, loanIds],
+        dbClient
+      )
+      : { rows: [] };
+    const installmentIds = instRes.rows.map((r) => r.id);
+
+    const colRes = loanIds.length
+      ? await query(
+        `select id from collections where organization_id = $1 and loan_id = any($2::uuid[])`,
+        [orgId, loanIds],
+        dbClient
+      )
+      : await query(
+        `select id from collections where organization_id = $1 and client_id = $2`,
+        [orgId, clientId],
+        dbClient
+      );
+    const collectionIds = colRes.rows.map((r) => r.id);
+
+    if (loanIds.length && hasChitReturnsTable) {
+      // Chit module links may reference loans/collections. For trial force-delete, remove returns and unlink allocations.
+      await query(
+        `delete from chit_capital_returns
+         where organization_id = $1
+           and (
+             (coalesce(array_length($2::uuid[],1),0) > 0 and linked_loan_id = any($2::uuid[]))
+             or
+             (coalesce(array_length($3::uuid[],1),0) > 0 and linked_collection_id = any($3::uuid[]))
+           )`,
+        [orgId, loanIds, collectionIds],
+        dbClient
+      );
+    }
+    if (loanIds.length && hasFundAllocTable) {
+      await query(
+        `update fund_source_allocations
+         set linked_loan_id = null
+         where organization_id = $1
+           and coalesce(array_length($2::uuid[],1),0) > 0
+           and linked_loan_id = any($2::uuid[])`,
+        [orgId, loanIds],
+        dbClient
+      );
+    }
+
+    // Break circular ref before deleting collections/installments.
+    if (loanIds.length) {
+      await query(
+        `update installments
+         set last_collection_id = null, updated_at = now()
+         where organization_id = $1 and loan_id = any($2::uuid[])`,
+        [orgId, loanIds],
+        dbClient
+      );
+    }
+
+    if (hasClientTdsTable) {
+      await query(
+        `delete from client_tds_entries
+         where organization_id = $1
+           and (
+             client_id = $2
+             or (coalesce(array_length($3::uuid[],1),0) > 0 and loan_id = any($3::uuid[]))
+             or (coalesce(array_length($4::uuid[],1),0) > 0 and collection_id = any($4::uuid[]))
+           )`,
+        [orgId, clientId, loanIds, collectionIds],
+        dbClient
+      );
+    }
+
+    await query(
+      `delete from ledger_entries
+       where organization_id = $1
+         and (
+           client_id = $2
+           or (coalesce(array_length($3::uuid[],1),0) > 0 and loan_id = any($3::uuid[]))
+           or (coalesce(array_length($4::uuid[],1),0) > 0 and collection_id = any($4::uuid[]))
+         )`,
+      [orgId, clientId, loanIds, collectionIds],
+      dbClient
+    );
+
+    await query(
+      `delete from reminder_logs
+       where organization_id = $1
+         and (
+           client_id = $2
+           or (coalesce(array_length($3::uuid[],1),0) > 0 and loan_id = any($3::uuid[]))
+           or (coalesce(array_length($4::uuid[],1),0) > 0 and installment_id = any($4::uuid[]))
+         )`,
+      [orgId, clientId, loanIds, installmentIds],
+      dbClient
+    );
+
+    await query(
+      `delete from audit_logs
+       where organization_id = $1 and (
+         (entity_type = 'client' and entity_id = $2)
+         or (coalesce(array_length($3::uuid[],1),0) > 0 and entity_type = 'loan' and entity_id = any($3::uuid[]))
+         or (coalesce(array_length($4::uuid[],1),0) > 0 and entity_type = 'installment' and entity_id = any($4::uuid[]))
+         or (coalesce(array_length($5::uuid[],1),0) > 0 and entity_type = 'collection' and entity_id = any($5::uuid[]))
+       )`,
+      [orgId, clientId, loanIds, installmentIds, collectionIds],
+      dbClient
+    );
+
+    if (collectionIds.length) {
+      await query(
+        `delete from collections where organization_id = $1 and id = any($2::uuid[])`,
+        [orgId, collectionIds],
+        dbClient
+      );
+    }
+    if (installmentIds.length) {
+      await query(
+        `delete from installments where organization_id = $1 and id = any($2::uuid[])`,
+        [orgId, installmentIds],
+        dbClient
+      );
+    }
+    if (loanIds.length) {
+      await query(
+        `delete from loans where organization_id = $1 and id = any($2::uuid[])`,
+        [orgId, loanIds],
+        dbClient
+      );
+    }
+
+    const delClient = await query(
+      `delete from clients where organization_id = $1 and id = $2 returning id, name`,
+      [orgId, clientId],
+      dbClient
+    );
+
+    await query(
+      `insert into audit_logs (organization_id, actor_user_id, entity_type, entity_id, action, metadata)
+       values ($1,$2,'client',$3,'FORCE_DELETE_CLIENT',$4::jsonb)`,
+      [
+        orgId,
+        userId,
+        clientId,
+        JSON.stringify({
+          clientName: clientRow.name,
+          purged: {
+            loans: loanIds.length,
+            installments: installmentIds.length,
+            collections: collectionIds.length,
+          },
+        }),
+      ],
+      dbClient
+    );
+
+    return {
+      item: delClient.rows[0],
+      forceDeleted: true,
+      purged: {
+        loans: loanIds.length,
+        installments: installmentIds.length,
+        collections: collectionIds.length,
+      },
+    };
+  });
+
+  res.json(out);
 }));
 
 router.get('/:clientId/loans', asyncHandler(async (req, res) => {
