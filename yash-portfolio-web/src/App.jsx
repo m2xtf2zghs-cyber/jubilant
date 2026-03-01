@@ -223,6 +223,7 @@ function App(){
   const[cSearch,setCSearch]=useState('');
   const[dbDate,setDbDate]=useState(ts());
   const[repMonth,setRepMonth]=useState(new Date().toISOString().slice(0,7));
+  const[forecastConfig,setForecastConfig]=useState({inflowShock:false,outflowShock:false,delayCollections:false,minCashThreshold:'50000'});
   const[reportTieUpFilter,setReportTieUpFilter]=useState('ALL');
   const[tdsTabView,setTdsTabView]=useState('CUMULATIVE');
   const[cDetail,setCDetail]=useState(null);
@@ -1685,6 +1686,76 @@ function App(){
     : reportMonthlyCollectionsByTieUp.filter(r=>r.key===reportTieUpFilter);
   const reportMonthlyCollectionsTieUpCumulative=reportMonthlyCollectionsTieUpFiltered.reduce((a,r)=>a+r.collectionsAmount,0);
   const reportMonthlyCollectionsTieUpEntries=reportMonthlyCollectionsTieUpFiltered.reduce((a,r)=>a+r.entries,0);
+  const forecastThreshold=toNum(forecastConfig.minCashThreshold);
+  const forecastOpeningCash=reportApiMode&&backendDash.summary?toNum(backendDash.summary.cashBalance):stats.cash;
+  const weekMs=7*24*60*60*1000;
+  const forecastStart=new Date();forecastStart.setHours(0,0,0,0);
+  const pastStart=new Date(forecastStart.getTime()-(8*weekMs));
+  const recentWeeksRaw=Array.from({length:8},(_,i)=>{
+    const ws=new Date(pastStart.getTime()+(i*weekMs));
+    const we=new Date(ws.getTime()+weekMs);
+    let inflow=0,outflow=0;
+    transactions.forEach(t=>{
+      const td=new Date(t.date);
+      if(!(td>=ws&&td<we)) return;
+      if(t.type==='CREDIT'&&t.tag==='COLLECTION') inflow+=toNum(t.amount);
+      if(t.type==='DEBIT'&&t.tag!=='CAPITAL') outflow+=toNum(t.amount);
+    });
+    return{inflow,outflow};
+  });
+  const histInAvg=recentWeeksRaw.length?recentWeeksRaw.reduce((a,w)=>a+w.inflow,0)/recentWeeksRaw.length:0;
+  const histOutAvg=recentWeeksRaw.length?recentWeeksRaw.reduce((a,w)=>a+w.outflow,0)/recentWeeksRaw.length:0;
+  const dueByWeek=Array.from({length:13},()=>0);
+  loans.filter(l=>l.status==='Active').forEach(l=>{
+    (l.schedule||[]).forEach(p=>{
+      if(!(p.status==='Pending'||p.status==='Partial')) return;
+      const outstanding=Math.max(0,toNum(p.payment)-toNum(p.paid));
+      if(outstanding<=0) return;
+      const d=new Date(p.date);
+      const idx=Math.floor((d.getTime()-forecastStart.getTime())/weekMs);
+      if(idx>=0&&idx<13) dueByWeek[idx]+=outstanding;
+    });
+  });
+  const forecastRealizationRate=Math.min(1,Math.max(0.35,toNum(reportCollectionEfficiency)/100||0.7));
+  const forecastRows=[];
+  let forecastCarry=0;
+  let forecastCash=forecastOpeningCash;
+  for(let i=0;i<13;i++){
+    const weekStart=new Date(forecastStart.getTime()+(i*weekMs));
+    const weekEnd=new Date(weekStart.getTime()+weekMs-1);
+    const dueExpected=toNum(dueByWeek[i]);
+    const dueRealized=dueExpected*forecastRealizationRate;
+    let projectedInflow=dueExpected>0?(dueRealized*0.7+histInAvg*0.3):histInAvg;
+    projectedInflow+=forecastCarry;
+    if(forecastConfig.delayCollections){
+      const deferred=projectedInflow*0.3;
+      projectedInflow-=deferred;
+      forecastCarry=deferred;
+    }else{
+      forecastCarry=0;
+    }
+    if(forecastConfig.inflowShock) projectedInflow*=0.8;
+    let projectedOutflow=histOutAvg;
+    if(forecastConfig.outflowShock) projectedOutflow*=1.15;
+    const net=projectedInflow-projectedOutflow;
+    const closingCash=forecastCash+net;
+    forecastRows.push({
+      weekNo:i+1,
+      weekStart:weekStart.toISOString(),
+      weekEnd:weekEnd.toISOString(),
+      dueExpected,
+      projectedInflow,
+      projectedOutflow,
+      net,
+      openingCash:forecastCash,
+      closingCash,
+      isWarning:closingCash<forecastThreshold,
+    });
+    forecastCash=closingCash;
+  }
+  const forecastMinCash=Math.min(forecastOpeningCash,...forecastRows.map(r=>r.closingCash));
+  const forecastWarningRows=forecastRows.filter(r=>r.isWarning);
+  const forecastStatus=forecastWarningRows.length===0?'SAFE':forecastWarningRows.length<=3?'WATCH':'DANGER';
   const reportTdsPendingRows=(reportApiMode&&Array.isArray(backendTdsFollowup.items))?backendTdsFollowup.items:[];
   const reportTdsSummary=reportApiMode&&backendTdsFollowup.summary?backendTdsFollowup.summary:null;
   const reportTdsPendingTotal=reportTdsSummary?toNum(reportTdsSummary.tds_pending):reportTdsPendingRows.reduce((a,r)=>a+toNum(r.tdsAmount),0);
@@ -3374,6 +3445,73 @@ function App(){
                 </div>
                 <button className="bgh" onClick={()=>setView('PDF')}><I n="printer" s={14}/> PDF View</button>
               </div>
+            </div>
+          </div>
+          <div className="card" style={{padding:14,marginBottom:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:12,flexWrap:'wrap',marginBottom:10}}>
+              <div>
+                <h3 style={{fontSize:14,fontWeight:700}}>13-Week Cash Forecast</h3>
+                <p style={{fontSize:11,color:'var(--st)',marginTop:2}}>Weekly inflow/outflow projection with scenario toggles and minimum cash threshold warning.</p>
+              </div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:11,color:'var(--st)'}}>
+                  <input type="checkbox" checked={forecastConfig.inflowShock} onChange={e=>setForecastConfig(c=>({...c,inflowShock:e.target.checked}))}/>
+                  Inflow -20%
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:11,color:'var(--st)'}}>
+                  <input type="checkbox" checked={forecastConfig.outflowShock} onChange={e=>setForecastConfig(c=>({...c,outflowShock:e.target.checked}))}/>
+                  Outflow +15%
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:11,color:'var(--st)'}}>
+                  <input type="checkbox" checked={forecastConfig.delayCollections} onChange={e=>setForecastConfig(c=>({...c,delayCollections:e.target.checked}))}/>
+                  30% Collection Delay
+                </label>
+                <div>
+                  <span className="lbl">Min Cash Threshold (₹)</span>
+                  <input className="inp" type="number" value={forecastConfig.minCashThreshold} onChange={e=>setForecastConfig(c=>({...c,minCashThreshold:e.target.value}))} style={{width:160}}/>
+                </div>
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10,marginBottom:10}}>
+              <div className="card" style={{padding:'10px 11px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Opening Cash</p><p className="mono sb" style={{fontSize:14,fontWeight:700}}>{fc(forecastOpeningCash)}</p></div>
+              <div className="card" style={{padding:'10px 11px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Projected Min Cash</p><p className={`mono ${forecastMinCash<forecastThreshold?'sn':'sp'}`} style={{fontSize:14,fontWeight:700}}>{fc(forecastMinCash)}</p></div>
+              <div className="card" style={{padding:'10px 11px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>Weeks Below Threshold</p><p className={`mono ${forecastWarningRows.length?'sn':'sp'}`} style={{fontSize:14,fontWeight:700}}>{forecastWarningRows.length}</p></div>
+              <div className="card" style={{padding:'10px 11px'}}><p style={{fontSize:10,color:'var(--st)',textTransform:'uppercase',fontWeight:700,marginBottom:4}}>CFO Status</p><p className={`mono ${forecastStatus==='SAFE'?'sp':forecastStatus==='WATCH'?'sw':'sn'}`} style={{fontSize:14,fontWeight:700}}>{forecastStatus}</p></div>
+            </div>
+            {forecastWarningRows.length>0&&(
+              <div style={{fontSize:11,color:'var(--red)',marginBottom:8}}>
+                Warning: projected cash is below threshold in week(s) {forecastWarningRows.map(r=>r.weekNo).join(', ')}.
+              </div>
+            )}
+            <div style={{maxHeight:280,overflow:'auto',border:'1px solid var(--border)',borderRadius:8}}>
+              <table className="tbl" style={{width:'100%',borderCollapse:'collapse'}}>
+                <thead>
+                  <tr>
+                    <th>Week</th>
+                    <th>Period</th>
+                    <th style={{textAlign:'right'}}>Due Base</th>
+                    <th style={{textAlign:'right'}}>Inflow</th>
+                    <th style={{textAlign:'right'}}>Outflow</th>
+                    <th style={{textAlign:'right'}}>Net</th>
+                    <th style={{textAlign:'right'}}>Closing Cash</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecastRows.map(r=>(
+                    <tr key={r.weekNo}>
+                      <td className="mono">W{r.weekNo}</td>
+                      <td>{fd(r.weekStart)} - {fd(r.weekEnd)}</td>
+                      <td style={{textAlign:'right'}} className="mono">{fc(r.dueExpected)}</td>
+                      <td style={{textAlign:'right'}} className="mono sp">{fc(r.projectedInflow)}</td>
+                      <td style={{textAlign:'right'}} className="mono sn">{fc(r.projectedOutflow)}</td>
+                      <td style={{textAlign:'right'}} className={`mono ${r.net>=0?'sp':'sn'}`}>{fc(r.net)}</td>
+                      <td style={{textAlign:'right'}} className={`mono ${r.closingCash<forecastThreshold?'sn':'sp'}`}>{fc(r.closingCash)}</td>
+                      <td><span className={`badge ${r.closingCash<forecastThreshold?'bg-r':'bg-g'}`}>{r.closingCash<forecastThreshold?'ALERT':'OK'}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
           <div className="card" style={{padding:14,marginBottom:14}}>
