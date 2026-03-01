@@ -216,6 +216,7 @@ function App(){
 
   const[newLoan,setNL]=useState({clientName:'',clientPhone:'',kycRef:'',purpose:'',notes:'',principal:100000,interest:20000,duration:10,freq:'MONTHLY',startDate:ts()});
   const[newExp,setNE]=useState({desc:'',amount:'',category:'Other Indirect Expenses'});
+  const[commissionEntry,setCommissionEntry]=useState({clientName:'',loanId:'',mediatorAmount:'',companyAmount:'',date:ts(),notes:''});
   const[capAmt,setCapAmt]=useState('');
   const[showCap,setShowCap]=useState(false);
   const[collect,setCollect]=useState(blankCollect);
@@ -1451,6 +1452,56 @@ function App(){
     setNE({desc:'',amount:'',category:'Other Indirect Expenses'});
   };
 
+  const handleCommissionDebit=async()=>{
+    const clientName=(commissionEntry.clientName||'').trim();
+    const mediatorAmount=toNum(commissionEntry.mediatorAmount);
+    const companyAmount=toNum(commissionEntry.companyAmount);
+    if(!clientName) return alert('Select client');
+    if(mediatorAmount<=0&&companyAmount<=0) return alert('Enter mediator or company commission amount');
+    const clientObj=clientMap.find(c=>c.name===clientName)||null;
+    const selectedLoanId=(commissionEntry.loanId||'').trim()||null;
+    const selectedLoan=selectedLoanId?(loans.find(l=>l.id===selectedLoanId)||null):null;
+    const expenseDateIso=new Date(`${commissionEntry.date||ts()}T12:00:00`).toISOString();
+    const note=(commissionEntry.notes||'').trim();
+    const baseDesc=(kind)=>`${kind} — ${clientName}${selectedLoan?` [${selectedLoan.id}]`:''}${note?` · ${note}`:''}`;
+    const entries=[
+      {category:'Mediator Commission',amount:mediatorAmount,description:baseDesc('Mediator Commission')},
+      {category:'Company Commission',amount:companyAmount,description:baseDesc('Company Commission')},
+    ].filter(e=>e.amount>0);
+
+    if(isBackendSession){
+      try{
+        for(const e of entries){
+          await backendApiFetch('/api/v1/expenses',{
+            method:'POST',
+            token:backendAuth.accessToken,
+            orgId:backendAuth.organization.id,
+            headers:{'Idempotency-Key':`web-commission-${Date.now()}-${Math.random().toString(36).slice(2,8)}-${e.category.replace(/\s+/g,'-').toLowerCase()}`},
+            body:{
+              description:e.description,
+              amount:e.amount,
+              category:e.category,
+              expenseDate:expenseDateIso,
+              paymentMode:'CASH',
+              clientId:clientObj?.backendId||null,
+              loanId:selectedLoan?.id||null,
+            },
+          });
+        }
+        await refreshBackendSnapshot();
+        setCommissionEntry({clientName:'',loanId:'',mediatorAmount:'',companyAmount:'',date:ts(),notes:''});
+      }catch(e){
+        alert(e?.message||'Commission debit failed');
+      }
+      return;
+    }
+
+    let nextTx=transactions;
+    entries.forEach(e=>{nextTx=pushTx(e.description,'DEBIT',e.amount,'EXPENSE',selectedLoan?.id||null,e.category);});
+    save(undefined,nextTx);
+    setCommissionEntry({clientName:'',loanId:'',mediatorAmount:'',companyAmount:'',date:ts(),notes:''});
+  };
+
   const detailC=cDetail?clientMap.find(c=>c.name===cDetail):null;
   useEffect(()=>{
     if(isBackendSession&&detailC?.backendId) loadClientTds(detailC.backendId);
@@ -1477,6 +1528,9 @@ function App(){
     .sort((a,b)=>new Date(a.date)-new Date(b.date));
   const mIn=mTx.filter(t=>t.type==='CREDIT'&&t.tag==='COLLECTION').reduce((a,t)=>a+t.amount,0);
   const mExp=mTx.filter(t=>t.tag==='EXPENSE').reduce((a,t)=>a+t.amount,0);
+  const mMediatorCommission=mTx.filter(t=>t.tag==='EXPENSE'&&String(t.category||'').toLowerCase()==='mediator commission').reduce((a,t)=>a+t.amount,0);
+  const mCompanyCommission=mTx.filter(t=>t.tag==='EXPENSE'&&String(t.category||'').toLowerCase()==='company commission').reduce((a,t)=>a+t.amount,0);
+  const mTotalCommission=mMediatorCommission+mCompanyCommission;
   const mBD=mTx.filter(t=>t.tag==='BAD_DEBT').reduce((a,t)=>a+t.amount,0);
   const mNet=mIn-mExp-mBD;
   const mCreditTotal=mTx.filter(t=>t.type==='CREDIT').reduce((a,t)=>a+t.amount,0);
@@ -1592,7 +1646,11 @@ function App(){
   const reportPar30Ratio=reportApiMode&&backendDash.risk?toNum(backendDash.risk.par30Ratio):stats.par30Ratio;
   const reportAgingLive=reportApiMode&&backendDash.risk?.aging&&typeof backendDash.risk.aging==='object'?backendDash.risk.aging:stats.aging;
   const reportCollectionsAmount=reportPnl?toNum(reportPnl.collections):mIn;
-  const reportInterestEarned=reportPnl?toNum(reportPnl.interestEarned):mInterestEarned;
+  const reportGrossInterest=reportPnl?toNum(reportPnl.grossInterest??reportPnl.interestEarned):mInterestEarned;
+  const reportMediatorCommission=reportPnl?toNum(reportPnl.mediatorCommission):mMediatorCommission;
+  const reportCompanyCommission=reportPnl?toNum(reportPnl.companyCommission):mCompanyCommission;
+  const reportTotalCommission=reportPnl?toNum(reportPnl.totalCommission):(mMediatorCommission+mCompanyCommission);
+  const reportNetInterest=reportPnl?toNum(reportPnl.netInterest):(mInterestEarned-(mMediatorCommission+mCompanyCommission));
   const reportPrincipalRecovered=reportPnl?toNum(reportPnl.principalRecovered):mPrincipalRecovered;
   const reportExpenses=reportPnl?toNum(reportPnl.expenses):mExp;
   const reportBadDebt=reportPnl?toNum(reportPnl.badDebt):mBD;
@@ -1603,6 +1661,11 @@ function App(){
   const reportDueInstallmentCount=reportEff?toNum(reportEff.dueInstallmentCount):mDueInstCount;
   const reportFullyPaidInstallmentCount=reportEff?toNum(reportEff.fullyPaidInstallmentCount):mDueInstPaid;
   const reportAvgCollectionTicket=mCollectionsCount?reportCollectionsAmount/mCollectionsCount:0;
+  const commissionClientOptions=clientMap.map(c=>c.name).sort((a,b)=>a.localeCompare(b));
+  const commissionSelectedClient=clientMap.find(c=>c.name===commissionEntry.clientName)||null;
+  const commissionLoanOptions=(commissionSelectedClient?.loans||[])
+    .slice()
+    .sort((a,b)=>new Date(b.startDate||0)-new Date(a.startDate||0));
   const reportMonthlyCollectionsByTieUp=Object.entries(mTx.reduce((acc,t)=>{
     if(t.tag!=='COLLECTION'||t.type!=='CREDIT') return acc;
     const clientName=loanClientById[t.relatedId]||String(t.desc||'').replace(/^Collection\s+[—-]\s+/,'')||'Unknown';
@@ -1800,6 +1863,9 @@ function App(){
         <div className="pr-kpi-grid pr-break-avoid">
           {[
             ['Collections',fc(reportCollectionsAmount),'Total collection credits posted in month','green'],
+            ['Gross Interest',fc(reportGrossInterest),'Interest earned before commission expense impact','green'],
+            ['Net Interest',fc(reportNetInterest),'Gross interest minus mediator + company commissions',reportNetInterest>=0?'green':'red'],
+            ['Total Commission',fc(reportTotalCommission),`Mediator ${fc(reportMediatorCommission)} + Company ${fc(reportCompanyCommission)}`,'red'],
             ['Expenses',fc(reportExpenses),'Operational expense debits','red'],
             ['Bad Debt',fc(reportBadDebt),`${reportWriteoffEntryCount} write-off entr${reportWriteoffEntryCount===1?'y':'ies'}`,'red'],
             ['Net Operating',fc(reportNetOperating),reportNetOperating>=0?'Collections minus expense + write-offs':'Operating loss for selected month',reportNetOperating>=0?'green':'red'],
@@ -1948,7 +2014,10 @@ function App(){
                 <div className="pr-row"><span className="l">Capital Introduced</span><span className="r pos">{fc(reportCapitalAdded)}</span></div>
                 <div className="pr-row"><span className="l">Loan Disbursements</span><span className="r neg">{fc(reportDisbursed)}</span></div>
                 <div className="pr-row"><span className="l">Collections Received</span><span className="r pos">{fc(reportCollectionsAmount)}</span></div>
-                <div className="pr-row"><span className="l">Interest Earned</span><span className="r pos">{fc(reportInterestEarned)}</span></div>
+                <div className="pr-row"><span className="l">Gross Interest</span><span className="r pos">{fc(reportGrossInterest)}</span></div>
+                <div className="pr-row"><span className="l">Mediator Commission</span><span className="r neg">{fc(reportMediatorCommission)}</span></div>
+                <div className="pr-row"><span className="l">Company Commission</span><span className="r neg">{fc(reportCompanyCommission)}</span></div>
+                <div className="pr-row"><span className="l">Net Interest</span><span className={`r ${reportNetInterest<0?'neg':'pos'}`}>{fc(reportNetInterest)}</span></div>
                 <div className="pr-row"><span className="l">Principal Recovered</span><span className="r">{fc(reportPrincipalRecovered)}</span></div>
                 <div className="pr-row"><span className="l">Expenses</span><span className="r neg">{fc(reportExpenses)}</span></div>
                 <div className="pr-row"><span className="l">Bad Debt Write-off</span><span className="r neg">{fc(reportBadDebt)}</span></div>
@@ -3038,12 +3107,39 @@ function App(){
       {view==='EXPENSES'&&(
         <div className="fade-in">
           <h2 style={{fontSize:24,fontWeight:800,marginBottom:20}}>Record Expense</h2>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1.2fr',gap:18}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:18}}>
             <div className="card" style={{padding:20}}>
               <div style={{marginBottom:13}}><span className="lbl">Category</span><select className="inp" value={newExp.category} onChange={e=>setNE({...newExp,category:e.target.value})}>{ECATS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
               <div style={{marginBottom:13}}><span className="lbl">Description</span><input className="inp" value={newExp.desc} onChange={e=>setNE({...newExp,desc:e.target.value})} placeholder="Details..."/></div>
               <div style={{marginBottom:16}}><span className="lbl">Amount (₹)</span><input className="inp" type="number" value={newExp.amount} onChange={e=>setNE({...newExp,amount:e.target.value})} placeholder="0"/></div>
               <button className="bd" style={{width:'100%',justifyContent:'center',fontSize:14,padding:'12px'}} onClick={handleExp}>Debit Account</button>
+            </div>
+            <div className="card" style={{padding:20}}>
+              <h3 style={{fontSize:14,fontWeight:700,marginBottom:8}}>Client-wise Commissions (Post Funding)</h3>
+              <p style={{fontSize:11,color:'var(--st)',marginBottom:12}}>Add after loan disbursement. Both entries are posted as debit expenses and included in reports.</p>
+              <div style={{marginBottom:10}}>
+                <span className="lbl">Client</span>
+                <select className="inp" value={commissionEntry.clientName} onChange={e=>setCommissionEntry({...commissionEntry,clientName:e.target.value,loanId:''})}>
+                  <option value="">Select client</option>
+                  {commissionClientOptions.map(name=><option key={name} value={name}>{name}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:10}}>
+                <span className="lbl">Loan (optional)</span>
+                <select className="inp" value={commissionEntry.loanId} onChange={e=>setCommissionEntry({...commissionEntry,loanId:e.target.value})} disabled={!commissionSelectedClient}>
+                  <option value="">{commissionSelectedClient?'All Loans (client-wise)':'Select client first'}</option>
+                  {commissionLoanOptions.map(l=><option key={l.id} value={l.id}>{l.id} · {fc(l.principal)} · {fd(l.startDate)}</option>)}
+                </select>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+                <div><span className="lbl">Mediator Commission (₹)</span><input className="inp" type="number" value={commissionEntry.mediatorAmount} onChange={e=>setCommissionEntry({...commissionEntry,mediatorAmount:e.target.value})} placeholder="0"/></div>
+                <div><span className="lbl">Company Commission (₹)</span><input className="inp" type="number" value={commissionEntry.companyAmount} onChange={e=>setCommissionEntry({...commissionEntry,companyAmount:e.target.value})} placeholder="0"/></div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+                <div><span className="lbl">Date</span><input className="inp" type="date" value={commissionEntry.date} onChange={e=>setCommissionEntry({...commissionEntry,date:e.target.value})}/></div>
+                <div><span className="lbl">Notes (optional)</span><input className="inp" value={commissionEntry.notes} onChange={e=>setCommissionEntry({...commissionEntry,notes:e.target.value})} placeholder="Reference / memo"/></div>
+              </div>
+              <button className="bd" style={{width:'100%',justifyContent:'center',fontSize:14,padding:'12px'}} onClick={handleCommissionDebit}>Debit Commissions</button>
             </div>
             <div className="card" style={{padding:20}}>
               <h3 style={{fontSize:14,fontWeight:700,marginBottom:12}}>Recent Expenses</h3>
@@ -3367,7 +3463,9 @@ function App(){
             {[
               ['Payments Done',String(mCollectionsCount),'sb'],
               ['Collections Amount',fc(reportCollectionsAmount),'sp'],
-              ['Interest Earned',fc(reportInterestEarned),'sp'],
+              ['Gross Interest',fc(reportGrossInterest),'sp'],
+              ['Net Interest',fc(reportNetInterest),reportNetInterest>=0?'sp':'sn'],
+              ['Total Commission',fc(reportTotalCommission),'sn'],
               ['Principal Recovered',fc(reportPrincipalRecovered),'sw'],
               ['Arrear Amount (Total Receivable)',fc(reportReceivableLive),'sn'],
               ['EMI Fully Paid',`${reportFullyPaidInstallmentCount}/${reportDueInstallmentCount}`,'sb'],
@@ -3387,7 +3485,10 @@ function App(){
               <div className="row"><span style={{color:'var(--st)'}}>Collection Entries Posted</span><span className="mono">{mCollectionsCount}</span></div>
               <div className="row"><span style={{color:'var(--st)'}}>Average Collection Ticket</span><span className="mono">{fc(reportAvgCollectionTicket)}</span></div>
               <div className="row"><span style={{color:'var(--st)'}}>Collections Received</span><span className="mono sp">{fc(reportCollectionsAmount)}</span></div>
-              <div className="row"><span style={{color:'var(--st)'}}>Interest Earned</span><span className="mono sp">{fc(reportInterestEarned)}</span></div>
+              <div className="row"><span style={{color:'var(--st)'}}>Gross Interest</span><span className="mono sp">{fc(reportGrossInterest)}</span></div>
+              <div className="row"><span style={{color:'var(--st)'}}>Mediator Commission</span><span className="mono sn">{fc(reportMediatorCommission)}</span></div>
+              <div className="row"><span style={{color:'var(--st)'}}>Company Commission</span><span className="mono sn">{fc(reportCompanyCommission)}</span></div>
+              <div className="row"><span style={{color:'var(--st)'}}>Net Interest</span><span className={`mono ${reportNetInterest>=0?'sp':'sn'}`}>{fc(reportNetInterest)}</span></div>
               <div className="row"><span style={{color:'var(--st)'}}>Principal Recovered</span><span className="mono sw">{fc(reportPrincipalRecovered)}</span></div>
               <div className="row"><span style={{color:'var(--st)'}}>EMIs Due in Month</span><span className="mono">{reportDueInstallmentCount}</span></div>
               <div className="row"><span style={{color:'var(--st)'}}>EMIs Fully Paid</span><span className="mono sp">{reportFullyPaidInstallmentCount}</span></div>

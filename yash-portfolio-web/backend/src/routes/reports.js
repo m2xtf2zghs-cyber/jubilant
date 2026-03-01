@@ -86,7 +86,9 @@ router.get('/pnl', asyncHandler(async (req, res) => {
       select
         coalesce(sum(case when tx_type='CREDIT' and tag='COLLECTION' then amount else 0 end),0) as collections,
         coalesce(sum(case when tx_type='DEBIT' and tag='EXPENSE' then amount else 0 end),0) as expenses,
-        coalesce(sum(case when tx_type='DEBIT' and tag='BAD_DEBT' then amount else 0 end),0) as bad_debt
+        coalesce(sum(case when tx_type='DEBIT' and tag='BAD_DEBT' then amount else 0 end),0) as bad_debt,
+        coalesce(sum(case when tx_type='DEBIT' and tag='EXPENSE' and lower(coalesce(category,''))='mediator commission' then amount else 0 end),0) as mediator_commission,
+        coalesce(sum(case when tx_type='DEBIT' and tag='EXPENSE' and lower(coalesce(category,''))='company commission' then amount else 0 end),0) as company_commission
       from ledger_entries
       where organization_id = $1 and entry_time >= $2 and entry_time < $3
     `, [orgId, start, end]),
@@ -105,11 +107,21 @@ router.get('/pnl', asyncHandler(async (req, res) => {
   const interestEarned = Number(s.interest_earned || 0);
   const expenses = Number(t.expenses || 0);
   const badDebt = Number(t.bad_debt || 0);
+  const mediatorCommission = Number(t.mediator_commission || 0);
+  const companyCommission = Number(t.company_commission || 0);
+  const totalCommission = mediatorCommission + companyCommission;
+  const grossInterest = interestEarned;
+  const netInterest = grossInterest - totalCommission;
 
   res.json({
     month,
     collections: Number(t.collections || 0),
+    grossInterest,
     interestEarned,
+    netInterest,
+    mediatorCommission,
+    companyCommission,
+    totalCommission,
     principalRecovered: Number(s.principal_recovered || 0),
     expenses,
     badDebt,

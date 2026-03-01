@@ -48,6 +48,8 @@ router.post('/', asyncHandler(async (req, res) => {
   if (Number.isNaN(expenseDate.getTime())) throw new ApiError(422, 'VALIDATION_ERROR', 'Invalid expenseDate');
 
   const idempotencyKey = (req.headers['idempotency-key'] || body.idempotencyKey || null);
+  const rawClientId = body.clientId ? String(body.clientId).trim() : null;
+  const rawLoanId = body.loanId ? String(body.loanId).trim() : null;
 
   const result = await withTransaction(async (client) => {
     if (idempotencyKey) {
@@ -81,13 +83,39 @@ router.post('/', asyncHandler(async (req, res) => {
       client
     );
 
+    let resolvedClientId = rawClientId || null;
+    let resolvedLoanId = rawLoanId || null;
+
+    if (resolvedClientId) {
+      const cRes = await query(
+        `select id from clients where organization_id = $1 and id = $2`,
+        [orgId, resolvedClientId],
+        client
+      );
+      if (!cRes.rows[0]) throw new ApiError(422, 'VALIDATION_ERROR', 'Invalid clientId');
+    }
+
+    if (resolvedLoanId) {
+      const lRes = await query(
+        `select id, client_id from loans where organization_id = $1 and id = $2`,
+        [orgId, resolvedLoanId],
+        client
+      );
+      const loan = lRes.rows[0];
+      if (!loan) throw new ApiError(422, 'VALIDATION_ERROR', 'Invalid loanId');
+      if (resolvedClientId && loan.client_id !== resolvedClientId) {
+        throw new ApiError(422, 'VALIDATION_ERROR', 'loanId does not belong to clientId');
+      }
+      if (!resolvedClientId) resolvedClientId = loan.client_id;
+    }
+
     await query(
       `
       insert into ledger_entries (
-        organization_id, entry_time, tx_type, tag, amount, description, category, expense_id, created_by
-      ) values ($1,$2,'DEBIT','EXPENSE',$3,$4,$5,$6,$7)
+        organization_id, entry_time, tx_type, tag, amount, description, category, client_id, loan_id, expense_id, created_by
+      ) values ($1,$2,'DEBIT','EXPENSE',$3,$4,$5,$6,$7,$8,$9)
       `,
-      [orgId, expenseDate.toISOString(), amount, description, category, expenseInsert.rows[0].id, userId],
+      [orgId, expenseDate.toISOString(), amount, description, category, resolvedClientId, resolvedLoanId, expenseInsert.rows[0].id, userId],
       client
     );
 
