@@ -1647,10 +1647,10 @@ function App(){
   const reportAgingLive=reportApiMode&&backendDash.risk?.aging&&typeof backendDash.risk.aging==='object'?backendDash.risk.aging:stats.aging;
   const reportCollectionsAmount=reportPnl?toNum(reportPnl.collections):mIn;
   const reportGrossInterest=reportPnl?toNum(reportPnl.grossInterest??reportPnl.interestEarned):mInterestEarned;
-  const reportMediatorCommission=reportPnl?toNum(reportPnl.mediatorCommission):mMediatorCommission;
-  const reportCompanyCommission=reportPnl?toNum(reportPnl.companyCommission):mCompanyCommission;
-  const reportTotalCommission=reportPnl?toNum(reportPnl.totalCommission):(mMediatorCommission+mCompanyCommission);
-  const reportNetInterest=reportPnl?toNum(reportPnl.netInterest):(mInterestEarned-(mMediatorCommission+mCompanyCommission));
+  const reportMediatorCommission=reportPnl?toNum(reportPnl.mediatorCommission??mMediatorCommission):mMediatorCommission;
+  const reportCompanyCommission=reportPnl?toNum(reportPnl.companyCommission??mCompanyCommission):mCompanyCommission;
+  const reportTotalCommission=reportPnl?toNum(reportPnl.totalCommission??(mMediatorCommission+mCompanyCommission)):(mMediatorCommission+mCompanyCommission);
+  const reportNetInterest=reportPnl?toNum(reportPnl.netInterest??(mInterestEarned-(mMediatorCommission+mCompanyCommission))):(mInterestEarned-(mMediatorCommission+mCompanyCommission));
   const reportPrincipalRecovered=reportPnl?toNum(reportPnl.principalRecovered):mPrincipalRecovered;
   const reportExpenses=reportPnl?toNum(reportPnl.expenses):mExp;
   const reportBadDebt=reportPnl?toNum(reportPnl.badDebt):mBD;
