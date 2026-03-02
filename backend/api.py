@@ -81,7 +81,7 @@ def _run_analysis_job(
             overrides_db=str(p["db"]),
         )
 
-        final_status = "PASS" if rc == 0 else "WARN_OR_FAIL"
+        final_status = "PASS" if rc == 0 else "FAIL"
         meta.update(
             {
                 "status": final_status,
@@ -89,6 +89,8 @@ def _run_analysis_job(
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+        if rc != 0:
+            meta["error"] = "Analysis finished with parsing/reconciliation failures. Check ERRORS and RECON in workbook."
 
         p["json"].write_text(json.dumps(meta, indent=2), encoding="utf-8")
         p["final"].write_text(

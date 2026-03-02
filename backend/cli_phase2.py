@@ -102,6 +102,7 @@ def run_phase2(inputs: list[str], out_path: str, config_path: str | None, overri
     cfg = load_config(config_path)
     statements = []
     extraction_issues: list[ReconIssue] = []
+    pre_recon_issues: list[ReconIssue] = []
     recon_summaries: list[ReconSummary] = []
     for path in inputs:
         try:
@@ -150,6 +151,33 @@ def run_phase2(inputs: list[str], out_path: str, config_path: str | None, overri
 
     all_txns = [t for txns in account_txns.values() for t in txns]
 
+    # Hard fail when no transactions are parsed for any account/file.
+    if not all_txns:
+        for account_id in account_txns.keys():
+            src = source_file_by_account.get(account_id, "UNKNOWN")
+            recon_summaries.append(
+                ReconSummary(
+                    account_id=account_id,
+                    source_file=src,
+                    expected_rows=expected_rows_by_account.get(account_id, 0),
+                    parsed_rows=0,
+                    total_dr=0.0,
+                    total_cr=0.0,
+                    balance_breaks=0,
+                    date_failures=0,
+                    status="FAIL",
+                    notes="No transactions parsed. Likely scanned/unsupported statement format or extraction failure.",
+                )
+            )
+            pre_recon_issues.append(
+                ReconIssue(
+                    severity="FAIL",
+                    code="NO_TXNS_PARSED",
+                    message="No transactions could be parsed from uploaded statement(s).",
+                    source_file=src,
+                )
+            )
+
     account_entities = _build_account_entities(account_txns)
     sister_entities = _build_sister_entities(cfg, account_entities)
 
@@ -185,7 +213,7 @@ def run_phase2(inputs: list[str], out_path: str, config_path: str | None, overri
     for t in all_txns:
         account_txns[t.account_id].append(t)
 
-    recon_issues: list[ReconIssue] = list(extraction_issues)
+    recon_issues: list[ReconIssue] = list(extraction_issues) + list(pre_recon_issues)
     for account_id, txns in account_txns.items():
         summary, issues = account_recon(
             account_id=account_id,
