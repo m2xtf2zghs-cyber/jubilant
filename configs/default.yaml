@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "project": {"currency": "INR", "timezone": "Asia/Kolkata"},
+  "amount_display": {"lakhs_divisor": 100000},
+  "month_labels": {
+    "use_year_suffix_from_jan": true,
+    "jan_suffix_format": "JAN({yy})",
+    "feb_suffix_format": "FEB({yy})",
+    "mar_suffix_format": "MAR({yy})"
+  },
+  "reconciliation": {
+    "hard_fail_on_row_count_mismatch": true,
+    "hard_fail_on_totals_mismatch_if_footer_present": true,
+    "totals_tolerance_rupees": 0.0,
+    "balance_tolerance_rupees": 0.01
+  },
+  "channels": {
+    "rtgs_keywords": ["RTGS", "I/W RTGS", "RTGSRET", "RTGS RETURN"],
+    "neft_keywords": ["NEFT", "NECS"],
+    "imps_keywords": ["IMPS"],
+    "upi_keywords": ["UPI"],
+    "cash_keywords": ["CASH", "ATM", "CS/", "CHEPA", "SELF", "CASH DEPOSIT", "CD/"],
+    "internal_keywords": ["TR/CHEPA", "TRF", "EBANK/TR", "TR TO", "TR FROM"]
+  },
+  "keywords": {
+    "bank_finance": ["LOAN COLL", "LOAN COLLECTION", "EMI", "JL DISP", "LOAN PAYOFF", "INT.COLL", "INT COLL", "INTEREST COLLECTION", "PENAL CHARGE COLL", "BILL ID:[", "LC CHARGES", "NESL", "CERSAI", "LEGAL FEES CHARGES", "APPRAISER FEE"],
+    "returns": ["RTGSRET", "RTGS RETURN", "INW CHQ RET", "CHQ RET", "BOUNCE", "RETURN", "NEFT RETURN", "I/W RTGS RTN", "RTN"],
+    "insurance": ["INSURANCE", "TATA AIG", "IFFCO TOKIO", "STAR HEALTH", "HDFC LIFE", "LIC", "BAJAJ ALLIANZ", "ICICI LOMBARD"],
+    "expense": ["CHQ BOOK", "CHQ BOOK ISSUE", "EB BILL", "ELECTRICITY", "SALARY", "GST", "TIN/", "/TAX", "CBDT", "CIBIL", "STAMP", "LEGAL FEES", "FEE", "CHARGES", "SUBSCRIPTION", "BROADBAND"],
+    "doubt_explicit": ["GST_REFUND", "GST REFUND", "ITDTAX REFUND", "INCOME TAX REFUND", "REFUND", "BUILDING APPROVAL", "APPROVAL", "INTEREST INCOME A/C"]
+  },
+  "round_figure": {
+    "enabled": true,
+    "apply_to_credits_only": true,
+    "multiple_of_bases": [100000],
+    "min_amount_rupees": 100000,
+    "confirmed_buyer_allows_round_sales": true
+  },
+  "pvt_finance": {
+    "enabled": true,
+    "recurrence": {"months_min": 4, "amount_tolerance_pct": 5, "require_same_direction": true},
+    "large_individual_threshold_rupees": 500000,
+    "bidirectional_party_triggers_pvt": true
+  },
+  "sister_concerns": {
+    "enabled": true,
+    "mismatch": {"tolerance_pct": 2, "min_delta_rupees": 5000},
+    "known_groups": [
+      {"entity": "AFFAN METALS", "aliases": ["AFFANMETALS", "AFFAN METALS", "AFFAN METAL"]},
+      {"entity": "VEERA INDUSTRIES", "aliases": ["VEERAINDUST", "VEERA INDUSTRIES", "VEERAV INDUSTRIES", "VEERAVINDUSTRIES"]},
+      {"entity": "VEERA PROPERTIES", "aliases": ["VEERAPROPERTIES", "VEERA PROPERIES", "VEERA PROPERTIES"]}
+    ]
+  },
+  "entity_dedup": {
+    "enabled": true,
+    "alias_map": {
+      "SAVARDHANA": "SAMVARDHANA MOTHER",
+      "SAMVARDHANA": "SAMVARDHANA MOTHER",
+      "SAMVARDHANA M": "SAMVARDHANA MOTHER",
+      "ACHARYA STEE": "ACHARYA STEELS",
+      "ACHARYA STEELS": "ACHARYA STEELS",
+      "KSS ENTER": "K S S ENTERPRISES",
+      "KSS ENTERPRISES": "K S S ENTERPRISES",
+      "K S S ENTER": "K S S ENTERPRISES"
+    }
+  },
+  "counterparty_stopwords": ["TRF", "TRANSFER", "TR", "EBANK", "BANK", "BRANCH", "IFSC", "CHARGES", "FEE", "GST", "TAX", "CBDT", "TIN", "BILL ID", "LOAN", "INTEREST", "SELF", "CASH"],
+  "risk_flags": {
+    "odd_fig_credit_pct_threshold": 20,
+    "doubt_txn_pct_threshold": 10,
+    "cash_withdrawal_pct_of_sales_threshold": 30,
+    "cheque_bounce_per_month_threshold": 2,
+    "sales_decline_consecutive_months": 3,
+    "private_finance_pct_threshold": 10,
+    "bank_finance_pct_threshold": 10
+  },
+  "formatting": {
+    "type_fill_colors": {
+      "SALES": "green",
+      "PURCHASE": "orange_light",
+      "SIS CON": "yellow",
+      "CASH": "grey",
+      "BANK FIN": "blue",
+      "PVT FIN": "purple",
+      "ODD FIG": "orange_red",
+      "DOUBT": "red",
+      "RETURN": "dark_red",
+      "EXPENSE": "grey_light",
+      "INSURANCE": "blue_light"
+    }
+  }
+}

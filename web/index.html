@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Money Lender Statement Analyser</title>
+    <meta
+      name="description"
+      content="Premium underwriting UI for statement analysis, reconciliation, and lender-grade decisioning."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <div class="brand-pill">NBFC-Grade</div>
+          <h1>Money Lender Statement Analyser</h1>
+        </div>
+        <div class="meta-actions">
+          <span class="dot"></span>
+          <span>Deterministic Pipeline</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Premium Credit Underwriting Workspace</p>
+          <h2>Upload statements. Validate integrity. Underwrite with confidence.</h2>
+          <p>
+            Parse multi-bank statements, enforce reconciliation, classify every row, and produce lender-ready Excel
+            packs with FINAL verdicts and risk overlays.
+          </p>
+          <div class="hero-stats">
+            <div><strong>0 Drop</strong><span>Row-loss policy</span></div>
+            <div><strong>11 Types</strong><span>Strict rule chain</span></div>
+            <div><strong>XNS + FINAL</strong><span>Audit-ready outputs</span></div>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <h3>Analysis Runbook</h3>
+          <ol>
+            <li>Upload 1..N statements (PDF/CSV/XLS/XLSX)</li>
+            <li>Choose mode and strictness</li>
+            <li>Run analysis and download artifacts</li>
+          </ol>
+        </div>
+      </section>
+
+      <main class="grid">
+        <section class="card upload-card">
+          <div class="card-head">
+            <h3>Statement Upload</h3>
+            <span id="fileCount">0 files</span>
+          </div>
+          <label class="dropzone" id="dropzone" for="fileInput">
+            <input id="fileInput" type="file" accept=".pdf,.csv,.xls,.xlsx" multiple />
+            <p class="drop-title">Drag & drop files here</p>
+            <p class="drop-sub">or click to browse</p>
+          </label>
+          <ul id="fileList" class="file-list"></ul>
+        </section>
+
+        <section class="card controls-card">
+          <div class="card-head">
+            <h3>Run Controls</h3>
+            <span id="modeBadge">Demo Mode</span>
+          </div>
+
+          <div class="field-grid">
+            <label>
+              Entity Name
+              <input id="entityName" type="text" placeholder="AFFAN METALS" />
+            </label>
+            <label>
+              Run Mode
+              <select id="runMode">
+                <option value="demo">Demo (No backend required)</option>
+                <option value="api">API (Connect backend)</option>
+              </select>
+            </label>
+            <label class="full-width">
+              API Base URL
+              <input id="apiBase" type="url" placeholder="https://your-api.example.com" />
+            </label>
+          </div>
+
+          <div class="toggle-row">
+            <label><input id="strictRecon" type="checkbox" checked /> Strict Reconciliation</label>
+            <label><input id="includeUnderwriting" type="checkbox" checked /> Include Underwriting</label>
+          </div>
+
+          <button id="runBtn" class="run-btn">Run Analysis</button>
+          <p id="runMessage" class="run-message"></p>
+        </section>
+
+        <section class="card status-card">
+          <div class="card-head">
+            <h3>Pipeline Status</h3>
+            <span id="statusLabel">Idle</span>
+          </div>
+          <div class="progress-wrap">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+          <ul id="phaseList" class="phase-list"></ul>
+        </section>
+
+        <section class="card exports-card">
+          <div class="card-head">
+            <h3>Generated Outputs</h3>
+            <span>Ready to Download</span>
+          </div>
+          <div class="export-grid">
+            <a id="xlsxLink" class="export-btn disabled" href="#">Workbook (.xlsx)</a>
+            <a id="jsonLink" class="export-btn disabled" href="#">Canonical JSON</a>
+            <a id="finalLink" class="export-btn disabled" href="#">FINAL Summary (txt)</a>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="fileItemTpl">
+      <li class="file-item">
+        <div>
+          <p class="file-name"></p>
+          <p class="file-meta"></p>
+        </div>
+      </li>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

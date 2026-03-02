@@ -1,0 +1,19 @@
+[project]
+name = "money-lender-statement-analyser"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "pdfplumber>=0.11.0",
+  "python-multipart>=0.0.9",
+  "xlsxwriter>=3.2.0",
+  "pytest>=8.0.0",
+  "uvicorn>=0.30.0"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110

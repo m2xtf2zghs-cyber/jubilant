@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "extends": "configs/default.yaml",
+  "reconciliation": {
+    "hard_fail_on_row_count_mismatch": true,
+    "hard_fail_on_totals_mismatch_if_footer_present": true,
+    "totals_tolerance_rupees": 0.0,
+    "balance_tolerance_rupees": 0.0
+  },
+  "sister_concerns": {"mismatch": {"tolerance_pct": 1, "min_delta_rupees": 1000}},
+  "risk_flags": {
+    "odd_fig_credit_pct_threshold": 15,
+    "doubt_txn_pct_threshold": 7,
+    "cash_withdrawal_pct_of_sales_threshold": 25,
+    "cheque_bounce_per_month_threshold": 1,
+    "sales_decline_consecutive_months": 2,
+    "private_finance_pct_threshold": 8,
+    "bank_finance_pct_threshold": 8
+  },
+  "pvt_finance": {"recurrence": {"months_min": 3, "amount_tolerance_pct": 3}}
+}

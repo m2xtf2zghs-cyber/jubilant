@@ -1,0 +1,23 @@
+{
+  "version": "1.0",
+  "extends": "configs/default.yaml",
+  "parsing": {
+    "bank_overrides": {
+      "TMB": {
+        "bank_name_tokens": ["TAMILNAD MERCANTILE BANK", "TMB"],
+        "table_headers_any_of": [
+          ["TXN. DATE", "TRANSACTION REMARKS", "DEBIT", "CREDIT", "ACCOUNT BALANCE"],
+          ["TXN DATE", "TRANSACTION", "DEBIT", "CREDIT", "BALANCE"]
+        ],
+        "account_type_tokens": {
+          "OD": ["ODGEN", "OD", "OVERDRAFT"],
+          "CA": ["CAFLX", "CURRENT"],
+          "CC": ["CC", "CASH CREDIT"],
+          "SA": ["SB", "SAVINGS"]
+        },
+        "ref_patterns": ["TMBLH\\d{8}\\d+", "TMBLR\\d{8}\\d+"],
+        "multiline_narration": {"enabled": true, "row_starts_with_date_regex": "^\\s*\\d{2}[-/]\\d{2}[-/]\\d{2,4}\\b"}
+      }
+    }
+  }
+}

@@ -1,0 +1,238 @@
+[
+  {
+    "name": "BANK_FIN_loan_coll",
+    "txn_date": "2025-08-10",
+    "narration_raw": "Loan Coll. To -210700850100057",
+    "dr": 42004.00,
+    "cr": 0.00,
+    "balance": 150000.00,
+    "expect_type": "BANK FIN",
+    "expect_category": "Loan -0057",
+    "expect_rule_prefix": "BANK_FIN"
+  },
+  {
+    "name": "BANK_FIN_gold_loan_disp",
+    "txn_date": "2025-09-02",
+    "narration_raw": "JL Disp 210700300100227",
+    "dr": 0.00,
+    "cr": 500000.00,
+    "balance": 650000.00,
+    "expect_type": "BANK FIN",
+    "expect_category": "Gold Loan Disbursed -0227",
+    "expect_rule_prefix": "BANK_FIN"
+  },
+  {
+    "name": "BANK_FIN_int_coll",
+    "txn_date": "2025-08-31",
+    "narration_raw": "210700050900123:Int.Coll:01-08-2025 to 31-08-2025",
+    "dr": 12500.00,
+    "cr": 0.00,
+    "balance": -250000.00,
+    "account_type": "OD",
+    "expect_type": "BANK FIN",
+    "expect_category": "Interest Charges",
+    "expect_rule_prefix": "BANK_FIN"
+  },
+  {
+    "name": "BANK_FIN_bill_id_purchase",
+    "txn_date": "2026-01-05",
+    "narration_raw": "Bill Id:[210DBP2600010]:PURCHASE",
+    "dr": 0.00,
+    "cr": 1910980.00,
+    "balance": -500000.00,
+    "account_type": "CC",
+    "expect_type": "BANK FIN",
+    "expect_category": "Bill Id -210DBP2600010",
+    "expect_rule_prefix": "BANK_FIN"
+  },
+
+  {
+    "name": "RETURN_rtgsret",
+    "txn_date": "2025-10-11",
+    "narration_raw": "RTGSRET/METAL AND SC/HDFCR520251011123456",
+    "dr": 0.00,
+    "cr": 409422.00,
+    "balance": 200000.00,
+    "expect_type": "RETURN",
+    "expect_category_contains": "METAL AND SC",
+    "expect_rule_prefix": "RETURN"
+  },
+  {
+    "name": "RETURN_inw_chq_ret_chrg",
+    "txn_date": "2025-10-15",
+    "narration_raw": "INW CHQ RET CHRGS/123456/15-10-2025/RC",
+    "dr": 2212.50,
+    "cr": 0.00,
+    "balance": 197787.50,
+    "expect_type": "RETURN",
+    "expect_category_contains": "RETURN",
+    "expect_rule_prefix": "RETURN"
+  },
+
+  {
+    "name": "CASH_self_withdraw",
+    "txn_date": "2025-08-20",
+    "narration_raw": "CS/CHEPA/SELF",
+    "dr": 150000.00,
+    "cr": 0.00,
+    "balance": 50000.00,
+    "expect_type": "CASH",
+    "expect_category": "CASH WITHDRAWAL",
+    "expect_rule_prefix": "CASH"
+  },
+  {
+    "name": "CASH_cash_deposit",
+    "txn_date": "2025-08-21",
+    "narration_raw": "CASH DEPOSIT",
+    "dr": 0.00,
+    "cr": 80000.00,
+    "balance": 130000.00,
+    "expect_type": "CASH",
+    "expect_category": "CASH DEPOSIT",
+    "expect_rule_prefix": "CASH"
+  },
+
+  {
+    "name": "SIS_CON_tr_chepa",
+    "txn_date": "2025-09-01",
+    "narration_raw": "TR/CHEPA/VEERA INDUSTRIES",
+    "dr": 295000.00,
+    "cr": 0.00,
+    "balance": 100000.00,
+    "ctx_accounts": [
+      {"entity":"VEERA INDUSTRIES","account_id":"TMB-0123-OD"},
+      {"entity":"AFFAN METALS","account_id":"TMB-5048-CA"}
+    ],
+    "expect_type": "SIS CON",
+    "expect_category": "VEERA INDUSTRIES-TMB-0123-OD",
+    "expect_rule_prefix": "SIS_CON"
+  },
+
+  {
+    "name": "INSURANCE_tata_aig",
+    "txn_date": "2025-12-10",
+    "narration_raw": "eBank/631043971/Insurance TATA AIG",
+    "dr": 22200.00,
+    "cr": 0.00,
+    "balance": 80000.00,
+    "expect_type": "INSURANCE",
+    "expect_category": "INSURANCE",
+    "expect_rule_prefix": "INSURANCE"
+  },
+
+  {
+    "name": "EXPENSE_cbdt_tax",
+    "txn_date": "2025-08-06",
+    "narration_raw": "eBank/CBDT/25080600651839",
+    "dr": 394125.00,
+    "cr": 0.00,
+    "balance": 200000.00,
+    "expect_type": "EXPENSE",
+    "expect_category": "CBDT TAX",
+    "expect_rule_prefix": "EXPENSE"
+  },
+  {
+    "name": "EXPENSE_eb_bill",
+    "txn_date": "2025-09-15",
+    "narration_raw": "eBank/613284101/FACTORY EB BILL",
+    "dr": 55000.00,
+    "cr": 0.00,
+    "balance": 145000.00,
+    "expect_type": "EXPENSE",
+    "expect_category": "EB BILL",
+    "expect_rule_prefix": "EXPENSE"
+  },
+  {
+    "name": "EXPENSE_salary",
+    "txn_date": "2025-09-30",
+    "narration_raw": "eBank/Tr To RAJASEKARAN RAVICHANDRAN / SALARY",
+    "dr": 45000.00,
+    "cr": 0.00,
+    "balance": 100000.00,
+    "expect_type": "EXPENSE",
+    "expect_category": "SALARY",
+    "expect_rule_prefix": "EXPENSE"
+  },
+
+  {
+    "name": "DOUBT_gst_refund",
+    "txn_date": "2025-11-05",
+    "narration_raw": "GST_Refund/2025-11/ABC123",
+    "dr": 0.00,
+    "cr": 150000.00,
+    "balance": 250000.00,
+    "expect_type": "DOUBT",
+    "expect_category": "GST REFUND",
+    "expect_rule_prefix": "DOUBT"
+  },
+  {
+    "name": "DOUBT_building_approval",
+    "txn_date": "2025-10-01",
+    "narration_raw": "eBank/987654321/building approval",
+    "dr": 1010500.00,
+    "cr": 0.00,
+    "balance": 10000.00,
+    "expect_type": "DOUBT",
+    "expect_category": "BUILDING APPROVAL",
+    "expect_rule_prefix": "DOUBT"
+  },
+
+  {
+    "name": "PVT_FIN_recurrence",
+    "txn_date": "2025-08-07",
+    "narration_raw": "TR/CHEPA/ILAKKIA",
+    "dr": 113000.00,
+    "cr": 0.00,
+    "balance": 50000.00,
+    "recurrence_hint": {"months": 5, "same_amount": true},
+    "expect_type": "PVT FIN",
+    "expect_category": "ILAKKIA",
+    "expect_rule_prefix": "PVT_FIN"
+  },
+  {
+    "name": "ODD_FIG_round_credit_individual",
+    "txn_date": "2025-08-08",
+    "narration_raw": "RTGS/LATHA/CBINR520250808123456",
+    "dr": 0.00,
+    "cr": 1200000.00,
+    "balance": 1250000.00,
+    "expect_type": "ODD FIG",
+    "expect_category": "LATHA",
+    "expect_rule_prefix": "ODD_FIG"
+  },
+  {
+    "name": "SALES_odd_credit_trade",
+    "txn_date": "2025-08-09",
+    "narration_raw": "RTGS/MTC BUSINESS/HDFCR52025080996730628",
+    "dr": 0.00,
+    "cr": 904558.00,
+    "balance": 2154558.00,
+    "expect_type": "SALES",
+    "expect_category": "MTC BUSINESS",
+    "expect_rule_prefix": "SALES"
+  },
+
+  {
+    "name": "PURCHASE_remaining_debit",
+    "txn_date": "2025-08-12",
+    "narration_raw": "RTGS/SAMVARDHANA MOTHER/TMBLR520250812001",
+    "dr": 2600000.00,
+    "cr": 0.00,
+    "balance": -445442.00,
+    "expect_type": "PURCHASE",
+    "expect_category_contains": "SAMVARDHANA",
+    "expect_rule_prefix": "PURCHASE"
+  },
+
+  {
+    "name": "FALLBACK_unclassified_goes_doubt",
+    "txn_date": "2025-08-13",
+    "narration_raw": "SOME UNKNOWN TOKEN ABC XYZ",
+    "dr": 12345.00,
+    "cr": 0.00,
+    "balance": -457787.00,
+    "expect_type": "DOUBT",
+    "expect_flags_include": ["AUTO-UNCLASSIFIED"],
+    "expect_rule_prefix": "FALLBACK"
+  }
+]
