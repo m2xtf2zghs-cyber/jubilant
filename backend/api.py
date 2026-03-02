@@ -66,6 +66,11 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "money-lender-statement-analyser-api"}
 
 
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"status": "ok", "service": "money-lender-statement-analyser-api", "docs": "/docs"}
+
+
 @app.post("/analyze")
 async def analyze(
     inputs: list[UploadFile] = File(...),
