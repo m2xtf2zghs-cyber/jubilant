@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -46,6 +47,83 @@ def _write_meta(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _run_analysis_job(
+    *,
+    analysis_id: str,
+    input_paths: list[str],
+    entity: str,
+    cfg: str,
+    strict_recon: bool,
+    include_underwriting: bool,
+    saved_files: list[str],
+) -> None:
+    p = _run_paths(analysis_id)
+    meta = json.loads(p["meta"].read_text(encoding="utf-8")) if p["meta"].exists() else {}
+    meta.update(
+        {
+            "analysis_id": analysis_id,
+            "entity": entity,
+            "status": "RUNNING",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "config_path": cfg,
+            "strict_recon": strict_recon,
+            "include_underwriting": include_underwriting,
+            "inputs": saved_files,
+        }
+    )
+    _write_meta(p["meta"], meta)
+
+    try:
+        rc = run_phase2(
+            inputs=input_paths,
+            out_path=str(p["xlsx"]),
+            config_path=cfg,
+            overrides_db=str(p["db"]),
+        )
+
+        final_status = "PASS" if rc == 0 else "WARN_OR_FAIL"
+        meta.update(
+            {
+                "status": final_status,
+                "return_code": rc,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        p["json"].write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        p["final"].write_text(
+            "\n".join(
+                [
+                    "Money Lender Statement Analyser - FINAL Snapshot",
+                    f"Analysis ID: {analysis_id}",
+                    f"Entity: {entity}",
+                    f"Status: {meta['status']}",
+                    f"Return code: {rc}",
+                    f"Strict Recon: {strict_recon}",
+                    f"Include Underwriting: {include_underwriting}",
+                    f"Inputs: {', '.join(saved_files)}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        if not p["xlsx"].exists():
+            meta["status"] = "FAIL"
+            meta["error"] = "Analysis completed without workbook output."
+    except Exception as exc:
+        meta.update(
+            {
+                "status": "FAIL",
+                "return_code": 1,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error": f"{exc.__class__.__name__}: {exc}",
+                "traceback": traceback.format_exc()[-4000:],
+            }
+        )
+
+    _write_meta(p["meta"], meta)
+
+
 app = FastAPI(
     title="Money Lender Statement Analyser API",
     version="0.1.0",
@@ -73,6 +151,7 @@ def root() -> dict[str, str]:
 
 @app.post("/analyze")
 async def analyze(
+    background_tasks: BackgroundTasks,
     inputs: list[UploadFile] = File(...),
     entity: str = Form("Entity"),
     config_path: str = Form("configs/default.yaml"),
@@ -102,52 +181,41 @@ async def analyze(
         if strict_candidate.exists():
             cfg = str(strict_candidate)
 
-    started_at = datetime.now(timezone.utc).isoformat()
-    rc = run_phase2(
-        inputs=input_paths,
-        out_path=str(p["xlsx"]),
-        config_path=cfg,
-        overrides_db=str(p["db"]),
-    )
-    completed_at = datetime.now(timezone.utc).isoformat()
-
+    strict_flag = _parse_bool(strict_recon)
+    uw_flag = _parse_bool(include_underwriting)
     metadata = {
         "analysis_id": analysis_id,
         "entity": entity,
-        "status": "PASS" if rc == 0 else "WARN_OR_FAIL",
-        "return_code": rc,
-        "include_underwriting": _parse_bool(include_underwriting),
-        "strict_recon": _parse_bool(strict_recon),
+        "status": "QUEUED",
+        "return_code": None,
+        "include_underwriting": uw_flag,
+        "strict_recon": strict_flag,
         "config_path": cfg,
         "inputs": saved_files,
-        "started_at": started_at,
-        "completed_at": completed_at,
+        "started_at": None,
+        "completed_at": None,
+        "status_url": f"/status/{analysis_id}",
+        "xlsx_url": f"/download/{analysis_id}/xlsx",
+        "json_url": f"/download/{analysis_id}/json",
+        "final_url": f"/download/{analysis_id}/final",
     }
     _write_meta(p["meta"], metadata)
 
-    p["json"].write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    p["final"].write_text(
-        "\n".join(
-            [
-                f"Money Lender Statement Analyser - FINAL Snapshot",
-                f"Analysis ID: {analysis_id}",
-                f"Entity: {entity}",
-                f"Status: {metadata['status']}",
-                f"Return code: {rc}",
-                f"Strict Recon: {metadata['strict_recon']}",
-                f"Include Underwriting: {metadata['include_underwriting']}",
-                f"Inputs: {', '.join(saved_files)}",
-            ]
-        ),
-        encoding="utf-8",
+    background_tasks.add_task(
+        _run_analysis_job,
+        analysis_id=analysis_id,
+        input_paths=input_paths,
+        entity=entity,
+        cfg=cfg,
+        strict_recon=strict_flag,
+        include_underwriting=uw_flag,
+        saved_files=saved_files,
     )
-
-    if not p["xlsx"].exists():
-        raise HTTPException(status_code=500, detail="Analysis did not generate workbook.")
 
     return {
         "analysis_id": analysis_id,
         "status": metadata["status"],
+        "status_url": f"/status/{analysis_id}",
         "xlsx_url": f"/download/{analysis_id}/xlsx",
         "json_url": f"/download/{analysis_id}/json",
         "final_url": f"/download/{analysis_id}/final",

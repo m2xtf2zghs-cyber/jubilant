@@ -163,30 +163,66 @@ async function runApi() {
   }
 
   const data = await response.json();
-  setProgress(70, "Processing complete");
-  updatePhases(["Submitting to backend", "Processing", "Downloading outputs"], 2);
+  const analysisId = data.analysis_id;
+  if (!analysisId) {
+    throw new Error("Backend did not return analysis_id.");
+  }
+  setProgress(35, "Job submitted");
+  updatePhases(["Submitting to backend", "Processing", "Downloading outputs"], 1);
+
   const resolveApiUrl = (u) => {
     if (!u) return "";
     if (/^https?:\/\//i.test(u)) return u;
     return `${apiBase}${u.startsWith("/") ? "" : "/"}${u}`;
   };
 
-  if (data.xlsx_url) {
-    xlsxLink.href = resolveApiUrl(data.xlsx_url);
+  const statusUrl = resolveApiUrl(data.status_url || `/status/${analysisId}`);
+  const terminal = new Set(["PASS", "WARN_OR_FAIL", "FAIL"]);
+  let statusData = null;
+
+  for (let i = 0; i < 120; i += 1) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const sres = await fetch(statusUrl);
+    if (!sres.ok) {
+      continue;
+    }
+    statusData = await sres.json();
+    const st = String(statusData.status || "");
+    if (terminal.has(st)) {
+      break;
+    }
+    const pct = Math.min(85, 35 + i);
+    setProgress(pct, `Processing (${st || "RUNNING"})`);
+    updatePhases(["Submitting to backend", "Processing", "Downloading outputs"], 2);
+  }
+
+  if (!statusData) {
+    throw new Error(`Unable to fetch status for analysis ${analysisId}.`);
+  }
+  if (String(statusData.status) === "FAIL") {
+    throw new Error(statusData.error || `Analysis ${analysisId} failed.`);
+  }
+
+  const xlsxUrl = statusData.xlsx_url || data.xlsx_url;
+  const jsonUrl = statusData.json_url || data.json_url;
+  const finalUrl = statusData.final_url || data.final_url;
+
+  if (xlsxUrl) {
+    xlsxLink.href = resolveApiUrl(xlsxUrl);
     xlsxLink.classList.remove("disabled");
   }
-  if (data.json_url) {
-    jsonLink.href = resolveApiUrl(data.json_url);
+  if (jsonUrl) {
+    jsonLink.href = resolveApiUrl(jsonUrl);
     jsonLink.classList.remove("disabled");
   }
-  if (data.final_url) {
-    finalLink.href = resolveApiUrl(data.final_url);
+  if (finalUrl) {
+    finalLink.href = resolveApiUrl(finalUrl);
     finalLink.classList.remove("disabled");
   }
 
   setProgress(100, "Done");
   updatePhases(["Submitting to backend", "Processing", "Downloading outputs"], 3);
-  runMessage.textContent = `Analysis completed. ID: ${data.analysis_id || "N/A"}`;
+  runMessage.textContent = `Analysis completed. ID: ${analysisId}`;
 }
 
 async function onRun() {
