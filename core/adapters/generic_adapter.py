@@ -7,7 +7,10 @@ from core.amount_date_parsers import parse_date
 from core.bank_adapter_base import PdfDocument, RawRow, StatementMetadata
 
 
-DATE_START_RE = re.compile(r"^\s*(\d{2}[-/]\d{2}[-/]\d{2,4})\b")
+DATE_START_RE = re.compile(
+    r"^\s*(?:\d+\s+)?(?P<date>(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(?:\d{1,2}[./-][A-Za-z]{3}[./-]\d{2,4})|(?:\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}))\b",
+    re.IGNORECASE,
+)
 AMOUNT_TOKEN_RE = re.compile(r"(?<!\w)(?:\(?-?\d[\d,]*\.\d{1,2}\)?|\(?-?\d[\d,]*\)?)(?!\w)")
 
 
@@ -19,7 +22,7 @@ def _norm_line(s: str) -> str:
 
 def _looks_like_date_prefix(line: str) -> Optional[str]:
     m = DATE_START_RE.match(line)
-    return m.group(1) if m else None
+    return m.group("date") if m else None
 
 
 def _split_row_tokens(line: str) -> list[str]:
@@ -119,8 +122,8 @@ class GenericAdapter:
                         debit_str, credit_str = None, None
 
                     body = _strip_trailing_amounts(line, amounts)
-                    # remove date token at start
-                    body = re.sub(r"^\s*" + re.escape(dt) + r"\s*", "", body).strip()
+                    # remove optional serial number + date token at start
+                    body = re.sub(r"^\s*(?:\d+\s+)?"+re.escape(dt)+r"\s*", "", body).strip()
 
                     current = RawRow(
                         txn_date_str=dt,

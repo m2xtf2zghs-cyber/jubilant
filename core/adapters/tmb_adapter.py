@@ -8,7 +8,10 @@ from core.bank_adapter_base import PdfDocument, RawRow, StatementMetadata
 from core.bank_header_patterns import detect_table_header
 
 
-DATE_START_RE = re.compile(r"^\s*(\d{2}[-/]\d{2}[-/]\d{2,4})\b")
+DATE_START_RE = re.compile(
+    r"^\s*(?:\d+\s+)?(?P<date>(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(?:\d{1,2}[./-][A-Za-z]{3}[./-]\d{2,4})|(?:\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}))\b",
+    re.IGNORECASE,
+)
 
 
 def _norm_line(s: str) -> str:
@@ -19,7 +22,7 @@ def _norm_line(s: str) -> str:
 
 def _looks_like_date_prefix(line: str) -> Optional[str]:
     m = DATE_START_RE.match(line)
-    return m.group(1) if m else None
+    return m.group("date") if m else None
 
 
 class TmbAdapter:
@@ -98,7 +101,7 @@ class TmbAdapter:
                     # Narration is everything between date and trailing nums
                     # Rebuild: remove date then remove trailing numeric tokens
                     body = line
-                    body = re.sub(r"^\s*" + re.escape(dt) + r"\s*", "", body).strip()
+                    body = re.sub(r"^\s*(?:\d+\s+)?"+re.escape(dt)+r"\s*", "", body).strip()
                     for tok in reversed(nums):
                         body = re.sub(rf"\s+{re.escape(tok)}\s*$", "", body)
 
