@@ -199,9 +199,6 @@ async function runApi() {
   if (!statusData) {
     throw new Error(`Unable to fetch status for analysis ${analysisId}.`);
   }
-  if (String(statusData.status) === "FAIL") {
-    throw new Error(statusData.error || `Analysis ${analysisId} failed.`);
-  }
 
   const xlsxUrl = statusData.xlsx_url || data.xlsx_url;
   const jsonUrl = statusData.json_url || data.json_url;
@@ -218,6 +215,13 @@ async function runApi() {
   if (finalUrl) {
     finalLink.href = resolveApiUrl(finalUrl);
     finalLink.classList.remove("disabled");
+  }
+
+  const finalState = String(statusData.status || "");
+  if (finalState === "FAIL") {
+    setProgress(100, "Failed (report ready)");
+    runMessage.textContent = `Analysis failed: ${statusData.error || "parsing/reconciliation failure"}. Download workbook and review ERRORS/RECON. ID: ${analysisId}`;
+    return;
   }
 
   setProgress(100, "Done");
