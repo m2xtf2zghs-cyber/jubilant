@@ -1,0 +1,19 @@
+# Node
+node_modules/
+.next/
+out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Local data
+*.sqlite3
+infrastructure/data/
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
