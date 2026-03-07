@@ -21,6 +21,7 @@
 
 ## 3. Runtime Environment Checks
 
+- [ ] Populate production envs using templates in `docs/release/env/`
 - [ ] API env vars set and rotated (`SECRET_KEY`, DB, Redis, S3)
 - [ ] Celery broker and workers healthy
 - [ ] Object storage bucket reachable and writable

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     secret_key: str = "change-me"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 720
+    cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     postgres_db: str = "creditatlas"
     postgres_user: str = "creditatlas"
@@ -45,6 +46,13 @@ class Settings(BaseSettings):
             f"{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        origins = [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+        if origins:
+            return origins
+        return ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 
 settings = Settings()

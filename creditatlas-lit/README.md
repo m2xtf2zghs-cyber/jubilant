@@ -100,6 +100,10 @@ pytest
 
 - Release checklist:
   - [`docs/release/release-checklist.md`](docs/release/release-checklist.md)
+- Production env templates:
+  - [`docs/release/env/api.production.env.example`](docs/release/env/api.production.env.example)
+  - [`docs/release/env/worker.production.env.example`](docs/release/env/worker.production.env.example)
+  - [`docs/release/env/netlify.production.env.example`](docs/release/env/netlify.production.env.example)
 
 ## MVP Capabilities
 
