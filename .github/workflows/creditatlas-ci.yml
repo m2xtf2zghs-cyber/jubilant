@@ -42,7 +42,7 @@ jobs:
         run: mypy app
 
       - name: API tests
-        run: pytest
+        run: PYTHONPATH=. pytest
 
   web-build:
     runs-on: ubuntu-latest
