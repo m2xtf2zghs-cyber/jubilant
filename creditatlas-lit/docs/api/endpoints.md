@@ -23,6 +23,10 @@
 - `GET /cases/{case_id}/bank-ingestion/status`
 - `POST /cases/{case_id}/bank-ingestion/reprocess`
 
+## GST (Phase 2)
+- `POST /cases/{case_id}/gst/verify`
+- `GET /cases/{case_id}/gst/profile`
+
 ## Intelligence
 - `GET /cases/{case_id}/transactions`
 - `GET /cases/{case_id}/transactions/monthly-summary`

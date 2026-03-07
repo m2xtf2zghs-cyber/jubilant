@@ -318,6 +318,28 @@ class RiskFlag(Base, TimestampMixin):
     context: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class GstProfile(Base, TimestampMixin):
+    __tablename__ = "gst_profiles"
+    __table_args__ = (UniqueConstraint("case_id", name="uq_gst_profile_case"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    case_id: Mapped[str] = mapped_column(String(36), ForeignKey("loan_cases.id"), index=True)
+    source_vendor_payload_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("vendor_payloads.id"), index=True
+    )
+    provider_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    gstin: Mapped[str] = mapped_column(String(20), nullable=False)
+    legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    registration_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    filing_frequency: Mapped[str | None] = mapped_column(String(40))
+    last_filed_period: Mapped[str | None] = mapped_column(String(7))
+    gstr1_turnover: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    gstr3b_turnover: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    canonical_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"
 

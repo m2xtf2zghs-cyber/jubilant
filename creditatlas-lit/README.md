@@ -99,6 +99,17 @@ pytest
 - Deterministic Credit Brain v1 recommendation output
 - Lender cockpit UI for case review and decisioning
 
+## Phase 2 Add-on (Implemented)
+
+- GST verification adapter layer with provider fallback
+  - Primary: `ClearGSTProvider`
+  - Backup: `KarzaGSTProvider`
+- Canonical GST profile persistence in `gst_profiles`
+- Raw GST vendor payload retention in `vendor_payloads`
+- Endpoints:
+  - `POST /cases/{case_id}/gst/verify`
+  - `GET /cases/{case_id}/gst/profile`
+
 ## Notes
 
 - Business logic is intentionally deterministic and explainable.

@@ -168,6 +168,28 @@ class CreditBrainOut(BaseModel):
     narrative: str
 
 
+class GSTVerifyRequest(BaseModel):
+    gstin: str | None = Field(default=None, min_length=15, max_length=15)
+
+
+class GSTProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    case_id: str
+    provider_name: str
+    gstin: str
+    legal_name: str
+    registration_status: str
+    filing_frequency: str | None
+    last_filed_period: str | None
+    gstr1_turnover: float
+    gstr3b_turnover: float
+    confidence: float
+    canonical_payload: dict[str, Any]
+    updated_at: datetime
+
+
 class CaseSummaryOut(BaseModel):
     case_id: str
     borrower_name: str
