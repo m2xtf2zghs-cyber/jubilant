@@ -49,7 +49,7 @@ def run_smoke() -> None:
     with TestClient(app) as client:
         login = client.post(
             "/auth/login",
-            json={"email": "analyst@creditatlas.local", "password": "Password@123"},
+            json={"email": "analyst@creditatlas.app", "password": "Password@123"},
         )
         assert login.status_code == 200, f"login failed: {login.text}"
         token = login.json()["access_token"]
@@ -169,6 +169,7 @@ def main() -> None:
     os.environ["DATABASE_URL_OVERRIDE"] = args.db_url
     os.environ["ENFORCE_MIGRATION_CHECK"] = "false"
     os.environ["ALLOW_INLINE_INGESTION_FALLBACK"] = "true"
+    os.environ["STORAGE_BACKEND"] = "local"
 
     from app.seed import run_seed
 

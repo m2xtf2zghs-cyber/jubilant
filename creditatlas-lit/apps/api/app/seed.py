@@ -16,11 +16,11 @@ def run_seed() -> None:
             db.add(org)
             db.flush()
 
-        user = db.scalar(select(User).where(User.email == "analyst@creditatlas.local"))
+        user = db.scalar(select(User).where(User.email == "analyst@creditatlas.app"))
         if not user:
             user = User(
                 org_id=org.id,
-                email="analyst@creditatlas.local",
+                email="analyst@creditatlas.app",
                 password_hash=get_password_hash("Password@123"),
                 full_name="Lead Analyst",
                 role="ADMIN",

@@ -20,7 +20,8 @@ class ObjectStorage:
     def __init__(self) -> None:
         self._local_root = Path("/tmp/creditatlas-object-storage") / settings.s3_bucket
         self._client = None
-        if HAS_BOTO3 and boto3 is not None:
+        self._use_local = settings.storage_backend.lower() == "local"
+        if not self._use_local and HAS_BOTO3 and boto3 is not None:
             self._client = boto3.client(
                 "s3",
                 endpoint_url=settings.s3_endpoint_url,

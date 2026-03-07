@@ -7,7 +7,7 @@ def test_auth_me_includes_role(client: TestClient, admin_headers: dict[str, str]
     me = client.get("/auth/me", headers=admin_headers)
     assert me.status_code == 200
     body = me.json()
-    assert body["email"] == "analyst@creditatlas.local"
+    assert body["email"] == "analyst@creditatlas.app"
     assert body["role"] == "ADMIN"
 
 

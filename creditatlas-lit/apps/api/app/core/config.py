@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     s3_bucket: str = "creditatlas-docs"
     s3_secure: bool = False
+    storage_backend: str = "s3"
 
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
