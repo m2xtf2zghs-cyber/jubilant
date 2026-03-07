@@ -87,6 +87,20 @@ python3 -m pip install -r requirements-dev.txt
 pytest
 ```
 
+## CI/CD
+
+- GitHub Actions CI workflow:
+  - API lint/type/test
+  - Web build check
+  - Smoke test run
+- Docker build workflow:
+  - Builds `api`, `worker`, `web` images on push/PR
+
+## Release Ops
+
+- Release checklist:
+  - [`docs/release/release-checklist.md`](docs/release/release-checklist.md)
+
 ## MVP Capabilities
 
 - Tenant-aware auth and workspace scoping
