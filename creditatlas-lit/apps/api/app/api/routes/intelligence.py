@@ -91,7 +91,9 @@ def monthly_summary(
         .where(BankTransactionNormalized.org_id == auth.org_id)
     ).all()
 
-    month_rollup = defaultdict(lambda: {"credits": 0.0, "debits": 0.0})
+    month_rollup: defaultdict[str, dict[str, float]] = defaultdict(
+        lambda: {"credits": 0.0, "debits": 0.0}
+    )
     for row in rows:
         month = row.txn_date.strftime("%Y-%m")
         amount = float(row.amount)

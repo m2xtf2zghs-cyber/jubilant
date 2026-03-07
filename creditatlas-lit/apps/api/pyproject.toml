@@ -11,5 +11,6 @@ python_version = "3.12"
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = true
+disable_error_code = ["import-untyped"]
 plugins = ["sqlalchemy.ext.mypy.plugin"]
 exclude = ["alembic"]

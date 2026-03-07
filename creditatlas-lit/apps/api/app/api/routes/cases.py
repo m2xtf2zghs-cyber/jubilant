@@ -116,7 +116,7 @@ def case_summary(
     true_sales = float(latest_truth.adjusted_business_credits) if latest_truth else 0.0
     net_surplus = max(0.0, true_sales - emi_burden - sum(float(r.estimated_monthly_interest_burden) for r in private_rows))
 
-    kpis = {
+    kpis: dict[str, float | str] = {
         "true_monthly_sales": true_sales,
         "net_surplus": net_surplus,
         "emi_burden": emi_burden,

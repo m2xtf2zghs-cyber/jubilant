@@ -5,6 +5,7 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Sequence
 from xml.sax.saxutils import escape
 
 from sqlalchemy import select
@@ -189,7 +190,7 @@ def render_case_pdf(payload: dict) -> bytes:
 
 
 def render_case_excel(payload: dict) -> bytes:
-    summary_rows = [
+    summary_rows: list[list[object]] = [
         ["Field", "Value"],
         ["Case ID", payload["case"]["id"]],
         ["Borrower", payload["borrower"]["name"]],
@@ -203,7 +204,9 @@ def render_case_excel(payload: dict) -> bytes:
         ["Generated At", payload.get("generated_at")],
     ]
 
-    txn_rows = [["Txn Date", "Direction", "Amount", "Counterparty", "Category", "Narration"]]
+    txn_rows: list[list[object]] = [
+        ["Txn Date", "Direction", "Amount", "Counterparty", "Category", "Narration"]
+    ]
     for row in payload.get("transactions", []):
         txn_rows.append(
             [
@@ -253,8 +256,10 @@ def _gst_payload(profile: GstProfile | None) -> dict | None:
     }
 
 
-def _monthly_summary(txns: list[BankTransactionNormalized]) -> list[dict]:
-    rollup = defaultdict(lambda: {"credits": 0.0, "debits": 0.0})
+def _monthly_summary(txns: Sequence[BankTransactionNormalized]) -> list[dict]:
+    rollup: defaultdict[str, dict[str, float]] = defaultdict(
+        lambda: {"credits": 0.0, "debits": 0.0}
+    )
     for row in txns:
         month = row.txn_date.strftime("%Y-%m")
         amount = float(row.amount)
@@ -281,7 +286,10 @@ def _num(value: object) -> float | None:
         return float(value)
     if isinstance(value, (int, float)):
         return float(value)
-    return float(value)
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
 
 
 def _pdf_escape(text: str) -> str:
