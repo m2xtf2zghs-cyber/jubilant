@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, get_current_auth
+from app.api.deps import AuthContext, get_analyst_auth
 from app.db.session import get_db
 from app.models.entities import Document, LoanCase
 from app.schemas.common import DocumentOut
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/cases/{case_id}/documents", tags=["documents"])
 async def upload_document(
     case_id: str,
     file: UploadFile = File(...),
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> DocumentOut:
     case = db.scalar(select(LoanCase).where(LoanCase.id == case_id, LoanCase.org_id == auth.org_id))
@@ -63,7 +63,7 @@ async def upload_document(
 @router.get("", response_model=list[DocumentOut])
 def list_documents(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[DocumentOut]:
     case = db.scalar(select(LoanCase).where(LoanCase.id == case_id, LoanCase.org_id == auth.org_id))

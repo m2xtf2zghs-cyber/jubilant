@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    environment: str = "development"
 
     secret_key: str = "change-me"
     algorithm: str = "HS256"
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
 
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
+    enforce_migration_check: bool = True
+    allow_inline_ingestion_fallback: bool = False
 
     @property
     def database_url(self) -> str:

@@ -167,6 +167,8 @@ def main() -> None:
     args = parse_args()
     configure_paths()
     os.environ["DATABASE_URL_OVERRIDE"] = args.db_url
+    os.environ["ENFORCE_MIGRATION_CHECK"] = "false"
+    os.environ["ALLOW_INLINE_INGESTION_FALLBACK"] = "true"
 
     from app.seed import run_seed
 

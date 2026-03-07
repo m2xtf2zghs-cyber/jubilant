@@ -50,6 +50,7 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), default="ANALYST")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     organization = relationship("Organization")

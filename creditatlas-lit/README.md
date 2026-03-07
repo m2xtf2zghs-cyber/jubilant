@@ -56,6 +56,15 @@ docker compose -f infrastructure/docker-compose.yml exec api python -m app.seed
 - Email: `analyst@creditatlas.local`
 - Password: `Password@123`
 
+## Production Hardening Controls
+
+- Strict RBAC roles: `ANALYST`, `MANAGER`, `ADMIN`
+  - `/cases/{id}/bank-ingestion/reprocess` requires `MANAGER` or `ADMIN`
+- Celery-only ingestion queue by default
+  - Set `ALLOW_INLINE_INGESTION_FALLBACK=true` only for local troubleshooting
+- Migration guard at startup
+  - Set `ENFORCE_MIGRATION_CHECK=true` to block startup when DB revision is not at Alembic head
+
 ## One-Command API Smoke Test
 
 Run a local end-to-end API smoke test (auth -> borrower/case -> document upload -> ingestion -> engines -> credit brain):
@@ -68,6 +77,14 @@ Optional:
 
 ```bash
 python3 scripts/smoke_test.py --db-url sqlite:////tmp/creditatlas_smoke_alt.db --preserve-db
+```
+
+## API Tests
+
+```bash
+cd apps/api
+python3 -m pip install -r requirements-dev.txt
+pytest
 ```
 
 ## MVP Capabilities

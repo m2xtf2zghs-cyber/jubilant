@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, get_current_auth
+from app.api.deps import AuthContext, get_analyst_auth
 from app.db.session import get_db
 from app.models.entities import Borrower
 from app.schemas.common import BorrowerCreate, BorrowerOut
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/borrowers", tags=["borrowers"])
 @router.post("", response_model=BorrowerOut)
 def create_borrower(
     payload: BorrowerCreate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> BorrowerOut:
     borrower = Borrower(org_id=auth.org_id, **payload.model_dump())
@@ -39,7 +39,7 @@ def create_borrower(
 
 @router.get("", response_model=list[BorrowerOut])
 def list_borrowers(
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[BorrowerOut]:
     rows = db.scalars(
@@ -53,7 +53,7 @@ def list_borrowers(
 @router.get("/{borrower_id}", response_model=BorrowerOut)
 def get_borrower(
     borrower_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> BorrowerOut:
     row = db.scalar(

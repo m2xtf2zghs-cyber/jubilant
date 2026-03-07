@@ -23,9 +23,12 @@ def run_seed() -> None:
                 email="analyst@creditatlas.local",
                 password_hash=get_password_hash("Password@123"),
                 full_name="Lead Analyst",
+                role="ADMIN",
             )
             db.add(user)
             db.flush()
+        elif user.role != "ADMIN":
+            user.role = "ADMIN"
 
         borrower = db.scalar(select(Borrower).where(Borrower.name == "Shree Balaji Traders"))
         if not borrower:

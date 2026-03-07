@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
+from app.core.rbac import ANALYST_ROLES, MANAGER_ROLES
 from app.core.security import TokenDecodeError, decode_access_token
 from app.db.session import get_db
 from app.models.entities import User
@@ -40,3 +41,15 @@ def get_current_auth(
         raise credentials_exception
 
     return AuthContext(user=user, org_id=org_id)
+
+
+def get_analyst_auth(auth: AuthContext = Depends(get_current_auth)) -> AuthContext:
+    if auth.user.role not in ANALYST_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+    return auth
+
+
+def get_manager_auth(auth: AuthContext = Depends(get_current_auth)) -> AuthContext:
+    if auth.user.role not in MANAGER_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+    return auth

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, get_current_auth
+from app.api.deps import AuthContext, get_analyst_auth, get_manager_auth
 from app.db.session import get_db
 from app.models.entities import LoanCase, VendorPayload
 from app.schemas.common import (
@@ -13,7 +13,7 @@ from app.schemas.common import (
     ReprocessResponse,
 )
 from app.services.audit import log_audit
-from app.services.queue import enqueue_finbox_ingestion
+from app.services.queue import QueueUnavailableError, enqueue_finbox_ingestion
 
 router = APIRouter(prefix="/cases/{case_id}/bank-ingestion", tags=["bank-ingestion"])
 
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/cases/{case_id}/bank-ingestion", tags=["bank-ingesti
 def ingest_finbox(
     case_id: str,
     payload: FinboxIngestionRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> IngestionStatusOut:
     case = db.scalar(select(LoanCase).where(LoanCase.id == case_id, LoanCase.org_id == auth.org_id))
@@ -38,7 +38,13 @@ def ingest_finbox(
     )
 
     if existing:
-        queue_status = enqueue_finbox_ingestion(existing.id, auth.user.id)
+        try:
+            queue_status = enqueue_finbox_ingestion(existing.id, auth.user.id)
+        except QueueUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Ingestion queue is unavailable",
+            ) from exc
         if existing.status == "PROCESSED" and queue_status == "QUEUED":
             existing.status = "QUEUED"
             db.commit()
@@ -75,9 +81,13 @@ def ingest_finbox(
     db.commit()
     db.refresh(row)
 
-    queue_status = enqueue_finbox_ingestion(row.id, auth.user.id)
-    if queue_status == "PROCESSED_INLINE":
-        db.refresh(row)
+    try:
+        enqueue_finbox_ingestion(row.id, auth.user.id)
+    except QueueUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ingestion queue is unavailable",
+        ) from exc
 
     return IngestionStatusOut(
         payload_id=row.id,
@@ -91,7 +101,7 @@ def ingest_finbox(
 @router.get("/status", response_model=IngestionStatusOut)
 def ingestion_status(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> IngestionStatusOut:
     row = db.scalar(
@@ -115,7 +125,7 @@ def ingestion_status(
 @router.post("/reprocess", response_model=ReprocessResponse)
 def reprocess(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_manager_auth),
     db: Session = Depends(get_db),
 ) -> ReprocessResponse:
     row = db.scalar(
@@ -141,8 +151,12 @@ def reprocess(
     )
     db.commit()
 
-    queue_status = enqueue_finbox_ingestion(row.id, auth.user.id)
-    if queue_status == "PROCESSED_INLINE":
-        db.refresh(row)
+    try:
+        enqueue_finbox_ingestion(row.id, auth.user.id)
+    except QueueUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ingestion queue is unavailable",
+        ) from exc
 
     return ReprocessResponse(payload_id=row.id, status=row.status)

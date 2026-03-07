@@ -4,6 +4,11 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.ingestion import process_vendor_payload
 
+
+class QueueUnavailableError(Exception):
+    pass
+
+
 try:
     from celery import Celery
 
@@ -18,9 +23,11 @@ except Exception:  # noqa: BLE001
 
 def enqueue_finbox_ingestion(payload_id: str, triggered_by_user_id: str) -> str:
     if celery_client is None:
-        with SessionLocal() as db:
-            process_vendor_payload(db, payload_id, triggered_by_user_id)
-        return "PROCESSED_INLINE"
+        if settings.allow_inline_ingestion_fallback:
+            with SessionLocal() as db:
+                process_vendor_payload(db, payload_id, triggered_by_user_id)
+            return "PROCESSED_INLINE"
+        raise QueueUnavailableError("Celery is not installed or unavailable")
 
     try:
         celery_client.send_task(
@@ -28,8 +35,10 @@ def enqueue_finbox_ingestion(payload_id: str, triggered_by_user_id: str) -> str:
             args=[payload_id, triggered_by_user_id],
         )
         return "QUEUED"
-    except Exception:  # noqa: BLE001
-        # Local fallback when worker/redis isn't reachable.
-        with SessionLocal() as db:
-            process_vendor_payload(db, payload_id, triggered_by_user_id)
-        return "PROCESSED_INLINE"
+    except Exception as exc:  # noqa: BLE001
+        if settings.allow_inline_ingestion_fallback:
+            with SessionLocal() as db:
+                process_vendor_payload(db, payload_id, triggered_by_user_id)
+            return "PROCESSED_INLINE"
+
+        raise QueueUnavailableError("Celery broker is unavailable") from exc

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, get_current_auth
+from app.api.deps import AuthContext, get_analyst_auth
 from app.db.session import get_db
 from app.models.entities import (
     BankTransactionNormalized,
@@ -48,7 +48,7 @@ def list_transactions(
     case_id: str,
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[TransactionOut]:
     _require_case(db, case_id, auth.org_id)
@@ -80,7 +80,7 @@ def list_transactions(
 @router.get("/transactions/monthly-summary", response_model=list[MonthlySummaryRow])
 def monthly_summary(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[MonthlySummaryRow]:
     _require_case(db, case_id, auth.org_id)
@@ -114,7 +114,7 @@ def monthly_summary(
 @router.get("/counterparties", response_model=list[CounterpartyOut])
 def counterparties(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[CounterpartyOut]:
     _require_case(db, case_id, auth.org_id)
@@ -141,7 +141,7 @@ def counterparties(
 @router.get("/emi-tracker", response_model=list[EmiOut])
 def emi_tracker(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[EmiOut]:
     _require_case(db, case_id, auth.org_id)
@@ -170,7 +170,7 @@ def emi_tracker(
 @router.get("/street-lender-intelligence", response_model=list[StreetLenderOut])
 def street_lender_intelligence(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[StreetLenderOut]:
     _require_case(db, case_id, auth.org_id)
@@ -199,7 +199,7 @@ def street_lender_intelligence(
 @router.get("/truth-engine", response_model=list[TruthOut])
 def truth_engine(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[TruthOut]:
     _require_case(db, case_id, auth.org_id)
@@ -235,7 +235,7 @@ def truth_engine(
 @router.get("/credit-brain", response_model=CreditBrainOut)
 def credit_brain(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> CreditBrainOut:
     _require_case(db, case_id, auth.org_id)

@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import auth, borrowers, cases, documents, ingestion, intelligence
+from app.services.migrations import ensure_schema_up_to_date
 from app.services.storage import storage
 
 app = FastAPI(title="CreditAtlas LIT API", version="0.1.0")
@@ -31,6 +32,7 @@ def health() -> dict[str, str]:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    ensure_schema_up_to_date()
     try:
         storage.ensure_bucket()
     except Exception:

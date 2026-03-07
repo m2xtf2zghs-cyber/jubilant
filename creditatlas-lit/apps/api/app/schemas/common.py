@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class TokenResponse(BaseModel):
@@ -12,7 +12,7 @@ class TokenResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
 
@@ -23,6 +23,7 @@ class UserOut(BaseModel):
     org_id: str
     email: str
     full_name: str
+    role: str
 
 
 class BorrowerCreate(BaseModel):

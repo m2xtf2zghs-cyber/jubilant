@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import AuthContext, get_current_auth
+from app.api.deps import AuthContext, get_analyst_auth
 from app.db.session import get_db
 from app.models.entities import (
     Borrower,
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/cases", tags=["cases"])
 @router.post("", response_model=CaseOut)
 def create_case(
     payload: CaseCreate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> CaseOut:
     borrower = db.scalar(
@@ -61,7 +61,7 @@ def create_case(
 @router.get("", response_model=list[CaseOut])
 def list_cases(
     borrower_id: str | None = None,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> list[CaseOut]:
     query = select(LoanCase).where(LoanCase.org_id == auth.org_id).order_by(LoanCase.created_at.desc())
@@ -75,7 +75,7 @@ def list_cases(
 @router.get("/{case_id}", response_model=CaseOut)
 def get_case(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> CaseOut:
     row = db.scalar(
@@ -91,7 +91,7 @@ def get_case(
 @router.get("/{case_id}/summary", response_model=CaseSummaryOut)
 def case_summary(
     case_id: str,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_analyst_auth),
     db: Session = Depends(get_db),
 ) -> CaseSummaryOut:
     case = db.scalar(select(LoanCase).where(LoanCase.id == case_id, LoanCase.org_id == auth.org_id))
