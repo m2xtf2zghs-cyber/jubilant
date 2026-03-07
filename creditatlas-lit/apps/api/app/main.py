@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, borrowers, cases, documents, gst, ingestion, intelligence
+from app.api.routes import auth, borrowers, cases, documents, exports, gst, ingestion, intelligence
 from app.services.migrations import ensure_schema_up_to_date
 from app.services.storage import storage
 
@@ -24,6 +24,7 @@ app.include_router(documents.router)
 app.include_router(ingestion.router)
 app.include_router(intelligence.router)
 app.include_router(gst.router)
+app.include_router(exports.router)
 
 
 @app.get("/health")

@@ -110,6 +110,12 @@ pytest
   - `POST /cases/{case_id}/gst/verify`
   - `GET /cases/{case_id}/gst/profile`
 
+## Export Endpoints
+
+- `GET /cases/{case_id}/export/json` (canonical export payload)
+- `GET /cases/{case_id}/export/pdf` (downloadable PDF summary)
+- `GET /cases/{case_id}/export/excel` (downloadable XLSX workbook)
+
 ## Notes
 
 - Business logic is intentionally deterministic and explainable.

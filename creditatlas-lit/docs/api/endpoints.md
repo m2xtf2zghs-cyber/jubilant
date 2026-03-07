@@ -27,6 +27,11 @@
 - `POST /cases/{case_id}/gst/verify`
 - `GET /cases/{case_id}/gst/profile`
 
+## Exports
+- `GET /cases/{case_id}/export/json`
+- `GET /cases/{case_id}/export/pdf`
+- `GET /cases/{case_id}/export/excel`
+
 ## Intelligence
 - `GET /cases/{case_id}/transactions`
 - `GET /cases/{case_id}/transactions/monthly-summary`
