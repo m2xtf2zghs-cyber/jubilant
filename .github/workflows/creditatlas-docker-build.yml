@@ -1,0 +1,47 @@
+name: CreditAtlas Docker Build
+
+on:
+  pull_request:
+    paths:
+      - 'creditatlas-lit/**'
+      - '.github/workflows/creditatlas-docker-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'creditatlas-lit/**'
+      - '.github/workflows/creditatlas-docker-build.yml'
+
+jobs:
+  docker-images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: ./creditatlas-lit/apps/api
+            dockerfile: ./creditatlas-lit/apps/api/Dockerfile
+            tag: creditatlas-api:ci
+          - name: worker
+            context: ./creditatlas-lit
+            dockerfile: ./creditatlas-lit/services/worker/Dockerfile
+            tag: creditatlas-worker:ci
+          - name: web
+            context: ./creditatlas-lit/apps/web
+            dockerfile: ./creditatlas-lit/apps/web/Dockerfile
+            tag: creditatlas-web:ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          tags: ${{ matrix.tag }}

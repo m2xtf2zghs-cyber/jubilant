@@ -1,0 +1,93 @@
+name: CreditAtlas CI
+
+on:
+  pull_request:
+    paths:
+      - 'creditatlas-lit/**'
+      - '.github/workflows/creditatlas-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'creditatlas-lit/**'
+      - '.github/workflows/creditatlas-ci.yml'
+
+jobs:
+  api-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: creditatlas-lit/apps/api
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            creditatlas-lit/apps/api/requirements.txt
+            creditatlas-lit/apps/api/requirements-dev.txt
+
+      - name: Install API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check app tests
+
+      - name: Type check (mypy)
+        run: mypy app
+
+      - name: API tests
+        run: PYTHONPATH=. pytest
+
+  web-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: creditatlas-lit/apps/web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: creditatlas-lit/apps/web/package.json
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Build web app
+        run: npm run build
+
+  smoke-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: creditatlas-lit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            creditatlas-lit/apps/api/requirements.txt
+            creditatlas-lit/apps/api/requirements-dev.txt
+
+      - name: Install API deps for smoke test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+
+      - name: Run smoke test
+        run: python scripts/smoke_test.py
