@@ -82,11 +82,12 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             creditatlas-lit/apps/api/requirements.txt
+            creditatlas-lit/apps/api/requirements-dev.txt
 
-      - name: Install API runtime deps
+      - name: Install API deps for smoke test
         run: |
           python -m pip install --upgrade pip
-          pip install -r apps/api/requirements.txt
+          pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
 
       - name: Run smoke test
         run: python scripts/smoke_test.py

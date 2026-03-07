@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from app.core.config import settings
 from app.db.session import engine
 
