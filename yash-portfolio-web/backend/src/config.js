@@ -15,8 +15,12 @@ const config = {
   env: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 8787),
   databaseUrl: required('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/yash_portfolio'),
+  dbSsl: String(process.env.DB_SSL || '').trim().toLowerCase(),
+  dbSslRejectUnauthorized: String(process.env.DB_SSL_REJECT_UNAUTHORIZED || 'false').trim().toLowerCase() === 'true',
   corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',').map(s => s.trim()).filter(Boolean),
   corsAllowNetlifyPreviews: String(process.env.CORS_ALLOW_NETLIFY_PREVIEWS || 'true').trim().toLowerCase() !== 'false',
+  signupEnabled: String(process.env.SIGNUP_ENABLED || 'true').trim().toLowerCase() !== 'false',
+  signupApiKey: process.env.SIGNUP_API_KEY || '',
   jwt: {
     accessSecret: required('JWT_ACCESS_SECRET', 'change-me-access-secret'),
     refreshSecret: required('JWT_REFRESH_SECRET', 'change-me-refresh-secret'),

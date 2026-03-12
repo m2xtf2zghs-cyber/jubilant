@@ -1,10 +1,127 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { query } = require('../db');
+const { query, withTransaction } = require('../db');
+const { config } = require('../config');
 const { ApiError, asyncHandler } = require('../utils/http');
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../middleware/auth');
 
 const router = express.Router();
+
+function slugifyOrgCode(value = '') {
+  const cleaned = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return cleaned;
+}
+
+async function resolveUniqueOrgCode(dbClient, desiredCode, orgName) {
+  const base = slugifyOrgCode(desiredCode || orgName) || `org-${Date.now().toString(36)}`;
+  let candidate = base;
+  for (let i = 0; i < 100; i += 1) {
+    const hit = await query(
+      `select 1 from organizations where lower(code) = lower($1) limit 1`,
+      [candidate],
+      dbClient
+    );
+    if (!hit.rows[0]) return candidate;
+    const suffix = Math.random().toString(36).slice(2, 6);
+    candidate = `${base}-${suffix}`.slice(0, 48);
+  }
+  throw new ApiError(409, 'ORG_CODE_TAKEN', 'Could not allocate unique organization code. Try again.');
+}
+
+router.post('/register', asyncHandler(async (req, res) => {
+  if (config.signupEnabled === false) {
+    throw new ApiError(403, 'SIGNUP_DISABLED', 'New organization signup is disabled.');
+  }
+  const signupApiKey = String(config.signupApiKey || '').trim();
+  if (signupApiKey) {
+    const headerKey = String(req.headers['x-signup-key'] || '').trim();
+    if (!headerKey || headerKey !== signupApiKey) {
+      throw new ApiError(403, 'SIGNUP_FORBIDDEN', 'Signup key missing or invalid');
+    }
+  }
+
+  const body = req.body || {};
+  const organizationName = String(body.organizationName || '').trim();
+  const requestedOrgCode = String(body.organizationCode || '').trim().toLowerCase();
+  const fullName = String(body.fullName || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const password = String(body.password || '');
+  const phone = body.phone == null ? null : String(body.phone).trim() || null;
+
+  if (!organizationName || !fullName || !email || !password) {
+    throw new ApiError(422, 'VALIDATION_ERROR', 'organizationName, fullName, email, password are required');
+  }
+  if (password.length < 4) throw new ApiError(422, 'VALIDATION_ERROR', 'Password must be at least 4 characters');
+
+  const result = await withTransaction(async (client) => {
+    const orgCode = await resolveUniqueOrgCode(client, requestedOrgCode, organizationName);
+    const orgRes = await query(
+      `
+      insert into organizations (code, name)
+      values ($1, $2)
+      returning id, code, name
+      `,
+      [orgCode, organizationName],
+      client
+    );
+    const org = orgRes.rows[0];
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const userRes = await query(
+      `
+      insert into users (
+        organization_id, email, full_name, password_hash, role, is_active, phone
+      ) values ($1,$2,$3,$4,'OWNER',true,$5)
+      returning id, organization_id, email, full_name, role, is_active
+      `,
+      [org.id, email, fullName, passwordHash, phone],
+      client
+    );
+    const user = userRes.rows[0];
+    await query(
+      `insert into audit_logs (organization_id, actor_user_id, entity_type, entity_id, action, metadata)
+       values ($1,$2,'organization',$1,'REGISTER_ORGANIZATION',$3::jsonb)`,
+      [org.id, user.id, JSON.stringify({ signup: 'self-service', email })],
+      client
+    );
+    return { org, user };
+  });
+
+  const accessToken = signAccessToken({
+    id: result.user.id,
+    organization_id: result.user.organization_id,
+    role: result.user.role,
+    email: result.user.email,
+  });
+  const refreshToken = signRefreshToken({
+    id: result.user.id,
+    organization_id: result.user.organization_id,
+    role: result.user.role,
+    email: result.user.email,
+  });
+
+  res.status(201).json({
+    accessToken,
+    refreshToken,
+    user: {
+      id: result.user.id,
+      email: result.user.email,
+      fullName: result.user.full_name,
+      role: result.user.role,
+      deviceId: null,
+    },
+    organization: {
+      id: result.org.id,
+      code: result.org.code,
+      name: result.org.name,
+    },
+  });
+}));
 
 router.post('/login', asyncHandler(async (req, res) => {
   const body = req.body || {};
