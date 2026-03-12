@@ -11,6 +11,8 @@ const dashboardRoutes = require('./dashboard');
 const reportsRoutes = require('./reports');
 const chitsRoutes = require('./chits');
 const tdsRoutes = require('./tds');
+const actionsRoutes = require('./actions');
+const usersRoutes = require('./users');
 const { requireAuth } = require('../middleware/auth');
 
 const rootRouter = express.Router();
@@ -29,6 +31,8 @@ api.use('/dashboard', dashboardRoutes);
 api.use('/reports', reportsRoutes);
 api.use('/chits', chitsRoutes);
 api.use('/tds', tdsRoutes);
+api.use('/actions', actionsRoutes);
+api.use('/users', usersRoutes);
 
 rootRouter.use('/api/v1', api);
 
