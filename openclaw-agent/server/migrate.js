@@ -9,7 +9,10 @@ if (!config.databaseUrl) {
 }
 
 const migrationsDir = path.resolve(process.cwd(), "server/migrations");
-const pool = new Pool({ connectionString: config.databaseUrl });
+const pool = new Pool({
+  connectionString: config.databaseUrl,
+  ssl: config.databaseSsl ? { rejectUnauthorized: false } : undefined,
+});
 
 async function ensureTable() {
   await pool.query(`

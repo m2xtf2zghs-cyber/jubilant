@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import { createInitialOpenClawState } from "../src/openclaw/data.js";
 import fsSync from "fs";
+import { config } from "./config.js";
 
 function loadSqlMigration() {
   const migrationPath = path.resolve(process.cwd(), "server/migrations/0001_openclaw_core.sql");
@@ -122,7 +123,10 @@ async function syncPostgresTables(client, state) {
 
 async function createPostgresAdapter(databaseUrl) {
   const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    ssl: config.databaseSsl ? { rejectUnauthorized: false } : undefined,
+  });
   await pool.query(loadSqlMigration());
   return {
     mode: "postgres",

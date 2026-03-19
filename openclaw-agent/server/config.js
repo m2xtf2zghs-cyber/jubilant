@@ -7,12 +7,29 @@ const toBool = (value, fallback = false) => {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 };
 
+const shouldUseDatabaseSsl = (databaseUrl) => {
+  if (!databaseUrl) return false;
+  const explicit = process.env.DATABASE_SSL;
+  if (explicit != null && explicit !== "") {
+    return toBool(explicit, false);
+  }
+
+  try {
+    const parsed = new URL(databaseUrl);
+    if (parsed.searchParams.get("sslmode") === "require") return true;
+    return parsed.hostname.includes("render.com");
+  } catch {
+    return false;
+  }
+};
+
 export const config = {
   host: process.env.HOST || "127.0.0.1",
   port: Number(process.env.PORT || 8787),
   appBaseUrl: process.env.APP_BASE_URL || "http://localhost:8787",
   frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
   databaseUrl: process.env.DATABASE_URL || "",
+  databaseSsl: shouldUseDatabaseSsl(process.env.DATABASE_URL || ""),
   stateFile: process.env.STATE_FILE || ".data/openclaw-state.json",
   whatsapp: {
     accessToken: process.env.WHATSAPP_ACCESS_TOKEN || "",

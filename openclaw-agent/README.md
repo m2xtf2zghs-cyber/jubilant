@@ -26,6 +26,7 @@ The frontend talks to the backend through `VITE_API_BASE_URL` and `VITE_WS_URL`.
 ## Persistence
 
 - If `DATABASE_URL` is set, the backend persists state to PostgreSQL.
+- Set `DATABASE_SSL=true` when connecting to SSL-only Postgres endpoints from local or external environments.
 - Otherwise it falls back to a local JSON file at `STATE_FILE`.
 - Run migrations with:
 
