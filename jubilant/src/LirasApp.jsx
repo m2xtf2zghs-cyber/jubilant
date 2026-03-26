@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import Chart from "chart.js/auto";
+import html2canvas from "html2canvas";
 import { callAiAction } from "./ai/aiClient.js";
 import { deleteAttachmentBlob, getAttachmentBlob, putAttachmentBlob } from "./attachments/attachmentsStore.js";
 import { callAdminAction } from "./backend/adminClient.js";
@@ -8,7 +9,6 @@ import { getFunctionsBaseUrl, setFunctionsBaseUrl } from "./backend/functionsBas
 import { BRAND, BrandMark, ReportBrandHeader } from "./brand/Brand.jsx";
 import AndroidCrm from "./android/AndroidCrm.jsx";
 import UnderwritingView from "./underwriting/UnderwritingView.jsx";
-import StatementAutopilotView from "./statement/StatementAutopilotView.jsx";
 import PdView from "./pd/PdView.jsx";
 import {
   Activity,
@@ -311,7 +311,8 @@ const maxIsoDate = (values) => {
   let bestMs = -Infinity;
   (values || []).forEach((v) => {
     if (!v) return;
-    const ms = new Date(v).getTime();
+    const parsed = parseIsoOrNull(v);
+    const ms = parsed?.getTime?.() ?? NaN;
     if (!Number.isFinite(ms)) return;
     if (ms > bestMs) {
       bestMs = ms;
@@ -319,6 +320,25 @@ const maxIsoDate = (values) => {
     }
   });
   return best;
+};
+
+const isClosedOrRejectedLeadStatus = (status) => {
+  const s = String(status || "").trim();
+  if (!s) return false;
+  if (
+    [
+      "Payment Done",
+      "Deal Closed",
+      "Not Eligible",
+      "Not Reliable",
+      "Lost to Competitor",
+      "Not Interested (Temp)",
+      "Rejected",
+    ].includes(s)
+  ) {
+    return true;
+  }
+  return /reject/i.test(s);
 };
 
 const getLeadLastActivityIso = (lead) => {
@@ -333,6 +353,28 @@ const getLeadLastActivityIso = (lead) => {
   const attachments = Array.isArray(lead?.documents?.attachments) ? lead.documents.attachments : [];
   attachments.forEach((a) => a?.createdAt && candidates.push(a.createdAt));
   return maxIsoDate(candidates) || (lead?.createdAt ? new Date(lead.createdAt).toISOString() : new Date().toISOString());
+};
+
+const isStaleLead = (lead) => {
+  if (!lead) return false;
+  if (isClosedOrRejectedLeadStatus(lead.status) || lead.status === "Meeting Scheduled") return false;
+  const nextAction = parseIsoOrNull(lead?.nextFollowUp);
+  if (nextAction && getDaysDiff(nextAction) > 0) return false; // any future scheduled action means not stale
+  return daysSinceIST(getLeadLastActivityIso(lead)) >= STALE_AFTER_DAYS;
+};
+
+const isMeetingDoneNoteText = (text) => {
+  const t = String(text || "").toLowerCase();
+  if (!t) return false;
+  if (t.includes("meeting rescheduled") || t.includes("meeting scheduled")) return false;
+  return (
+    t.includes("[commercial visit]") ||
+    t.includes("meeting/follow-up conducted") ||
+    t.includes("meeting done") ||
+    t.includes("meeting completed") ||
+    t.includes("visit completed") ||
+    t.includes("met client")
+  );
 };
 
 const calculateLeadScore = (lead) => {
@@ -362,46 +404,61 @@ const calculateTAT = (lead) => {
 };
 
 // --- Shared Components ---
-const SidebarItem = ({ icon: Icon, label, active, onClick, count, alert }) => (
-  <button
-    onClick={onClick}
-    className={`relative w-full flex items-center justify-between px-4 py-2.5 text-sm font-semibold transition-all duration-200 rounded-xl mb-1 group ${
-      active
-        ? "bg-white/10 text-white shadow-sm ring-1 ring-white/10"
-        : "text-slate-300/80 hover:bg-white/5 hover:text-white"
-    }`}
-  >
-    {active && (
-      <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-6 bg-gradient-to-b from-indigo-400 to-blue-400 rounded-r-full" />
-    )}
-    <div className="flex items-center gap-3">
-      <Icon
-        size={18}
-        className={`${
-          alert
-            ? "text-red-400 animate-pulse"
-            : active
-              ? "text-indigo-300"
-              : "text-slate-400 group-hover:text-slate-200"
-        }`}
-      />
-      <span className={alert ? "text-red-400 font-bold" : ""}>{label}</span>
-    </div>
-    {count !== undefined && (
-      <span
-        className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-          alert
-            ? "bg-red-500 text-white"
-            : active
-              ? "bg-white/15 text-white"
-              : "bg-white/10 text-slate-200/80"
-        }`}
-      >
-        {count}
-      </span>
-    )}
-  </button>
-);
+const SidebarItem = ({ icon: Icon, label, active, onClick, count, alert, href, target, rel }) => {
+  const className = `relative w-full flex items-center justify-between px-4 py-2.5 text-sm font-semibold transition-all duration-200 rounded-xl mb-1 group ${
+    active
+      ? "bg-white/10 text-white shadow-sm ring-1 ring-white/10"
+      : "text-slate-300/80 hover:bg-white/5 hover:text-white"
+  }`;
+
+  const inner = (
+    <>
+      {active && (
+        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-6 bg-gradient-to-b from-indigo-400 to-blue-400 rounded-r-full" />
+      )}
+      <div className="flex items-center gap-3">
+        <Icon
+          size={18}
+          className={`${
+            alert
+              ? "text-red-400 animate-pulse"
+              : active
+                ? "text-indigo-300"
+                : "text-slate-400 group-hover:text-slate-200"
+          }`}
+        />
+        <span className={alert ? "text-red-400 font-bold" : ""}>{label}</span>
+      </div>
+      {count !== undefined && (
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+            alert
+              ? "bg-red-500 text-white"
+              : active
+                ? "bg-white/15 text-white"
+                : "bg-white/10 text-slate-200/80"
+          }`}
+        >
+          {count}
+        </span>
+      )}
+    </>
+  );
+
+  if (href) {
+    return (
+      <a href={href} target={target} rel={rel} className={className}>
+        {inner}
+      </a>
+    );
+  }
+
+  return (
+    <button onClick={onClick} className={className}>
+      {inner}
+    </button>
+  );
+};
 
 const SectionTabs = ({ value, tabs, onChange, right = null }) => (
   <div className="print:hidden px-6 pt-4 pb-3 border-b border-slate-200 bg-white">
@@ -553,6 +610,656 @@ const copyToClipboard = async (value) => {
   } catch {
     return false;
   }
+};
+
+const isFollowUpStatusValue = (status) => {
+  const s = String(status || "").trim().toUpperCase();
+  if (!s) return false;
+  if (s.includes("FOLLOW")) return true;
+  return ["FOLLOW UP", "FOLLOW-UP", "FOLLOW_UP", "FOLLOW-UP REQUIRED", "FOLLOW_UP_REQUIRED", "PARTNER FOLLOW-UP", "PARTNER FOLLOW_UP"].includes(s);
+};
+
+const nextBusinessDay10AmIstIso = (baseDateLike = new Date()) => {
+  const baseYmd = toYmdIST(baseDateLike) || toYmdIST(new Date());
+  let probe = startOfIstDay(baseYmd);
+  probe.setDate(probe.getDate() + 1);
+  while (true) {
+    const ymd = toYmdIST(probe);
+    const dow = new Intl.DateTimeFormat("en-US", { timeZone: BRAND.tz, weekday: "short" }).format(new Date(`${ymd}T00:00:00+05:30`));
+    if (dow !== "Sat" && dow !== "Sun") {
+      return new Date(`${ymd}T10:00:00+05:30`).toISOString();
+    }
+    probe.setDate(probe.getDate() + 1);
+  }
+};
+
+const simpleChecksum = (input) => {
+  const text = typeof input === "string" ? input : JSON.stringify(input || {});
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return `h${(h >>> 0).toString(16)}`;
+};
+
+const parseIsoOrNull = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  // Fast path for native ISO / RFC inputs.
+  let d = new Date(raw);
+  if (Number.isFinite(d.getTime())) return d;
+
+  // Support common user-entered formats like DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY.
+  const m = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    const day = Number(m[1]);
+    const month = Number(m[2]);
+    let year = Number(m[3]);
+    if (year < 100) year += 2000;
+    d = new Date(`${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00+05:30`);
+    if (Number.isFinite(d.getTime())) return d;
+  }
+
+  // Support compact YYYYMMDD.
+  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) {
+    d = new Date(`${compact[1]}-${compact[2]}-${compact[3]}T00:00:00+05:30`);
+    if (Number.isFinite(d.getTime())) return d;
+  }
+
+  return null;
+};
+
+const parseTenorMonths = (value) => {
+  if (value == null || value === "") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const n = Number(value);
+  if (Number.isFinite(n)) return n;
+  const m = String(value).match(/(\d+(?:\.\d+)?)/);
+  return m ? Number(m[1]) : 0;
+};
+
+const isRenewalEligibleLead = (lead) => {
+  if (!lead) return false;
+  const status = String(lead.status || "").toUpperCase();
+  if (["PAYMENT DONE", "DEAL CLOSED", "FUNDED", "ACTIVE"].includes(status)) return true;
+  if (status.includes("RENEW")) return true;
+  const loanDetails = lead.loanDetails && typeof lead.loanDetails === "object" ? lead.loanDetails : {};
+  const tags = Array.isArray(lead.documents?.tags) ? lead.documents.tags.map((t) => String(t || "").toLowerCase()) : [];
+  if (tags.some((t) => t.includes("renew"))) return true;
+  const notes = Array.isArray(lead.notes) ? lead.notes : [];
+  if (notes.some((n) => String(n?.text || n || "").toLowerCase().includes("renew"))) return true;
+  if (lead.nextFollowUp && (status.includes("PAYMENT") || status.includes("DEAL") || status.includes("CLOSED"))) return true;
+  if (loanDetails && Object.keys(loanDetails).length > 0) {
+    if (
+      loanDetails.paymentDate ||
+      loanDetails.payment_date ||
+      loanDetails.principal ||
+      loanDetails.netDisbursed ||
+      loanDetails.net_disbursed ||
+      loanDetails.tenure ||
+      loanDetails.tenureMonths ||
+      loanDetails.tenor_months
+    ) {
+      return true;
+    }
+  }
+  return Boolean(
+    lead.nextRenewalDate ||
+      lead.next_renewal_date ||
+      lead.renewalDate ||
+      lead.renewal_date ||
+      lead.maturityDate ||
+      lead.maturity_date ||
+      lead.fundedDate ||
+      lead.funded_date ||
+    loanDetails.nextRenewalDate ||
+      loanDetails.next_renewal_date ||
+      loanDetails.nextRenewal ||
+      loanDetails.renewalDate ||
+      loanDetails.renewal_date ||
+      loanDetails.maturityDate ||
+      loanDetails.maturity_date ||
+      loanDetails.fundedDate ||
+      loanDetails.funded_date ||
+      loanDetails.paymentDate ||
+      loanDetails.payment_date
+  );
+};
+
+const addMonthsIsoSafe = (value, months) => {
+  const d = parseIsoOrNull(value);
+  if (!d) return null;
+  const next = new Date(d.getTime());
+  next.setMonth(next.getMonth() + Number(months || 0));
+  return Number.isFinite(next.getTime()) ? next : null;
+};
+
+const getRenewalTimelineInfo = (lead) => {
+  const loanDetails = lead?.loanDetails && typeof lead.loanDetails === "object" ? lead.loanDetails : {};
+  const nextRenewalRaw =
+    lead?.nextRenewalDate ||
+    lead?.next_renewal_date ||
+    lead?.renewalDate ||
+    lead?.renewal_date ||
+    loanDetails.nextRenewalDate ||
+    loanDetails.next_renewal_date ||
+    loanDetails.nextRenewal ||
+    loanDetails.renewalDate ||
+    loanDetails.renewal_date ||
+    null;
+  const maturityRaw = lead?.maturityDate || lead?.maturity_date || loanDetails.maturityDate || loanDetails.maturity_date || loanDetails.maturity || null;
+  const fundedRaw =
+    lead?.fundedDate ||
+    lead?.funded_date ||
+    lead?.paymentDate ||
+    lead?.payment_date ||
+    loanDetails.fundedDate ||
+    loanDetails.funded_date ||
+    loanDetails.disbursedDate ||
+    loanDetails.disbursed_date ||
+    loanDetails.disbursementDate ||
+    loanDetails.disbursement_date ||
+    loanDetails.paymentDate ||
+    loanDetails.payment_date ||
+    null;
+  const tenorRaw = lead?.tenureMonths || lead?.tenor_months || lead?.tenure || loanDetails.tenureMonths || loanDetails.tenor_months || loanDetails.tenure || null;
+
+  const nextRenewal = parseIsoOrNull(nextRenewalRaw);
+  if (nextRenewal) {
+    return { renewalDate: nextRenewal, source: "next_renewal_date", priorityRank: 1 };
+  }
+
+  const maturity = parseIsoOrNull(maturityRaw);
+  if (maturity) {
+    return { renewalDate: maturity, source: "maturity_date", priorityRank: 2 };
+  }
+
+  const tenorMonths = parseTenorMonths(tenorRaw);
+  if (tenorMonths > 0) {
+    const fundedPlusTenor = addMonthsIsoSafe(fundedRaw, tenorMonths);
+    if (fundedPlusTenor) {
+      return { renewalDate: fundedPlusTenor, source: "funded_plus_tenor", priorityRank: 3 };
+    }
+  }
+
+  // Legacy fallback for funded leads where renewal date is tracked in next follow-up.
+  const leadFollowUp = parseIsoOrNull(lead?.nextFollowUp);
+  if (leadFollowUp && isRenewalEligibleLead(lead)) {
+    return { renewalDate: leadFollowUp, source: "lead_follow_up_fallback", priorityRank: 4 };
+  }
+
+  return { renewalDate: null, source: "unknown", priorityRank: 4 };
+};
+
+const sourceLabelForRenewal = (source) => {
+  if (source === "next_renewal_date") return "Next Renewal";
+  if (source === "maturity_date") return "Maturity";
+  if (source === "funded_plus_tenor") return "Funded + Tenor";
+  if (source === "lead_follow_up_fallback") return "Lead Follow-up";
+  return "Unknown";
+};
+
+const monthKeyLabel = (ym) => {
+  const d = new Date(`${ym}-01T00:00:00+05:30`);
+  if (!Number.isFinite(d.getTime())) return ym;
+  return new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric", timeZone: BRAND.tz }).format(d);
+};
+
+const RenewalWatchTimeline = ({ leads = [], onOpenLead }) => {
+  const [query, setQuery] = useState("");
+
+  const fundedLeads = useMemo(
+    () => (Array.isArray(leads) ? leads : []).filter((l) => isRenewalEligibleLead(l)),
+    [leads]
+  );
+
+  const monthKeys = useMemo(() => {
+    const anchorYm = toYmIST(new Date());
+    const anchorDate = new Date(`${anchorYm || toYmdIST(new Date()).slice(0, 7)}-01T00:00:00+05:30`);
+    const out = [];
+    for (let i = 0; i < 6; i += 1) {
+      const d = new Date(anchorDate.getTime());
+      d.setMonth(d.getMonth() + i);
+      const ym = toYmIST(d);
+      if (ym) out.push(ym);
+    }
+    return out;
+  }, []);
+
+  const rows = useMemo(() => {
+    const q = String(query || "").trim().toLowerCase();
+    return fundedLeads
+      .map((lead) => {
+        const info = getRenewalTimelineInfo(lead);
+        const renewalYmd = info.renewalDate ? toYmdIST(info.renewalDate) : "";
+        const renewalMonthKey = renewalYmd ? renewalYmd.slice(0, 7) : "";
+        const nextActionDate = parseIsoOrNull(lead?.nextFollowUp);
+        const nextActionYmd = nextActionDate ? toYmdIST(nextActionDate) : "";
+        const nextActionMonthKey = nextActionYmd ? nextActionYmd.slice(0, 7) : "";
+        let monthKey = "";
+        let monthReason = "";
+        if (renewalMonthKey && monthKeys.includes(renewalMonthKey)) {
+          monthKey = renewalMonthKey;
+          monthReason = "renewal";
+        } else if (nextActionMonthKey && monthKeys.includes(nextActionMonthKey)) {
+          monthKey = nextActionMonthKey;
+          monthReason = "next_action";
+        }
+        return {
+          lead,
+          ...info,
+          renewalYmd,
+          renewalMonthKey,
+          nextActionDate,
+          nextActionYmd,
+          nextActionMonthKey,
+          monthKey,
+          monthReason,
+        };
+      })
+      .filter((r) => {
+        if (!q) return true;
+        const hay = [r.lead?.name, r.lead?.company, r.lead?.id, r.renewalYmd, r.nextActionYmd, sourceLabelForRenewal(r.source)].join(" ").toLowerCase();
+        return hay.includes(q);
+      })
+      .sort((a, b) => {
+        if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
+        const aDate = a.renewalDate || a.nextActionDate || null;
+        const bDate = b.renewalDate || b.nextActionDate || null;
+        const am = aDate ? aDate.getTime() : Number.POSITIVE_INFINITY;
+        const bm = bDate ? bDate.getTime() : Number.POSITIVE_INFINITY;
+        if (am !== bm) return am - bm;
+        return String(a.lead?.name || "").localeCompare(String(b.lead?.name || ""));
+      });
+  }, [fundedLeads, query, monthKeys]);
+
+  const monthBuckets = useMemo(() => {
+    const map = new Map(monthKeys.map((ym) => [ym, []]));
+    const unknown = [];
+      rows.forEach((row) => {
+        if (row.monthKey && map.has(row.monthKey)) {
+          map.get(row.monthKey).push(row);
+        } else {
+          unknown.push(row);
+        }
+      });
+    return { map, unknown };
+  }, [rows, monthKeys]);
+
+  return (
+    <div className="space-y-4">
+      <div className="surface p-4">
+        <div className="flex flex-col md:flex-row md:items-end gap-3">
+          <div className="flex-1">
+            <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Renewal Watch</div>
+            <div className="text-xl font-extrabold text-slate-900 mt-1">Next 6 months timeline</div>
+            <div className="text-xs text-slate-500 mt-1">
+              Priority: next renewal date → maturity date → funded date + tenor → unknown. If renewal is beyond 6 months, the lead can still appear by next action month.
+            </div>
+          </div>
+          <div className="w-full md:w-[320px]">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full py-3"
+              placeholder="Search client / loan id / renewal date…"
+            />
+          </div>
+        </div>
+      </div>
+
+      {monthKeys.map((ym) => {
+        const items = monthBuckets.map.get(ym) || [];
+        return (
+          <div key={ym} className="surface p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-extrabold text-slate-900">{monthKeyLabel(ym)}</div>
+              <div className="text-xs text-slate-500">{items.length} client{items.length === 1 ? "" : "s"}</div>
+            </div>
+            {items.length === 0 ? (
+              <div className="mt-3 text-sm text-slate-400 italic">No renewals / next actions in this month.</div>
+            ) : (
+              <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 font-bold">
+                    <tr>
+                      <th className="p-3 text-left">Client</th>
+                      <th className="p-3 text-left">Bucket</th>
+                      <th className="p-3 text-left">Renewal Source</th>
+                      <th className="p-3 text-left">Renewal Date</th>
+                      <th className="p-3 text-left">Next Action</th>
+                      <th className="p-3 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {items.map((r) => (
+                      <tr
+                        key={`${r.lead.id}_${r.monthKey || r.renewalYmd || r.nextActionYmd || "unknown"}`}
+                        onClick={() => onOpenLead?.(r.lead)}
+                        className="cursor-pointer hover:bg-slate-50 transition"
+                      >
+                        <td className="p-3 min-w-[260px]">
+                          <div className="font-bold text-slate-900">{r.lead.name || "—"}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            Loan ID: {r.lead.id}
+                            {r.lead.company ? ` • ${r.lead.company}` : ""}
+                          </div>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {r.monthReason === "next_action" ? (
+                            <span className="chip bg-blue-50 border-blue-200 text-blue-700">Next Action Month</span>
+                          ) : (
+                            <span className="chip bg-slate-50 border-slate-200 text-slate-700">Renewal Month</span>
+                          )}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <span className="chip bg-slate-50 border-slate-200 text-slate-700">{sourceLabelForRenewal(r.source)}</span>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {r.renewalYmd ? (
+                            <span className="chip bg-orange-50 border-orange-200 text-orange-700">{r.renewalYmd}</span>
+                          ) : (
+                            <span className="text-slate-400">Unknown</span>
+                          )}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {r.nextActionYmd ? (
+                            <span className="chip bg-emerald-50 border-emerald-200 text-emerald-700">{r.nextActionYmd}</span>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-right whitespace-nowrap font-bold text-slate-700">
+                          {formatCurrency(r.lead.loanAmount || 0)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="surface p-4">
+        <div className="font-extrabold text-slate-900">Unknown Renewal Date</div>
+        {monthBuckets.unknown.length === 0 ? (
+          <div className="mt-2 text-sm text-slate-400 italic">No unknown items.</div>
+        ) : (
+          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 font-bold">
+                <tr>
+                  <th className="p-3 text-left">Client</th>
+                  <th className="p-3 text-left">Next Action</th>
+                  <th className="p-3 text-left">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {monthBuckets.unknown.map((r) => (
+                  <tr
+                    key={`${r.lead.id}_unknown`}
+                    onClick={() => onOpenLead?.(r.lead)}
+                    className="cursor-pointer hover:bg-slate-50 transition"
+                  >
+                    <td className="p-3">
+                      <div className="font-bold text-slate-900">{r.lead.name || "—"}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Loan ID: {r.lead.id}</div>
+                    </td>
+                    <td className="p-3 whitespace-nowrap text-slate-600">{r.nextActionYmd || "—"}</td>
+                    <td className="p-3 whitespace-nowrap">
+                      <span className="chip bg-slate-50 border-slate-200 text-slate-700">Add next renewal / maturity in loan details</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ReportsHealthCheckPanel = ({ backendEnabled, supabase, authUser, leads }) => {
+  const userId = authUser?.id || "";
+  const fallbackKey = useMemo(() => `liras_report_health_v1_${userId || "offline"}`, [userId]);
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [activeRegenKey, setActiveRegenKey] = useState("");
+
+  const last14Days = useMemo(() => {
+    const out = [];
+    const todayYmd = toYmdIST(new Date());
+    const today = startOfIstDay(todayYmd);
+    for (let i = 0; i < 14; i += 1) {
+      const d = new Date(today.getTime());
+      d.setDate(d.getDate() - i);
+      const ymd = toYmdIST(d);
+      if (ymd) out.push(ymd);
+    }
+    return out;
+  }, []);
+
+  const readFallbackRows = () => {
+    const parsed = parseJson(safeLocalStorage.getItem(fallbackKey), []);
+    return Array.isArray(parsed) ? parsed : [];
+  };
+
+  const writeFallbackRows = (nextRows) => {
+    safeLocalStorage.setItem(fallbackKey, JSON.stringify(Array.isArray(nextRows) ? nextRows : []));
+  };
+
+  const computeHealthRecord = (reportDate, reportType) => {
+    const dateYmd = String(reportDate || "");
+    const allLeads = Array.isArray(leads) ? leads : [];
+    const isOnYmdFlexible = (value) => {
+      if (!dateYmd) return false;
+      const parsed = parseIsoOrNull(value);
+      return parsed ? toYmdIST(parsed) === dateYmd : false;
+    };
+
+    const noteEvents = [];
+    const dueEvents = [];
+    allLeads.forEach((l) => {
+      if (!l) return;
+      if (isOnYmdFlexible(l.createdAt)) {
+        noteEvents.push({ kind: "lead_created", leadId: String(l.id || "") });
+      }
+      if (isOnYmdFlexible(l.nextFollowUp)) {
+        dueEvents.push({ kind: "next_follow_up", leadId: String(l.id || ""), status: String(l.status || "") });
+      }
+      (Array.isArray(l.notes) ? l.notes : []).forEach((n, idx) => {
+        if (isOnYmdFlexible(n?.date)) {
+          noteEvents.push({
+            kind: "note",
+            leadId: String(l.id || ""),
+            idx,
+            text: String(n?.text || "").slice(0, 120),
+          });
+        }
+      });
+    });
+
+    const rawActivityCount = noteEvents.length + dueEvents.length;
+    const rowCount = reportType === "EOD" ? Math.max(noteEvents.length, dueEvents.length) : rawActivityCount;
+    const emptyOutputMismatch = rowCount === 0 && rawActivityCount > 0;
+    const payload = {
+      owner_id: userId || null,
+      report_date: dateYmd,
+      report_type: reportType,
+      row_count: rowCount,
+      totals_checksum: simpleChecksum({
+        reportType,
+        reportDate: dateYmd,
+        noteEvents,
+        dueEvents,
+      }),
+      status: emptyOutputMismatch ? "FAILED" : "SUCCESS",
+      activity_count: rawActivityCount,
+      regenerated_at: new Date().toISOString(),
+      meta_json: {
+        generated_at: new Date().toISOString(),
+        error_reason: emptyOutputMismatch ? "Empty output mismatch" : "",
+        note_events: noteEvents.length,
+        due_events: dueEvents.length,
+      },
+    };
+    return payload;
+  };
+
+  const loadRows = async () => {
+    setError("");
+    if (!backendEnabled || !supabase || !userId) {
+      setRows(readFallbackRows());
+      return;
+    }
+    setBusy(true);
+    try {
+      const oldest = last14Days[last14Days.length - 1];
+      const { data, error: e } = await supabase
+        .from("report_health_checks")
+        .select("*")
+        .eq("owner_id", userId)
+        .gte("report_date", oldest)
+        .order("report_date", { ascending: false })
+        .order("report_type", { ascending: true });
+      if (e) throw e;
+      setRows(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(String(e?.message || e));
+      setRows(readFallbackRows());
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRows().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendEnabled, userId, fallbackKey]);
+
+  const upsertHealthRecord = async (reportDate, reportType) => {
+    const regenKey = `${reportDate}_${reportType}`;
+    setActiveRegenKey(regenKey);
+    setError("");
+    const payload = computeHealthRecord(reportDate, reportType);
+    try {
+      if (backendEnabled && supabase && userId) {
+        const { error: e } = await supabase.from("report_health_checks").upsert(payload, { onConflict: "owner_id,report_date,report_type" });
+        if (e) throw e;
+        await loadRows();
+      } else {
+        const prev = readFallbackRows();
+        const next = [...prev.filter((r) => !(String(r?.report_date) === reportDate && String(r?.report_type) === reportType)), payload];
+        writeFallbackRows(next);
+        setRows(next);
+      }
+    } catch (e) {
+      setError(String(e?.message || e));
+      const prev = readFallbackRows();
+      const next = [...prev.filter((r) => !(String(r?.report_date) === reportDate && String(r?.report_type) === reportType)), payload];
+      writeFallbackRows(next);
+      setRows(next);
+    } finally {
+      setActiveRegenKey("");
+    }
+  };
+
+  const matrix = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((r) => {
+      const key = `${String(r?.report_date || "")}_${String(r?.report_type || "")}`;
+      map.set(key, r);
+    });
+    return map;
+  }, [rows]);
+
+  const statusChip = (status) => {
+    const s = String(status || "MISSING").toUpperCase();
+    if (s === "SUCCESS") return "chip bg-emerald-50 border-emerald-200 text-emerald-700";
+    if (s === "FAILED") return "chip bg-rose-50 border-rose-200 text-rose-700";
+    return "chip bg-slate-50 border-slate-200 text-slate-600";
+  };
+
+  return (
+    <div className="surface p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Reports Health Check</div>
+          <div className="text-xl font-extrabold text-slate-900 mt-1">Daily Activity + EOD (last 14 days)</div>
+          <div className="text-xs text-slate-500 mt-1">Regenerate is idempotent by owner + date + report type.</div>
+        </div>
+        <button type="button" className="btn-secondary px-3 py-2" onClick={() => loadRows()} disabled={busy}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
+      {error ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">{error}</div> : null}
+
+      <div className="mt-4 overflow-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs uppercase text-slate-500 font-bold">
+            <tr>
+              <th className="p-3 text-left">Date</th>
+              <th className="p-3 text-left">Daily Activity</th>
+              <th className="p-3 text-left">EOD</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {last14Days.map((ymd) => {
+              const daily = matrix.get(`${ymd}_DAILY_ACTIVITY`) || null;
+              const eod = matrix.get(`${ymd}_EOD`) || null;
+              const renderCell = (row, reportType) => {
+                const status = row?.status || "MISSING";
+                const regenKey = `${ymd}_${reportType}`;
+                const meta = row?.meta_json && typeof row.meta_json === "object" ? row.meta_json : {};
+                return (
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={statusChip(status)}>{status}</span>
+                      <span className="text-[11px] text-slate-500">rows: {row?.row_count ?? "—"}</span>
+                      <span className="text-[11px] text-slate-500">activity: {row?.activity_count ?? "—"}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Generated: {row?.regenerated_at ? `${formatDate(row.regenerated_at)} ${formatTime(row.regenerated_at)}` : row?.created_at ? `${formatDate(row.created_at)} ${formatTime(row.created_at)}` : "—"}
+                    </div>
+                    <div className="text-[11px] font-mono text-slate-400 truncate">Checksum: {row?.totals_checksum || "—"}</div>
+                    {meta?.error_reason ? <div className="text-[11px] text-rose-700">{String(meta.error_reason)}</div> : null}
+                    <button
+                      type="button"
+                      className="btn-secondary px-3 py-2 text-xs"
+                      onClick={() => upsertHealthRecord(ymd, reportType)}
+                      disabled={activeRegenKey === regenKey}
+                    >
+                      <RotateCcw size={12} /> {activeRegenKey === regenKey ? "Regenerating…" : "Regenerate"}
+                    </button>
+                  </div>
+                );
+              };
+              return (
+                <tr key={ymd}>
+                  <td className="p-3 align-top">
+                    <div className="font-bold text-slate-900">{ymd}</div>
+                    <div className="text-xs text-slate-500">{formatDate(`${ymd}T00:00:00+05:30`)}</div>
+                  </td>
+                  <td className="p-3 align-top">{renderCell(daily, "DAILY_ACTIVITY")}</td>
+                  <td className="p-3 align-top">{renderCell(eod, "EOD")}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 };
 
 const AiToneLanguageControls = ({ tone, setTone, language, setLanguage, disabled = false, compact = false }) => (
@@ -1640,12 +2347,40 @@ const LossAnalysisWidget = ({ leads }) => {
 
 const RenewalAnalyticsWidget = ({ leads }) => {
   const renewalData = useMemo(() => {
-    const today = new Date();
-    const renewals = leads.filter((l) => l.status === "Payment Done" && l.nextFollowUp);
-    renewals.sort((a, b) => new Date(a.nextFollowUp) - new Date(b.nextFollowUp));
-    const upcoming = renewals.filter((l) => new Date(l.nextFollowUp) >= today).slice(0, 10);
-    const overdue = renewals.filter((l) => new Date(l.nextFollowUp) < today);
-    return { upcoming, overdue };
+    const now = new Date();
+    const monthKeys = [];
+    const anchorYm = toYmIST(now);
+    const anchorDate = new Date(`${anchorYm || "1970-01"}-01T00:00:00+05:30`);
+    for (let i = 0; i < 6; i += 1) {
+      const d = new Date(anchorDate.getTime());
+      d.setMonth(d.getMonth() + i);
+      const ym = toYmIST(d);
+      if (ym) monthKeys.push(ym);
+    }
+
+    const rows = (Array.isArray(leads) ? leads : [])
+      .filter((l) => isRenewalEligibleLead(l))
+      .map((lead) => {
+        const info = getRenewalTimelineInfo(lead);
+        const renewalYmd = info.renewalDate ? toYmdIST(info.renewalDate) : "";
+        return {
+          lead,
+          ...info,
+          renewalYmd,
+          monthKey: renewalYmd ? renewalYmd.slice(0, 7) : "",
+        };
+      })
+      .sort((a, b) => {
+        if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
+        const am = a.renewalDate ? a.renewalDate.getTime() : Number.POSITIVE_INFINITY;
+        const bm = b.renewalDate ? b.renewalDate.getTime() : Number.POSITIVE_INFINITY;
+        return am - bm;
+      });
+
+    const upcoming = rows.filter((r) => r.renewalDate && r.renewalDate >= now && monthKeys.includes(r.monthKey));
+    const overdue = rows.filter((r) => r.renewalDate && r.renewalDate < now);
+    const unknown = rows.filter((r) => !r.renewalDate);
+    return { upcoming, overdue, unknown };
   }, [leads]);
 
   return (
@@ -1660,7 +2395,7 @@ const RenewalAnalyticsWidget = ({ leads }) => {
         </div>
         <div className="flex-1 bg-green-50 p-3 rounded-lg border border-green-100 text-center">
           <div className="text-2xl font-bold text-green-700">{renewalData.upcoming.length}</div>
-          <div className="text-[10px] uppercase font-bold text-green-400">Upcoming (Next 10)</div>
+          <div className="text-[10px] uppercase font-bold text-green-400">In Next 6 Months</div>
         </div>
       </div>
 
@@ -1669,12 +2404,12 @@ const RenewalAnalyticsWidget = ({ leads }) => {
           <thead className="bg-slate-50 text-xs uppercase text-slate-500 font-bold sticky top-0">
             <tr>
               <th className="p-2">Client</th>
-              <th className="p-2">Follow Up</th>
-              <th className="p-2">Last Action</th>
+              <th className="p-2">Renewal Date</th>
+              <th className="p-2">Source</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {renewalData.upcoming.length === 0 && renewalData.overdue.length === 0 ? (
+            {renewalData.upcoming.length === 0 && renewalData.overdue.length === 0 && renewalData.unknown.length === 0 ? (
               <tr>
                 <td colSpan="3" className="p-4 text-center text-slate-400 italic">
                   No pending renewals found.
@@ -1682,24 +2417,34 @@ const RenewalAnalyticsWidget = ({ leads }) => {
               </tr>
             ) : (
               <>
-                {renewalData.overdue.map((l) => (
-                  <tr key={l.id} className="hover:bg-red-50/30 bg-red-50/10">
+                {renewalData.overdue.map((r) => (
+                  <tr key={`${r.lead.id}_${r.renewalYmd || "unknown"}`} className="hover:bg-red-50/30 bg-red-50/10">
                     <td className="p-2">
-                      <div className="font-bold text-slate-700">{l.name}</div>
-                      <div className="text-[10px] text-slate-500">{formatCurrency(l.loanAmount)}</div>
+                      <div className="font-bold text-slate-700">{r.lead.name}</div>
+                      <div className="text-[10px] text-slate-500">{formatCurrency(r.lead.loanAmount)}</div>
                     </td>
-                    <td className="p-2 text-red-600 font-bold text-xs">{formatDate(l.nextFollowUp)}</td>
-                    <td className="p-2 text-[10px] text-slate-400 truncate max-w-[160px]">{l.notes?.[l.notes.length - 1]?.text}</td>
+                    <td className="p-2 text-red-600 font-bold text-xs">{r.renewalYmd || "Unknown"}</td>
+                    <td className="p-2 text-[10px] text-slate-500">{sourceLabelForRenewal(r.source)}</td>
                   </tr>
                 ))}
-                {renewalData.upcoming.map((l) => (
-                  <tr key={l.id} className="hover:bg-slate-50">
+                {renewalData.upcoming.map((r) => (
+                  <tr key={`${r.lead.id}_${r.renewalYmd || "unknown"}`} className="hover:bg-slate-50">
                     <td className="p-2">
-                      <div className="font-bold text-slate-700">{l.name}</div>
-                      <div className="text-[10px] text-slate-500">{formatCurrency(l.loanAmount)}</div>
+                      <div className="font-bold text-slate-700">{r.lead.name}</div>
+                      <div className="text-[10px] text-slate-500">{formatCurrency(r.lead.loanAmount)}</div>
                     </td>
-                    <td className="p-2 text-green-600 font-bold text-xs">{formatDate(l.nextFollowUp)}</td>
-                    <td className="p-2 text-[10px] text-slate-400 truncate max-w-[160px]">{l.notes?.[l.notes.length - 1]?.text}</td>
+                    <td className="p-2 text-green-600 font-bold text-xs">{r.renewalYmd || "Unknown"}</td>
+                    <td className="p-2 text-[10px] text-slate-500">{sourceLabelForRenewal(r.source)}</td>
+                  </tr>
+                ))}
+                {renewalData.unknown.slice(0, 5).map((r) => (
+                  <tr key={`${r.lead.id}_unknown`} className="hover:bg-slate-50/60">
+                    <td className="p-2">
+                      <div className="font-bold text-slate-700">{r.lead.name}</div>
+                      <div className="text-[10px] text-slate-500">{formatCurrency(r.lead.loanAmount)}</div>
+                    </td>
+                    <td className="p-2 text-slate-400 font-bold text-xs">Unknown</td>
+                    <td className="p-2 text-[10px] text-slate-500">{sourceLabelForRenewal(r.source)}</td>
                   </tr>
                 ))}
               </>
@@ -2051,17 +2796,37 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
   const [aiLanguage, setAiLanguage] = useState(ai?.language || "English");
 
   const currentYm = toYmIST(new Date());
-  const monthKey = useMemo(() => `${targetStorageKey}_${currentYm}`, [targetStorageKey, currentYm]);
+  const [selectedMonthYm, setSelectedMonthYm] = useState(currentYm);
+  const monthOptions = useMemo(() => {
+    const base = new Date(`${currentYm}-01T00:00:00+05:30`);
+    return Array.from({ length: 12 }, (_, index) => {
+      const d = new Date(base);
+      d.setMonth(d.getMonth() - index);
+      const ym = toYmIST(d);
+      return {
+        value: ym,
+        label: new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric", timeZone: BRAND.tz }).format(d),
+      };
+    });
+  }, [currentYm]);
+  const monthKey = useMemo(() => `${targetStorageKey}_${selectedMonthYm}`, [targetStorageKey, selectedMonthYm]);
   const monthlyTarget = parseInt(safeLocalStorage.getItem(monthKey)) || 5000000;
   const achievedThisMonth = useMemo(() => {
     let achieved = 0;
     leads.forEach((l) => {
       if (l.status !== "Payment Done") return;
       const amt = parseInt(l.loanAmount) || 0;
-      if (isOnYmIST(l.loanDetails?.paymentDate || l.createdAt, currentYm)) achieved += amt;
+      if (isOnYmIST(l.loanDetails?.paymentDate || l.createdAt, selectedMonthYm)) achieved += amt;
     });
     return achieved;
-  }, [leads, currentYm]);
+  }, [leads, selectedMonthYm]);
+  const reportingPeriodLabel = useMemo(() => {
+    if (selectedTimeframe === "month") {
+      const match = monthOptions.find((opt) => opt.value === selectedMonthYm);
+      return match?.label || selectedMonthYm;
+    }
+    return selectedTimeframe.charAt(0).toUpperCase() + selectedTimeframe.slice(1);
+  }, [monthOptions, selectedMonthYm, selectedTimeframe]);
 
   const reportData = useMemo(() => {
     const now = new Date();
@@ -2072,16 +2837,30 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
       timeframeStart = new Date(now.setDate(now.getDate() - 7));
       filteredLeads = leads.filter((l) => new Date(l.createdAt) > timeframeStart);
     } else if (selectedTimeframe === "month") {
-      timeframeStart = new Date(now.setMonth(now.getMonth() - 1));
-      filteredLeads = leads.filter((l) => new Date(l.createdAt) > timeframeStart);
+      timeframeStart = new Date(`${selectedMonthYm}-01T00:00:00+05:30`);
+      filteredLeads = leads.filter((l) => toYmIST(l.createdAt) === selectedMonthYm);
     }
 
     const totalLeads = filteredLeads.length;
-    const closedLeads = filteredLeads.filter((l) => ["Payment Done", "Deal Closed"].includes(l.status));
+    const inWindowByIso = (iso) => {
+      if (!iso) return selectedTimeframe === "all";
+      if (selectedTimeframe === "all") return true;
+      if (selectedTimeframe === "month") return toYmIST(iso) === selectedMonthYm;
+      return parseIsoOrNull(iso)?.getTime?.() > timeframeStart.getTime();
+    };
+    const closedLeads = leads.filter((l) => {
+      if (!["Payment Done", "Deal Closed"].includes(l.status)) return false;
+      const eventIso = l.loanDetails?.paymentDate || getLeadLastActivityIso(l) || l.createdAt;
+      return inWindowByIso(eventIso);
+    });
     const activeLeads = filteredLeads.filter(
       (l) => !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status)
     );
-    const rejectedLeads = filteredLeads.filter((l) => ["Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status));
+    const rejectedLeads = leads.filter((l) => {
+      if (!["Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status)) return false;
+      const eventIso = getLeadLastActivityIso(l) || l.createdAt;
+      return inWindowByIso(eventIso);
+    });
     const totalVolume = filteredLeads.reduce((sum, l) => sum + (parseInt(l.loanAmount) || 0), 0);
     const closedVolume = closedLeads.reduce((sum, l) => sum + (parseInt(l.loanAmount) || 0), 0);
     const avgDealSize = closedLeads.length ? closedVolume / closedLeads.length : 0;
@@ -2116,9 +2895,9 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
     filteredLeads.forEach((l) => {
       (l.notes || []).forEach((n) => {
         if (new Date(n.date) >= timeframeStart) {
-          if (n.text.includes("Meeting Scheduled") || n.text.includes("Meeting rescheduled") || n.text.includes("[Commercial Visit]")) {
+          if (isMeetingDoneNoteText(n.text)) {
             clientVisits += 1;
-            if (l.status === "Commercial Client" || n.text.includes("[Commercial Visit]")) commercialVisits += 1;
+            if (l.status === "Commercial Client" || String(n.text || "").includes("[Commercial Visit]")) commercialVisits += 1;
           }
           if (n.text.includes("[MEDIATOR COLLECTED]")) mediatorsCollected += 1;
         }
@@ -2146,7 +2925,7 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
       .filter((m) => m.id !== "3")
       .map((mediator) => {
         const mLeads = filteredLeads.filter((l) => l.mediatorId === mediator.id);
-        const mClosed = mLeads.filter((l) => ["Payment Done", "Deal Closed"].includes(l.status));
+        const mClosed = closedLeads.filter((l) => l.mediatorId === mediator.id);
 
         const history = (mediator.followUpHistory || [])
           .map((h) => (typeof h === "string" ? { date: h, type: "legacy" } : h))
@@ -2206,6 +2985,7 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
     return {
       totalLeads,
       closedLeads: closedLeads.length,
+      closedLeadRows: closedLeads,
       activeLeads: activeLeads.length,
       rejectedLeads: rejectedLeads.length,
       totalVolume,
@@ -2313,7 +3093,7 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
                   Professional {type.charAt(0).toUpperCase() + type.slice(1)} Performance Report
                 </div>
                 <div className="text-xs text-slate-600 mt-1">
-                  Timeframe: <span className="font-bold text-slate-900 capitalize">{selectedTimeframe}</span>
+                  Timeframe: <span className="font-bold text-slate-900">{reportingPeriodLabel}</span>
                 </div>
               </div>
             </div>
@@ -2325,36 +3105,49 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
         </div>
       </div>
 
-      <div className="print:hidden p-6 bg-gradient-to-r from-slate-900 to-slate-800 text-white shadow-xl">
+      <div className="print:hidden px-4 py-5 sm:p-6 bg-gradient-to-r from-slate-900 to-slate-800 text-white shadow-xl">
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
             <div>
               <button onClick={onBack} className="flex items-center gap-2 font-bold text-sm text-slate-300 hover:text-white mb-4">
                 <ArrowLeft size={16} /> Back to Dashboard
               </button>
-              <h1 className="text-3xl font-bold tracking-tight">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
                 Professional {type.charAt(0).toUpperCase() + type.slice(1)} Performance Report
               </h1>
               <p className="text-slate-300 mt-2">Comprehensive analysis of business performance</p>
             </div>
             <div className="flex flex-col gap-3">
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2 w-full md:w-auto">
                 {["week", "month", "all"].map((t) => (
                   <button
                     key={t}
                     onClick={() => setSelectedTimeframe(t)}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors capitalize ${
+                    className={`px-3 sm:px-4 py-2 rounded-lg text-sm font-bold transition-colors capitalize ${
                       selectedTimeframe === t ? "bg-blue-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
                     }`}
                   >
                     {t}
                   </button>
                 ))}
+                {selectedTimeframe === "month" && (
+                  <select
+                    value={selectedMonthYm}
+                    onChange={(e) => setSelectedMonthYm(e.target.value)}
+                    className="px-3 sm:px-4 py-2 rounded-lg text-sm font-bold bg-slate-700 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[180px]"
+                  >
+                    {monthOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
                 <button
                   onClick={handlePrint}
-                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all hover:scale-105"
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-5 py-3 rounded-lg font-bold shadow-lg flex items-center justify-center gap-2 transition-all hover:scale-105"
                 >
                   <Printer size={18} /> Print Professional Report
                 </button>
@@ -2367,7 +3160,7 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto p-6 print:p-8 print:pt-16">
+      <div className="max-w-7xl mx-auto px-4 py-5 sm:p-6 print:p-8 print:pt-16">
         {ai?.run && (
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-6 mb-8 print:hidden">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -2454,16 +3247,16 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
         )}
 
         <div className="bg-gradient-to-br from-white to-blue-50 rounded-2xl shadow-xl border border-slate-200 p-6 mb-8 print:break-inside-avoid">
-          <div className="flex justify-between items-start mb-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6">
             <div>
-              <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2">
                 <Award className="text-blue-600" /> Executive Summary
               </h2>
               <p className="text-slate-600">Key performance indicators and business overview</p>
             </div>
-            <div className="text-right">
+            <div className="text-left sm:text-right">
               <div className="text-sm text-slate-500">Reporting Period</div>
-              <div className="text-lg font-bold text-slate-900">{selectedTimeframe.charAt(0).toUpperCase() + selectedTimeframe.slice(1)}</div>
+              <div className="text-lg font-bold text-slate-900">{reportingPeriodLabel}</div>
             </div>
           </div>
 
@@ -2580,7 +3373,7 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
               <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
                 <Briefcase size={16} /> Staff Delegated Collections (Included in Total)
               </h4>
-              <div className="overflow-x-auto">
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-sm text-left">
                   <thead className="text-xs uppercase font-bold text-slate-500 bg-slate-100">
                     <tr>
@@ -2600,6 +3393,18 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
                   </tbody>
                 </table>
               </div>
+              <div className="md:hidden space-y-3">
+                {reportData.staffClosures.map((item, idx) => (
+                  <div key={idx} className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="font-bold text-slate-900">{item.client}</div>
+                    <div className="mt-1 text-sm text-indigo-700 font-bold">{item.staff}</div>
+                    <div className="mt-2 flex items-center justify-between text-sm">
+                      <span className="text-slate-500">Amount</span>
+                      <span className="font-mono font-bold text-slate-800">{formatCurrency(item.amount)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -2607,13 +3412,36 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
             <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-2">
               <Briefcase size={16} /> Direct Client Details
             </h4>
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
               <div className="text-sm text-slate-600">
                 Total Direct Clients in Pipeline: <span className="font-bold text-slate-900">{reportData.directLeads.length}</span>
               </div>
               <div className="text-sm text-slate-600">
                 Volume: <span className="font-bold text-slate-900">{formatCurrency(reportData.directVolume)}</span>
               </div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {reportData.directLeads.length === 0 ? (
+                <div className="text-sm italic text-slate-500">No direct clients in this reporting period.</div>
+              ) : (
+                reportData.directLeads
+                  .slice()
+                  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                  .map((lead) => (
+                    <div key={lead.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                        <div>
+                          <div className="font-bold text-slate-900">{lead.name}</div>
+                          <div className="mt-1 text-sm text-slate-500">{lead.status || "Open"}</div>
+                        </div>
+                        <div className="text-left sm:text-right">
+                          <div className="font-mono font-bold text-slate-900">{formatCurrency(lead.loanAmount)}</div>
+                          <div className="text-xs text-slate-500">{formatDate(lead.createdAt)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+              )}
             </div>
           </div>
         </div>
@@ -2684,20 +3512,22 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 border-b pb-2">
             <CheckCircle className="text-emerald-600" size={20} /> Confirmed Disbursements Registry
           </h3>
-          <div className="overflow-hidden rounded-lg border border-slate-100">
-            <table className="w-full text-sm text-left">
+          <div className="hidden md:block overflow-hidden rounded-lg border border-slate-100">
+            <table className="w-full text-sm text-left table-fixed">
               <thead className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
                 <tr>
                   <th className="p-3">Client Name</th>
                   <th className="p-3">Date</th>
                   <th className="p-3">Partner / Staff</th>
+                  <th className="p-3">Terms</th>
+                  <th className="p-3">Rate</th>
                   <th className="p-3 text-right">Disbursed Amount</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {reportData.filteredLeads
-                  .filter((l) => ["Payment Done", "Deal Closed"].includes(l.status))
-                  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                {reportData.closedLeadRows
+                  .slice()
+                  .sort((a, b) => new Date(b.loanDetails?.paymentDate || b.createdAt) - new Date(a.loanDetails?.paymentDate || a.createdAt))
                   .map((lead) => {
                     const mediator = mediators.find((m) => m.id === lead.mediatorId);
                     return (
@@ -2710,13 +3540,19 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
                           <div className="text-slate-700 font-medium">{mediator?.name || "Direct"}</div>
                           {lead.assignedStaff && <div className="text-indigo-600 font-bold text-[10px]">By: {lead.assignedStaff}</div>}
                         </td>
+                        <td className="p-3 text-xs text-slate-700">
+                          {lead.loanDetails?.tenure || lead.loanDetails?.tenureMonths || lead.loanDetails?.tenor_months
+                            ? `${lead.loanDetails?.tenure || lead.loanDetails?.tenureMonths || lead.loanDetails?.tenor_months} ${lead.loanDetails?.frequency || "Monthly"}`
+                            : "—"}
+                        </td>
+                        <td className="p-3 text-xs font-bold text-indigo-700">{lead.loanDetails?.rate ? `${lead.loanDetails.rate}%` : "—"}</td>
                         <td className="p-3 text-right font-mono font-bold text-slate-700">{formatCurrency(lead.loanAmount)}</td>
                       </tr>
                     );
                   })}
                 {reportData.closedLeads === 0 && (
                   <tr>
-                    <td colSpan="4" className="p-4 text-center text-slate-400 italic">
+                    <td colSpan="6" className="p-4 text-center text-slate-400 italic">
                       No closed deals in this period.
                     </td>
                   </tr>
@@ -2724,13 +3560,60 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
               </tbody>
               <tfoot className="bg-slate-100 border-t-2 border-slate-200">
                 <tr>
-                  <td colSpan="3" className="p-3 text-right font-bold text-slate-900 uppercase text-xs tracking-wider">
+                  <td colSpan="5" className="p-3 text-right font-bold text-slate-900 uppercase text-xs tracking-wider">
                     Total Disbursed Volume
                   </td>
                   <td className="p-3 text-right font-extrabold text-emerald-700 text-lg">{formatCurrency(reportData.closedVolume)}</td>
                 </tr>
               </tfoot>
             </table>
+          </div>
+          <div className="md:hidden space-y-3">
+            {reportData.closedLeadRows.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm italic text-slate-500">
+                No closed deals in this period.
+              </div>
+            ) : (
+              reportData.closedLeadRows
+                .slice()
+                .sort((a, b) => new Date(b.loanDetails?.paymentDate || b.createdAt) - new Date(a.loanDetails?.paymentDate || a.createdAt))
+                .map((lead) => {
+                  const mediator = mediators.find((m) => m.id === lead.mediatorId);
+                  return (
+                    <div key={lead.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-bold text-slate-900">{lead.name}</div>
+                          <div className="mt-1 text-sm text-slate-500">{mediator?.name || "Direct"}</div>
+                          {lead.assignedStaff && <div className="mt-1 text-xs font-bold text-indigo-600">By: {lead.assignedStaff}</div>}
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                            <div className="rounded-lg bg-white px-3 py-2 border border-slate-200">
+                              <div className="uppercase tracking-wider text-slate-400 font-bold">Terms</div>
+                              <div className="mt-1 font-bold text-slate-700">
+                                {lead.loanDetails?.tenure || lead.loanDetails?.tenureMonths || lead.loanDetails?.tenor_months
+                                  ? `${lead.loanDetails?.tenure || lead.loanDetails?.tenureMonths || lead.loanDetails?.tenor_months} ${lead.loanDetails?.frequency || "Monthly"}`
+                                  : "—"}
+                              </div>
+                            </div>
+                            <div className="rounded-lg bg-white px-3 py-2 border border-slate-200">
+                              <div className="uppercase tracking-wider text-slate-400 font-bold">Rate</div>
+                              <div className="mt-1 font-bold text-indigo-700">{lead.loanDetails?.rate ? `${lead.loanDetails.rate}%` : "—"}</div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-mono font-bold text-emerald-700">{formatCurrency(lead.loanAmount)}</div>
+                          <div className="text-xs text-slate-500">{new Date(lead.loanDetails?.paymentDate || lead.createdAt).toLocaleDateString()}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+            <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Total Disbursed Volume</span>
+              <span className="text-lg font-extrabold text-emerald-700">{formatCurrency(reportData.closedVolume)}</span>
+            </div>
           </div>
         </div>
 
@@ -2815,15 +3698,15 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
             </h3>
             <p className="text-xs text-slate-400 mt-1">Complete list of all leads processed during this period.</p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
+          <div className="hidden lg:block overflow-x-auto">
+            <table className="w-full text-sm text-left table-fixed">
               <thead className="bg-slate-50 border-b text-xs uppercase font-bold text-slate-500">
                 <tr>
                   <th className="p-4">Date</th>
                   <th className="p-4">Client Name</th>
                   <th className="p-4">Partner</th>
-                  <th className="p-4">Company</th>
                   <th className="p-4">Status</th>
+                  <th className="p-4">Terms / Rate</th>
                   <th className="p-4 text-right">Amount</th>
                 </tr>
               </thead>
@@ -2837,11 +3720,17 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
                         <td className="p-4 font-mono text-xs text-slate-500">{new Date(lead.createdAt).toLocaleDateString()}</td>
                         <td className="p-4 font-bold text-slate-800">{lead.name}</td>
                         <td className="p-4 text-slate-600 font-medium">{mediatorName}</td>
-                        <td className="p-4 text-slate-500">{lead.company || "-"}</td>
                         <td className="p-4">
                           <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase border ${STATUS_CONFIG[lead.status]?.color?.replace("text", "border") || "border-slate-200 text-slate-500"}`}>
                             {lead.status}
                           </span>
+                        </td>
+                        <td className="p-4 text-xs text-slate-600">
+                          {["Payment Done", "Deal Closed"].includes(lead.status)
+                            ? `${lead.loanDetails?.tenure || lead.loanDetails?.tenureMonths || lead.loanDetails?.tenor_months || "—"} ${
+                                lead.loanDetails?.frequency || ""
+                              }${lead.loanDetails?.rate ? ` • ${lead.loanDetails.rate}%` : ""}`
+                            : "—"}
                         </td>
                         <td className="p-4 text-right font-mono font-bold text-slate-700">{formatCurrency(lead.loanAmount)}</td>
                       </tr>
@@ -2849,6 +3738,40 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
                   })}
               </tbody>
             </table>
+          </div>
+          <div className="lg:hidden divide-y divide-slate-100">
+            {reportData.filteredLeads
+              .slice()
+              .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+              .map((lead) => {
+                const mediatorName = mediators.find((m) => m.id === lead.mediatorId)?.name || "Unknown";
+                const termsLabel =
+                  ["Payment Done", "Deal Closed"].includes(lead.status)
+                    ? `${lead.loanDetails?.tenure || lead.loanDetails?.tenureMonths || lead.loanDetails?.tenor_months || "—"} ${
+                        lead.loanDetails?.frequency || ""
+                      }${lead.loanDetails?.rate ? ` • ${lead.loanDetails.rate}%` : ""}`
+                    : "—";
+                return (
+                  <div key={lead.id} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 break-words">{lead.name}</div>
+                        <div className="mt-1 text-sm text-slate-500">{mediatorName}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono font-bold text-slate-800">{formatCurrency(lead.loanAmount)}</div>
+                        <div className="text-xs text-slate-500">{new Date(lead.createdAt).toLocaleDateString()}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase border ${STATUS_CONFIG[lead.status]?.color?.replace("text", "border") || "border-slate-200 text-slate-500"}`}>
+                        {lead.status}
+                      </span>
+                      <span className="text-xs text-slate-600 font-medium">{termsLabel}</span>
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         </div>
 
@@ -2862,14 +3785,2024 @@ const EnhancedProfessionalReport = ({ type, leads, mediators, onBack, targetStor
   );
 };
 
+const parseBriefingLedgerNote = (input) => {
+  const raw = String(input || "").trim();
+  if (!raw) return { raw: "", tag: "NOTE", body: "", prose: [], fields: [] };
+  const bracketMatch = raw.match(/^\s*\[([^\]]+)\]\s*:?\s*(.*)$/);
+  const tag = (bracketMatch?.[1] || "NOTE").trim().toUpperCase();
+  const body = String(bracketMatch ? bracketMatch[2] : raw).trim();
+  const parts = body
+    .split("|")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const fields = [];
+  const prose = [];
+  (parts.length ? parts : [body]).forEach((part) => {
+    const m = part.match(/^([A-Za-z][A-Za-z\s]{1,30})\s*=\s*(.+)$/);
+    if (m) fields.push({ key: m[1].trim(), value: m[2].trim() });
+    else if (part) prose.push(part);
+  });
+  return { raw, tag, body, prose, fields };
+};
+
+const briefingLedgerNoteTone = (tag) => {
+  const t = String(tag || "").toUpperCase();
+  if (t.includes("REJECTION")) return { badge: "bg-rose-50 text-rose-700 border-rose-200", card: "bg-rose-50/50 border-rose-100" };
+  if (t.includes("TRIAGE")) return { badge: "bg-indigo-50 text-indigo-700 border-indigo-200", card: "bg-indigo-50/40 border-indigo-100" };
+  if (t.includes("PHONE PD")) return { badge: "bg-amber-50 text-amber-700 border-amber-200", card: "bg-amber-50/40 border-amber-100" };
+  if (t.includes("STATEMENT")) return { badge: "bg-cyan-50 text-cyan-700 border-cyan-200", card: "bg-cyan-50/40 border-cyan-100" };
+  if (t.includes("PAYMENT")) return { badge: "bg-emerald-50 text-emerald-700 border-emerald-200", card: "bg-emerald-50/40 border-emerald-100" };
+  return { badge: "bg-slate-100 text-slate-700 border-slate-200", card: "bg-white border-slate-200" };
+};
+
+const BriefingLedgerNotePreview = ({ note }) => {
+  if (!note?.text) return <span className="text-slate-400 italic">No notes</span>;
+  const parsed = parseBriefingLedgerNote(note.text);
+  const tone = briefingLedgerNoteTone(parsed.tag);
+  return (
+    <div className={`rounded-xl border p-3 ${tone.card}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className={`inline-flex items-center px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase tracking-wider ${tone.badge}`}>
+          {parsed.tag.replace(/_/g, " ")}
+        </span>
+      </div>
+      {parsed.prose?.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {parsed.prose.map((line, idx) => (
+            <div key={idx} className="text-xs text-slate-800 leading-relaxed font-semibold">
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+      {parsed.fields?.length > 0 && (
+        <div className="mt-2 grid gap-1">
+          {parsed.fields.map((f, idx) => (
+            <div key={`${f.key}-${idx}`} className="text-xs leading-relaxed">
+              <span className="font-extrabold text-slate-800 uppercase tracking-wide">{f.key}: </span>
+              <span className={`font-semibold ${/reason|strategy|competitor/i.test(f.key) ? "text-slate-900" : "text-slate-700"}`}>{f.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack, backendEnabled = false, authUser = null, currentUser = "User" }) => {
+  const todayYmd = toYmdIST(new Date());
+  const closedStatuses = new Set([
+    "Payment Done",
+    "Deal Closed",
+    "Not Eligible",
+    "Not Reliable",
+    "Lost to Competitor",
+    "Not Interested",
+    "Not Interested (Temp)",
+  ]);
+  const rejectedStatuses = new Set(["Not Eligible", "Not Reliable", "Lost to Competitor"]);
+
+  const isMineLead = (lead) => {
+    if (!lead) return false;
+    if (!backendEnabled || !authUser?.id) return true;
+    const owner = String(lead.ownerId || lead.createdBy || "");
+    if (!owner) return true;
+    return owner === String(authUser.id);
+  };
+
+  const isMineMediator = (medi) => {
+    if (!medi) return false;
+    if (!backendEnabled || !authUser?.id) return true;
+    const owner = String(medi.ownerId || medi.createdBy || "");
+    if (!owner) return true;
+    return owner === String(authUser.id);
+  };
+
+  const mineLeads = useMemo(() => (leads || []).filter((l) => isMineLead(l)), [leads, backendEnabled, authUser?.id]);
+  const openLeads = useMemo(() => mineLeads.filter((l) => !closedStatuses.has(l.status)), [mineLeads]);
+  const mediatorNameById = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(mediators) ? mediators : []).forEach((m) => {
+      const key = String(m?.id || "");
+      if (!key) return;
+      map.set(key, String(m?.name || "").trim() || "Mediator");
+    });
+    return map;
+  }, [mediators]);
+
+  const resolveLeadMediatorName = (lead) => {
+    const mediatorId = String(lead?.mediatorId || "");
+    if (mediatorId === "3") return "Direct Client";
+    if (mediatorId && mediatorNameById.has(mediatorId)) return mediatorNameById.get(mediatorId);
+    return "Unassigned Mediator";
+  };
+
+  const staffNameById = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(staffUsers) ? staffUsers : []).forEach((u) => {
+      const key = String(u?.userId || "");
+      if (!key) return;
+      const base = String(u?.label || u?.email || "").trim();
+      const normalized = base.replace(/\s*\([^)]*\)\s*$/, "").trim();
+      map.set(key, normalized || base || key);
+    });
+    return map;
+  }, [staffUsers]);
+
+  const resolveMeetingBy = (lead) => {
+    const assigned = String(lead?.assignedStaff || "").trim();
+    if (assigned) return assigned;
+    const ownerId = String(lead?.ownerId || lead?.createdBy || "");
+    if (ownerId && staffNameById.has(ownerId)) return staffNameById.get(ownerId);
+    return String(currentUser || "").trim() || "Unassigned";
+  };
+
+  const getLastNote = (lead) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    return notes.length ? notes[notes.length - 1] : null;
+  };
+
+  const getLatestNoteMatching = (lead, pattern) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const t = String(notes[i]?.text || "");
+      if (pattern.test(t)) return notes[i];
+    }
+    return null;
+  };
+
+  const getClosedAt = (lead) => {
+    if (!lead) return null;
+    if (lead.status === "Payment Done" || lead.status === "Deal Closed") {
+      if (lead?.loanDetails?.paymentDate) return lead.loanDetails.paymentDate;
+      const paymentNote = getLatestNoteMatching(lead, /PAYMENT DONE|PAYMENT|DEAL CLOSED|CLOSED/i);
+      return paymentNote?.date || null;
+    }
+    if (rejectedStatuses.has(lead.status)) {
+      const rejectionNote = getLatestNoteMatching(lead, /\[REJECTION\]|\[REJECTION REASON\]|NOT ELIGIBLE|NOT RELIABLE|LOST TO COMPETITOR/i);
+      return rejectionNote?.date || null;
+    }
+    return null;
+  };
+
+  const isLeadTouchedToday = (lead) => {
+    if (!lead) return false;
+    if (isOnYmdIST(lead.createdAt, todayYmd)) return true;
+    const notes = Array.isArray(lead.notes) ? lead.notes : [];
+    return notes.some((n) => isOnYmdIST(n?.date, todayYmd));
+  };
+
+  const openLeadsTouchedToday = useMemo(() => openLeads.filter((l) => isLeadTouchedToday(l)), [openLeads, todayYmd]);
+  const leadsAddedToday = useMemo(() => openLeads.filter((l) => isOnYmdIST(l.createdAt, todayYmd)), [openLeads, todayYmd]);
+  const addedStillOpenEod = useMemo(() => leadsAddedToday.filter((l) => !closedStatuses.has(l.status)), [leadsAddedToday]);
+
+  const paymentDoneToday = useMemo(() => {
+    return mineLeads.filter((l) => {
+      if (!(l.status === "Payment Done" || l.status === "Deal Closed")) return false;
+      const closedAt = getClosedAt(l);
+      return closedAt ? isOnYmdIST(closedAt, todayYmd) : false;
+    });
+  }, [mineLeads, todayYmd]);
+
+  const rejectedToday = useMemo(() => {
+    return mineLeads.filter((l) => {
+      if (!rejectedStatuses.has(l.status)) return false;
+      const closedAt = getClosedAt(l);
+      return closedAt ? isOnYmdIST(closedAt, todayYmd) : false;
+    });
+  }, [mineLeads, todayYmd]);
+
+  const metToday = useMemo(() => {
+    return mineLeads.filter((l) => {
+      const notes = Array.isArray(l.notes) ? l.notes : [];
+      return notes.some((n) => isOnYmdIST(n?.date, todayYmd) && isMeetingDoneNoteText(n?.text));
+    });
+  }, [mineLeads, todayYmd]);
+
+  const lifecycleRows = useMemo(() => {
+    return openLeadsTouchedToday
+      .map((l) => {
+        const lastNote = getLastNote(l);
+        return {
+          id: l.id,
+          name: l.name,
+          company: l.company,
+          mediatorName: resolveLeadMediatorName(l),
+          status: l.status,
+          amount: Number(l.loanAmount) || 0,
+          entryAt: l.createdAt || null,
+          lastActionAt: lastNote?.date || l.createdAt || null,
+          nextFollowUp: l.nextFollowUp || null,
+          lastNoteText: lastNote?.text || "—",
+        };
+      })
+      .sort((a, b) => new Date(b.lastActionAt || 0) - new Date(a.lastActionAt || 0));
+  }, [openLeadsTouchedToday]);
+
+  const mediatorTouches = useMemo(() => {
+    return (mediators || [])
+      .filter((m) => String(m?.id || "") !== "3" && isMineMediator(m))
+      .map((m) => {
+        const history = (Array.isArray(m.followUpHistory) ? m.followUpHistory : [])
+          .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
+          .filter((h) => h && typeof h === "object");
+        const todayEntries = history.filter((h) => {
+          const ts = h.ts || h.endedAt || h.date;
+          return ts ? isOnYmdIST(ts, todayYmd) : false;
+        });
+        const callCount = todayEntries.filter((h) => String(h.type || "").toLowerCase().includes("call")).length;
+        const waCount = todayEntries.filter((h) => String(h.type || "").toLowerCase().includes("whatsapp")).length;
+        const total = todayEntries.length;
+        const latest = todayEntries.sort((a, b) => new Date(b.ts || b.endedAt || b.date || 0) - new Date(a.ts || a.endedAt || a.date || 0))[0] || null;
+        return {
+          id: m.id,
+          name: m.name,
+          phone: m.phone,
+          total,
+          callCount,
+          waCount,
+          latestAt: latest ? latest.ts || latest.endedAt || latest.date : null,
+          latestOutcome: latest ? String(latest.outcome || latest.type || "logged").replace(/_/g, " ") : "—",
+        };
+      })
+      .filter((r) => r.total > 0)
+      .sort((a, b) => new Date(b.latestAt || 0) - new Date(a.latestAt || 0));
+  }, [mediators, todayYmd, backendEnabled, authUser?.id]);
+
+  const openValue = useMemo(() => openLeads.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0), [openLeads]);
+  const allOpenLeadRows = useMemo(
+    () =>
+      [...openLeads].sort((a, b) => {
+        const aTs = parseIsoOrNull(a?.nextFollowUp)?.getTime() || Number.MAX_SAFE_INTEGER;
+        const bTs = parseIsoOrNull(b?.nextFollowUp)?.getTime() || Number.MAX_SAFE_INTEGER;
+        return aTs - bTs;
+      }),
+    [openLeads]
+  );
+  const meetingTodayClients = useMemo(
+    () => openLeads.filter((l) => l?.status === "Meeting Scheduled" && l?.nextFollowUp && isTodayIST(l.nextFollowUp)),
+    [openLeads]
+  );
+  const staleOpenClients = useMemo(() => openLeads.filter((l) => isStaleLead(l)), [openLeads]);
+  const stalePartnerStatuses = new Set(["Partner Follow-Up", "Statements Not Received", "Contact Details Not Received", "Interest Rate Issue"]);
+  const staleInternalStatuses = new Set(["Follow-Up Required", "No Appointment", "Commercial Client", "New"]);
+  const stalePartnerFollowUp = useMemo(
+    () => staleOpenClients.filter((l) => stalePartnerStatuses.has(String(l?.status || ""))),
+    [staleOpenClients]
+  );
+  const staleOwnFollowUp = useMemo(() => {
+    return staleOpenClients.filter((l) => {
+      const status = String(l?.status || "");
+      if (stalePartnerStatuses.has(status)) return false;
+      if (staleInternalStatuses.has(status)) return true;
+      return true; // default bucket = internal follow-up
+    });
+  }, [staleOpenClients]);
+  const openClientsByMediator = useMemo(() => {
+    const counts = new Map();
+    openLeads.forEach((l) => {
+      const name = resolveLeadMediatorName(l);
+      counts.set(name, (counts.get(name) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
+  }, [openLeads, mediatorNameById]);
+  const partnerUpdateStorageKey = useMemo(() => {
+    const ownerKey = String(authUser?.id || currentUser || "local")
+      .replace(/[^\w-]+/g, "_")
+      .slice(0, 80);
+    return `liras_partner_manual_updates_${ownerKey}_${todayYmd}`;
+  }, [authUser?.id, currentUser, todayYmd]);
+  const [partnerUpdateDraft, setPartnerUpdateDraft] = useState("");
+  const [partnerManualUpdates, setPartnerManualUpdates] = useState([]);
+
+  useEffect(() => {
+    setPartnerManualUpdates(parseJson(safeLocalStorage.getItem(partnerUpdateStorageKey), []));
+  }, [partnerUpdateStorageKey]);
+
+  useEffect(() => {
+    safeLocalStorage.setItem(partnerUpdateStorageKey, JSON.stringify(Array.isArray(partnerManualUpdates) ? partnerManualUpdates : []));
+  }, [partnerUpdateStorageKey, partnerManualUpdates]);
+
+  const addPartnerManualUpdate = () => {
+    const text = String(partnerUpdateDraft || "").trim();
+    if (!text) return;
+    setPartnerManualUpdates((prev) => [
+      {
+        id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        createdAt: new Date().toISOString(),
+      },
+      ...(Array.isArray(prev) ? prev : []),
+    ]);
+    setPartnerUpdateDraft("");
+  };
+
+  const removePartnerManualUpdate = (id) => {
+    setPartnerManualUpdates((prev) => (Array.isArray(prev) ? prev.filter((u) => String(u?.id) !== String(id)) : []));
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/40 to-slate-100 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white border-b border-slate-200 sticky top-0 z-20 flex justify-between items-center">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `Daily_Activity_Report_${todayYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-4 py-2"
+        >
+          <Printer size={16} /> Print
+        </button>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 print:p-5">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-4 sm:p-6 print:shadow-none print:border-0 print:p-4">
+          <ReportBrandHeader
+            title="Daily Activity Report"
+            subtitle={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-bold text-slate-900">{currentUser}</span>
+                <span className="text-slate-300">•</span>
+                <span className="font-semibold text-slate-700">Open leads + today activity only</span>
+              </span>
+            }
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Open Leads (Current)</div>
+                <div className="text-slate-900 font-extrabold">{openLeads.length}</div>
+              </div>
+            }
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mb-3">
+            <div className="surface-solid p-3 border border-indigo-100 bg-indigo-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Mediators Spoken</div>
+              <div className="text-xl font-extrabold text-indigo-700 mt-1">{mediatorTouches.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-cyan-100 bg-cyan-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Leads Dealt Today</div>
+              <div className="text-xl font-extrabold text-cyan-700 mt-1">{lifecycleRows.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-violet-100 bg-violet-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Added Today</div>
+              <div className="text-xl font-extrabold text-violet-700 mt-1">{leadsAddedToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-teal-100 bg-teal-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Met Today</div>
+              <div className="text-xl font-extrabold text-teal-700 mt-1">{metToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-emerald-100 bg-emerald-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Payment Done</div>
+              <div className="text-xl font-extrabold text-emerald-700 mt-1">{paymentDoneToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-rose-100 bg-rose-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Rejected</div>
+              <div className="text-xl font-extrabold text-rose-700 mt-1">{rejectedToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-amber-100 bg-amber-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Added but Open EOD</div>
+              <div className="text-xl font-extrabold text-amber-700 mt-1">{addedStillOpenEod.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-slate-200 bg-slate-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Open Value</div>
+              <div className="text-base font-extrabold text-slate-900 mt-1">{formatCompactCurrency(openValue)}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+            <div className="surface-solid p-3 border border-blue-100 bg-blue-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">All Open Leads</div>
+              <div className="text-2xl font-extrabold text-blue-700 mt-1">{allOpenLeadRows.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-purple-100 bg-purple-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Meeting Today Clients</div>
+              <div className="text-2xl font-extrabold text-purple-700 mt-1">{meetingTodayClients.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-rose-100 bg-rose-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Stale Clients (Open)</div>
+              <div className="text-2xl font-extrabold text-rose-700 mt-1">{staleOpenClients.length}</div>
+              <div className="text-[10px] text-slate-600 font-bold mt-1">
+                Partner: {stalePartnerFollowUp.length} • Own: {staleOwnFollowUp.length}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 overflow-hidden mb-6">
+            <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-fuchsia-900 text-white flex items-center justify-between">
+              <div className="font-extrabold text-sm">Partner / Owner Manual Updates</div>
+              <div className="text-xs text-fuchsia-200 font-bold">{partnerManualUpdates.length} notes</div>
+            </div>
+            <div className="p-3 bg-white space-y-2">
+              <div className="print:hidden rounded-xl border border-fuchsia-100 bg-fuchsia-50/20 p-3 space-y-2">
+                <label className="text-[11px] font-extrabold uppercase tracking-wider text-fuchsia-700 block">
+                  Add update to share with partners / owners
+                </label>
+                <textarea
+                  value={partnerUpdateDraft}
+                  onChange={(e) => setPartnerUpdateDraft(e.target.value)}
+                  className="w-full min-h-[92px] p-3 text-sm bg-white border border-fuchsia-200 rounded-xl focus:ring-2 focus:ring-fuchsia-300 outline-none"
+                  placeholder="Example: Spoke to Aashish at 10:45 AM; Hotel Sudha Inn confirmed statement by 4 PM; follow-up set for tomorrow."
+                />
+                <div className="flex gap-2">
+                  <button type="button" className="btn-primary px-4 py-2" onClick={addPartnerManualUpdate}>
+                    Add Note
+                  </button>
+                  <button type="button" className="btn-secondary px-4 py-2" onClick={() => setPartnerUpdateDraft("")}>
+                    Clear Draft
+                  </button>
+                </div>
+              </div>
+              {partnerManualUpdates.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">
+                  No manual updates added yet.
+                </div>
+              ) : (
+                partnerManualUpdates.map((u) => (
+                  <div key={`manual-update-${u.id}`} className="rounded-xl border border-fuchsia-100 p-3 bg-fuchsia-50/20">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="text-[10px] uppercase tracking-wider font-extrabold text-fuchsia-700">Manual Update</div>
+                      <div className="text-[11px] font-bold text-slate-500 whitespace-nowrap">{formatDateTime(u.createdAt)}</div>
+                    </div>
+                    <div className="mt-2 text-sm text-slate-800 leading-relaxed font-semibold whitespace-pre-wrap">{u.text}</div>
+                    <div className="mt-2 print:hidden">
+                      <button
+                        type="button"
+                        className="btn-secondary px-3 py-1.5 text-xs"
+                        onClick={() => removePartnerManualUpdate(u.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-violet-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Open Leads Activity Today</div>
+                <div className="text-xs text-violet-200 font-bold">{lifecycleRows.length} leads</div>
+              </div>
+              <div className="hidden lg:block overflow-x-auto bg-white print:hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-extrabold">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Lead</th>
+                      <th className="px-3 py-2 text-left">Entry</th>
+                      <th className="px-3 py-2 text-left">Last Update</th>
+                      <th className="px-3 py-2 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {lifecycleRows.slice(0, 18).map((r) => (
+                      <tr key={`lc-${r.id}`}>
+                        <td className="px-3 py-2">
+                          <div className="font-extrabold text-slate-800">{r.name}</div>
+                          <div className="text-[10px] text-slate-500">{r.company || "—"}</div>
+                          <div className="text-[10px] text-violet-700 font-bold mt-0.5">Mediator: {r.mediatorName}</div>
+                        </td>
+                        <td className="px-3 py-2 font-bold text-slate-700">{r.entryAt ? formatDateTime(r.entryAt) : "—"}</td>
+                        <td className="px-3 py-2 font-bold text-slate-700">{r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}</td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[r.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                            {r.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {lifecycleRows.length === 0 && (
+                      <tr>
+                        <td colSpan="4" className="px-3 py-4 text-slate-500 italic text-center">
+                          No open lead activity captured today.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="block lg:hidden p-3 space-y-2 bg-white print:hidden">
+                {lifecycleRows.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">
+                    No open lead activity captured today.
+                  </div>
+                ) : (
+                  lifecycleRows.slice(0, 18).map((r) => (
+                    <article key={`mobile-lc-${r.id}`} className="rounded-xl border border-violet-100 p-3 bg-violet-50/20">
+                      <div className="text-sm font-extrabold text-slate-900">{r.name}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">{r.company || "—"}</div>
+                      <div className="text-[11px] text-violet-700 font-bold mt-1">Mediator: {r.mediatorName}</div>
+                      <div className="mt-2 text-[11px] text-slate-700 font-semibold">
+                        Entry: {r.entryAt ? formatDateTime(r.entryAt) : "—"}
+                      </div>
+                      <div className="text-[11px] text-slate-700 font-semibold">
+                        Last update: {r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}
+                      </div>
+                      <div className="mt-2">
+                        <span className={`inline-flex px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[r.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                          {r.status}
+                        </span>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+              <div className="hidden print:block p-3 space-y-2 bg-white">
+                {lifecycleRows.slice(0, 18).map((r) => (
+                  <div key={`print-lc-${r.id}`} className="rounded-lg border border-slate-200 p-2 print:break-inside-avoid">
+                    <div className="text-sm font-extrabold text-slate-900">{r.name}</div>
+                    <div className="text-[11px] text-violet-700 font-bold">Mediator: {r.mediatorName}</div>
+                    <div className="text-[11px] text-slate-600 mt-1">Entry: {r.entryAt ? formatDateTime(r.entryAt) : "—"}</div>
+                    <div className="text-[11px] text-slate-600">Last: {r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}</div>
+                    <div className="text-[11px] text-slate-600">Status: {r.status}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-cyan-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Open Clients by Mediator</div>
+                <div className="text-xs text-cyan-200 font-bold">{openClientsByMediator.length} mediators</div>
+              </div>
+              <div className="p-3 bg-white space-y-2">
+                {openClientsByMediator.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">No open clients mapped to mediators.</div>
+                ) : (
+                  openClientsByMediator.map((m, idx) => (
+                    <div key={`open-med-${m.name}-${idx}`} className="rounded-xl border border-cyan-100 p-3 flex items-center justify-between gap-3">
+                      <div className="text-sm font-extrabold text-slate-900 truncate">{m.name}</div>
+                      <div className="text-xs font-extrabold text-cyan-700 whitespace-nowrap">{m.count} open clients</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <div className="rounded-2xl border border-blue-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-blue-100 text-blue-800 font-extrabold text-sm">All Open Leads</div>
+              <div className="p-3 bg-white space-y-2">
+                {allOpenLeadRows.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No open leads.</div>
+                ) : (
+                  allOpenLeadRows.slice(0, 12).map((l) => (
+                    <div key={`open-${l.id}`} className="rounded-lg border border-blue-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-[11px] text-blue-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">
+                        Next: {l.nextFollowUp ? formatDateTime(l.nextFollowUp) : "Not set"} • {l.status}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-purple-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-purple-100 text-purple-800 font-extrabold text-sm">Meeting Today Clients</div>
+              <div className="p-3 bg-white space-y-2">
+                {meetingTodayClients.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No clients scheduled for meeting today.</div>
+                ) : (
+                  meetingTodayClients.map((l) => (
+                    <div key={`meetToday-${l.id}`} className="rounded-lg border border-purple-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-[11px] text-purple-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">
+                        Meeting: {l.nextFollowUp ? formatDateTime(l.nextFollowUp) : "Not set"} • {l.status}
+                      </div>
+                      <div className="text-[11px] text-purple-700 font-extrabold mt-1">
+                        Meeting by: {resolveMeetingBy(l)}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-rose-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-rose-100 text-rose-800 font-extrabold text-sm">Stale Clients (Open)</div>
+              <div className="p-3 bg-white space-y-2">
+                {staleOpenClients.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No stale open leads.</div>
+                ) : (
+                  <>
+                    <div className="rounded-lg border border-rose-100 p-2 bg-rose-50/40">
+                      <div className="text-xs font-extrabold uppercase tracking-wider text-rose-700">
+                        Partner Follow-up Stale ({stalePartnerFollowUp.length})
+                      </div>
+                    </div>
+                    {stalePartnerFollowUp.length === 0 ? (
+                      <div className="text-xs text-slate-500 italic px-1">No partner-follow-up stale leads.</div>
+                    ) : (
+                      stalePartnerFollowUp.map((l) => (
+                        <div key={`stale-partner-${l.id}`} className="rounded-lg border border-rose-100 p-2">
+                          <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                          <div className="text-[11px] text-rose-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                          <div className="text-xs text-slate-600 font-bold mt-1">
+                            Reason: Partner follow-up pending • Last activity: {formatDateTime(getLeadLastActivityIso(l))}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-semibold mt-1">Status: {l.status}</div>
+                        </div>
+                      ))
+                    )}
+
+                    <div className="rounded-lg border border-amber-100 p-2 bg-amber-50/40 mt-2">
+                      <div className="text-xs font-extrabold uppercase tracking-wider text-amber-700">
+                        Own/Internal Follow-up Stale ({staleOwnFollowUp.length})
+                      </div>
+                    </div>
+                    {staleOwnFollowUp.length === 0 ? (
+                      <div className="text-xs text-slate-500 italic px-1">No internal-follow-up stale leads.</div>
+                    ) : (
+                      staleOwnFollowUp.map((l) => (
+                        <div key={`stale-own-${l.id}`} className="rounded-lg border border-amber-100 p-2">
+                          <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                          <div className="text-[11px] text-amber-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                          <div className="text-xs text-slate-600 font-bold mt-1">
+                            Reason: Own follow-up pending • Last activity: {formatDateTime(getLeadLastActivityIso(l))}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-semibold mt-1">Status: {l.status}</div>
+                        </div>
+                      ))
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-2">
+            <div className="rounded-2xl border border-emerald-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-emerald-100 text-emerald-800 font-extrabold text-sm">Payment Done Today</div>
+              <div className="p-3 bg-white space-y-2">
+                {paymentDoneToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No payment closures today.</div>
+                ) : (
+                  paymentDoneToday.map((l) => (
+                    <div key={`pay-${l.id}`} className="rounded-lg border border-emerald-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-[11px] text-emerald-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">Closed: {formatDateTime(getClosedAt(l) || l.createdAt)}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-rose-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-rose-100 text-rose-800 font-extrabold text-sm">Rejected Today</div>
+              <div className="p-3 bg-white space-y-2">
+                {rejectedToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No rejection updates today.</div>
+                ) : (
+                  rejectedToday.map((l) => (
+                    <div key={`rej-${l.id}`} className="rounded-lg border border-rose-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-[11px] text-rose-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">{l.status} • {formatDateTime(getClosedAt(l) || l.createdAt)}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-teal-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-teal-100 text-teal-800 font-extrabold text-sm">Clients Met Today</div>
+              <div className="p-3 bg-white space-y-2">
+                {metToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No meeting/visit logs captured today.</div>
+                ) : (
+                  metToday.map((l) => {
+                    const notes = Array.isArray(l.notes) ? l.notes : [];
+                    const note =
+                      [...notes].reverse().find((n) => isOnYmdIST(n?.date, todayYmd) && isMeetingDoneNoteText(n?.text)) ||
+                      notes[notes.length - 1];
+                    return (
+                      <div key={`met-${l.id}`} className="rounded-lg border border-teal-100 p-2">
+                        <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                        <div className="text-[11px] text-teal-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                        <div className="text-xs text-slate-600 font-bold mt-1">{note?.date ? formatDateTime(note.date) : "Today"} • {l.status}</div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-amber-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-amber-100 text-amber-800 font-extrabold text-sm">Added Today but Open (EOD)</div>
+              <div className="p-3 bg-white space-y-2">
+                {addedStillOpenEod.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No leads added today are pending open at EOD.</div>
+                ) : (
+                  addedStillOpenEod.map((l) => (
+                    <div key={`eod-${l.id}`} className="rounded-lg border border-amber-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-[11px] text-amber-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">Entry: {formatDateTime(l.createdAt)} • Status: {l.status}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Generated by {BRAND.product} • {BRAND.name}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DailyWorkUpdatePlanReportView = ({
+  leads,
+  mediators,
+  staffUsers = [],
+  onBack,
+  backendEnabled = false,
+  authUser = null,
+  currentUser = "User",
+}) => {
+  const today = new Date();
+  const todayYmd = toYmdIST(today);
+  const tomorrow = new Date(today.getTime() + 86400000);
+  const tomorrowYmd = toYmdIST(tomorrow);
+  const closedStatuses = new Set([
+    "Payment Done",
+    "Deal Closed",
+    "Not Eligible",
+    "Not Reliable",
+    "Lost to Competitor",
+    "Not Interested",
+    "Not Interested (Temp)",
+  ]);
+  const rejectedStatuses = new Set(["Not Eligible", "Not Reliable", "Lost to Competitor"]);
+
+  const isMineLead = (lead) => {
+    if (!lead) return false;
+    if (!backendEnabled || !authUser?.id) return true;
+    const owner = String(lead.ownerId || lead.createdBy || "");
+    if (!owner) return true;
+    return owner === String(authUser.id);
+  };
+
+  const isMineMediator = (medi) => {
+    if (!medi) return false;
+    if (!backendEnabled || !authUser?.id) return true;
+    const owner = String(medi.ownerId || medi.createdBy || "");
+    if (!owner) return true;
+    return owner === String(authUser.id);
+  };
+
+  const mineLeads = useMemo(() => (leads || []).filter((l) => isMineLead(l)), [leads, backendEnabled, authUser?.id]);
+  const openLeads = useMemo(() => mineLeads.filter((l) => !closedStatuses.has(String(l?.status || ""))), [mineLeads]);
+
+  const mediatorNameById = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(mediators) ? mediators : []).forEach((m) => {
+      const key = String(m?.id || "");
+      if (!key) return;
+      map.set(key, String(m?.name || "").trim() || "Mediator");
+    });
+    return map;
+  }, [mediators]);
+
+  const staffNameById = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(staffUsers) ? staffUsers : []).forEach((u) => {
+      const key = String(u?.userId || "");
+      if (!key) return;
+      const base = String(u?.label || u?.email || "").trim();
+      const normalized = base.replace(/\s*\([^)]*\)\s*$/, "").trim();
+      map.set(key, normalized || base || key);
+    });
+    return map;
+  }, [staffUsers]);
+
+  const resolveLeadMediatorName = (lead) => {
+    const mediatorId = String(lead?.mediatorId || "");
+    if (mediatorId === "3") return "Direct Client";
+    if (mediatorId && mediatorNameById.has(mediatorId)) return mediatorNameById.get(mediatorId);
+    return "Unassigned Mediator";
+  };
+
+  const resolveMeetingBy = (lead) => {
+    const assigned = String(lead?.assignedStaff || "").trim();
+    if (assigned) return assigned;
+    const ownerId = String(lead?.ownerId || lead?.createdBy || "");
+    if (ownerId && staffNameById.has(ownerId)) return staffNameById.get(ownerId);
+    return String(currentUser || "").trim() || "Unassigned";
+  };
+
+  const getLastNote = (lead) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    return notes.length ? notes[notes.length - 1] : null;
+  };
+
+  const getLatestNoteMatching = (lead, pattern) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const text = String(notes[i]?.text || "");
+      if (pattern.test(text)) return notes[i];
+    }
+    return null;
+  };
+
+  const getClosedAt = (lead) => {
+    if (!lead) return null;
+    if (lead.status === "Payment Done" || lead.status === "Deal Closed") {
+      if (lead?.loanDetails?.paymentDate) return lead.loanDetails.paymentDate;
+      const paymentNote = getLatestNoteMatching(lead, /PAYMENT DONE|PAYMENT|DEAL CLOSED|CLOSED/i);
+      return paymentNote?.date || null;
+    }
+    if (rejectedStatuses.has(lead.status)) {
+      const rejectionNote = getLatestNoteMatching(lead, /\[REJECTION\]|\[REJECTION REASON\]|NOT ELIGIBLE|NOT RELIABLE|LOST TO COMPETITOR/i);
+      return rejectionNote?.date || null;
+    }
+    return null;
+  };
+
+  const isLeadTouchedToday = (lead) => {
+    if (!lead) return false;
+    if (isOnYmdIST(lead.createdAt, todayYmd)) return true;
+    const notes = Array.isArray(lead.notes) ? lead.notes : [];
+    return notes.some((n) => isOnYmdIST(n?.date, todayYmd));
+  };
+
+  const workRowsToday = useMemo(() => {
+    return mineLeads
+      .filter((l) => isLeadTouchedToday(l))
+      .map((l) => {
+        const lastNote = getLastNote(l);
+        const latestText = String(lastNote?.text || "").trim();
+        return {
+          id: l.id,
+          name: l.name,
+          status: String(l.status || "New"),
+          mediatorName: resolveLeadMediatorName(l),
+          amount: Number(l.loanAmount) || 0,
+          lastActionAt: lastNote?.date || l.createdAt || null,
+          latestUpdate: latestText || "Activity updated",
+          nextFollowUp: l.nextFollowUp || null,
+          meetingBy: resolveMeetingBy(l),
+        };
+      })
+      .sort((a, b) => new Date(b.lastActionAt || 0) - new Date(a.lastActionAt || 0));
+  }, [mineLeads, todayYmd, mediators, staffUsers, currentUser]);
+
+  const mediatorTouches = useMemo(() => {
+    return (mediators || [])
+      .filter((m) => String(m?.id || "") !== "3" && isMineMediator(m))
+      .map((m) => {
+        const history = (Array.isArray(m.followUpHistory) ? m.followUpHistory : [])
+          .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
+          .filter((h) => h && typeof h === "object");
+        const todayEntries = history.filter((h) => {
+          const ts = h.ts || h.endedAt || h.date;
+          return ts ? isOnYmdIST(ts, todayYmd) : false;
+        });
+        return {
+          id: m.id,
+          name: m.name,
+          count: todayEntries.length,
+        };
+      })
+      .filter((r) => r.count > 0)
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [mediators, todayYmd, backendEnabled, authUser?.id]);
+
+  const addedToday = useMemo(() => mineLeads.filter((l) => isOnYmdIST(l.createdAt, todayYmd)), [mineLeads, todayYmd]);
+  const metToday = useMemo(
+    () =>
+      mineLeads.filter((l) => {
+        const notes = Array.isArray(l.notes) ? l.notes : [];
+        return notes.some((n) => isOnYmdIST(n?.date, todayYmd) && isMeetingDoneNoteText(n?.text));
+      }),
+    [mineLeads, todayYmd]
+  );
+  const paymentDoneToday = useMemo(
+    () =>
+      mineLeads.filter((l) => {
+        if (!(l.status === "Payment Done" || l.status === "Deal Closed")) return false;
+        const closedAt = getClosedAt(l);
+        return closedAt ? isOnYmdIST(closedAt, todayYmd) : false;
+      }),
+    [mineLeads, todayYmd]
+  );
+  const rejectedToday = useMemo(
+    () =>
+      mineLeads.filter((l) => {
+        if (!rejectedStatuses.has(l.status)) return false;
+        const closedAt = getClosedAt(l);
+        return closedAt ? isOnYmdIST(closedAt, todayYmd) : false;
+      }),
+    [mineLeads, todayYmd]
+  );
+  const addedStillOpenEod = useMemo(() => addedToday.filter((l) => !closedStatuses.has(l.status)), [addedToday]);
+  const [planDateYmd, setPlanDateYmd] = useState(tomorrowYmd);
+
+  const scheduledTomorrowRows = useMemo(() => {
+    return openLeads
+      .filter((l) => {
+        const next = l?.nextFollowUp;
+        if (!next || !planDateYmd) return false;
+        return isOnYmdIST(next, planDateYmd);
+      })
+      .map((l) => ({
+        id: l.id,
+        name: l.name,
+        status: String(l.status || "New"),
+        mediatorName: resolveLeadMediatorName(l),
+        nextFollowUp: l.nextFollowUp || null,
+        lastActionAt: getLeadLastActivityIso(l),
+        amount: Number(l.loanAmount) || 0,
+        meetingBy: resolveMeetingBy(l),
+        planType: "Scheduled",
+      }))
+      .sort((a, b) => {
+        const aTs = parseIsoOrNull(a?.nextFollowUp)?.getTime() || Number.MAX_SAFE_INTEGER;
+        const bTs = parseIsoOrNull(b?.nextFollowUp)?.getTime() || Number.MAX_SAFE_INTEGER;
+        return aTs - bTs;
+      });
+  }, [openLeads, mediators, staffUsers, currentUser, planDateYmd]);
+  const planStorageKey = useMemo(() => {
+    const ownerKey = String(authUser?.id || currentUser || "local")
+      .replace(/[^\w-]+/g, "_")
+      .slice(0, 80);
+    return `liras_daily_group_update_${ownerKey}_${todayYmd}`;
+  }, [authUser?.id, currentUser, todayYmd]);
+  const [todayUpdateDraft, setTodayUpdateDraft] = useState("");
+  const [tomorrowPlanDraft, setTomorrowPlanDraft] = useState("");
+  const [groupTitleDraft, setGroupTitleDraft] = useState("Daily Group Update");
+  const reportRef = useRef(null);
+  const squareExportRefs = useRef([]);
+  const portraitExportRefs = useRef([]);
+  const eodSquareExportRefs = useRef([]);
+  const eodPortraitExportRefs = useRef([]);
+  const headerExportRef = useRef(null);
+  const [isExportingImage, setIsExportingImage] = useState(false);
+
+  useEffect(() => {
+    const stored = parseJson(safeLocalStorage.getItem(planStorageKey), {});
+    setTodayUpdateDraft(String(stored?.todayUpdate || ""));
+    setTomorrowPlanDraft(String(stored?.tomorrowPlan || ""));
+    setGroupTitleDraft(String(stored?.groupTitle || "Daily Group Update"));
+    setPlanDateYmd(String(stored?.planDateYmd || tomorrowYmd));
+  }, [planStorageKey, tomorrowYmd]);
+
+  useEffect(() => {
+    safeLocalStorage.setItem(
+      planStorageKey,
+      JSON.stringify({
+        todayUpdate: todayUpdateDraft,
+        tomorrowPlan: tomorrowPlanDraft,
+        groupTitle: groupTitleDraft,
+        planDateYmd,
+      })
+    );
+  }, [planStorageKey, todayUpdateDraft, tomorrowPlanDraft, groupTitleDraft, planDateYmd]);
+
+  const scheduledQueueCount = scheduledTomorrowRows.length;
+  const workloadStatus = useMemo(() => {
+    if (scheduledQueueCount >= 8 || workRowsToday.length >= 14) {
+      return {
+        label: "Critical Attention",
+        tone: "bg-rose-100 text-rose-700 border-rose-200",
+        accent: "text-rose-600",
+      };
+    }
+    if (scheduledQueueCount >= 4 || workRowsToday.length >= 8) {
+      return {
+        label: "Watch Closely",
+        tone: "bg-amber-100 text-amber-700 border-amber-200",
+        accent: "text-amber-600",
+      };
+    }
+    return {
+      label: "On Track",
+      tone: "bg-emerald-100 text-emerald-700 border-emerald-200",
+      accent: "text-emerald-600",
+    };
+  }, [scheduledQueueCount, workRowsToday.length]);
+
+  const summaryMetrics = [
+    { label: "Mediators", value: mediatorTouches.length, tone: "text-indigo-700 border-indigo-200 bg-indigo-50/70" },
+    { label: "Added Today", value: addedToday.length, tone: "text-violet-700 border-violet-200 bg-violet-50/70" },
+    { label: "Leads Worked", value: workRowsToday.length, tone: "text-cyan-700 border-cyan-200 bg-cyan-50/70" },
+    { label: "Met", value: metToday.length, tone: "text-teal-700 border-teal-200 bg-teal-50/70" },
+    { label: "Paid", value: paymentDoneToday.length, tone: "text-emerald-700 border-emerald-200 bg-emerald-50/70" },
+    { label: "Rejected", value: rejectedToday.length, tone: "text-rose-700 border-rose-200 bg-rose-50/70" },
+    { label: "Scheduled", value: scheduledQueueCount, tone: "text-amber-700 border-amber-200 bg-amber-50/70" },
+  ];
+  const exportSummaryMetrics = [
+    summaryMetrics[0],
+    summaryMetrics[1],
+    summaryMetrics[3],
+    summaryMetrics[4],
+    summaryMetrics[5],
+    summaryMetrics[6],
+  ];
+  const eodSummaryMetrics = [
+    { label: "Mediators", value: mediatorTouches.length, tone: "text-indigo-700 border-indigo-200 bg-indigo-50/70" },
+    { label: "Leads Worked", value: workRowsToday.length, tone: "text-cyan-700 border-cyan-200 bg-cyan-50/70" },
+    { label: "Added Today", value: addedToday.length, tone: "text-violet-700 border-violet-200 bg-violet-50/70" },
+    { label: "Met", value: metToday.length, tone: "text-teal-700 border-teal-200 bg-teal-50/70" },
+    { label: "Paid", value: paymentDoneToday.length, tone: "text-emerald-700 border-emerald-200 bg-emerald-50/70" },
+    { label: "Rejected", value: rejectedToday.length, tone: "text-rose-700 border-rose-200 bg-rose-50/70" },
+    { label: "Open at EOD", value: addedStillOpenEod.length, tone: "text-amber-700 border-amber-200 bg-amber-50/70" },
+  ];
+  const chunkArray = (rows, size) => {
+    const source = Array.isArray(rows) ? rows : [];
+    if (!source.length) return [[]];
+    const out = [];
+    for (let i = 0; i < source.length; i += size) out.push(source.slice(i, i + size));
+    return out;
+  };
+  const chunkText = (text, maxChars) => {
+    const value = String(text || "").trim();
+    if (!value) return [""];
+    const words = value.split(/\s+/);
+    const chunks = [];
+    let current = "";
+    words.forEach((word) => {
+      const next = current ? `${current} ${word}` : word;
+      if (next.length > maxChars && current) {
+        chunks.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    });
+    if (current) chunks.push(current);
+    return chunks.length ? chunks : [value];
+  };
+  const squareAddedChunks = useMemo(() => chunkArray(addedToday, 2), [addedToday]);
+  const squarePaidChunks = useMemo(() => chunkArray(paymentDoneToday, 2), [paymentDoneToday]);
+  const squareMetChunks = useMemo(() => chunkArray(metToday, 2), [metToday]);
+  const squareScheduledChunks = useMemo(() => chunkArray(scheduledTomorrowRows, 3), [scheduledTomorrowRows]);
+  const squareMediatorChunks = useMemo(() => chunkArray(mediatorTouches, 6), [mediatorTouches]);
+  const squareUpdatePreview = useMemo(() => chunkText(todayUpdateDraft, 220)[0] || "", [todayUpdateDraft]);
+  const squarePlanPreview = useMemo(() => chunkText(tomorrowPlanDraft, 180)[0] || "", [tomorrowPlanDraft]);
+  const portraitAddedChunks = useMemo(() => chunkArray(addedToday, 3), [addedToday]);
+  const portraitPaidChunks = useMemo(() => chunkArray(paymentDoneToday, 3), [paymentDoneToday]);
+  const portraitMetChunks = useMemo(() => chunkArray(metToday, 3), [metToday]);
+  const portraitScheduledChunks = useMemo(() => chunkArray(scheduledTomorrowRows, 3), [scheduledTomorrowRows]);
+  const portraitMediatorChunks = useMemo(() => chunkArray(mediatorTouches, 6), [mediatorTouches]);
+  const portraitUpdatePreview = useMemo(() => chunkText(todayUpdateDraft, 420)[0] || "", [todayUpdateDraft]);
+  const portraitPlanPreview = useMemo(() => chunkText(tomorrowPlanDraft, 360)[0] || "", [tomorrowPlanDraft]);
+
+  const renderExportSectionHeader = (title, tone = "indigo") => {
+    const toneMap = {
+      violet: "from-violet-600 to-violet-500",
+      emerald: "from-emerald-600 to-emerald-500",
+      teal: "from-teal-600 to-teal-500",
+      amber: "from-amber-500 to-orange-500",
+      indigo: "from-indigo-600 to-indigo-500",
+    };
+    return (
+      <div className={`rounded-2xl bg-gradient-to-r ${toneMap[tone] || toneMap.indigo} px-4 py-3 text-white shadow-sm`}>
+        <div className="text-sm uppercase tracking-[0.28em] font-black">{title}</div>
+      </div>
+    );
+  };
+
+  function renderLeadExportCard(lead, tone = "slate") {
+    const toneClasses =
+      tone === "violet"
+        ? "border-violet-100 bg-violet-50/60 text-violet-700"
+        : tone === "emerald"
+          ? "border-emerald-100 bg-emerald-50/60 text-emerald-700"
+          : tone === "teal"
+            ? "border-teal-100 bg-teal-50/60 text-teal-700"
+            : "border-amber-100 bg-amber-50/60 text-amber-700";
+    return (
+      <div key={`${tone}-${lead.id}`} className={`rounded-2xl border px-4 py-3 overflow-hidden ${toneClasses}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-black text-slate-900 leading-tight">{lead.name}</div>
+            <div className="text-[13px] font-bold mt-1">{resolveLeadMediatorName(lead)}</div>
+          </div>
+          <div className="text-[11px] font-black uppercase text-slate-500 text-right">{String(lead.status || "New")}</div>
+        </div>
+        <div className="mt-2 text-[13px] font-bold text-slate-700 leading-snug">
+          {lead.nextFollowUp ? formatDateTime(lead.nextFollowUp) : formatDateTime(getClosedAt(lead) || getLeadLastActivityIso(lead) || lead.createdAt)}
+        </div>
+      </div>
+    );
+  }
+
+  function renderMediatorTouchCard(row, prefix) {
+    return (
+      <div key={`${prefix}-${row.id}`} className="rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 overflow-hidden">
+        <div className="text-lg font-black text-slate-900 leading-tight">{row.name}</div>
+        <div className="mt-2 text-[13px] font-bold text-indigo-700">{row.count} call{row.count === 1 ? "" : "s"} today</div>
+      </div>
+    );
+  }
+
+  const buildDetailPages = useCallback((sections) => {
+    const pages = [];
+    sections.forEach((section) => {
+      section.chunks.forEach((rows, chunkIndex) => {
+        if (!rows?.length) return;
+        pages.push({
+          sectionKey: section.key,
+          title: section.title,
+          tone: section.tone,
+          rows,
+          totalCount: section.totalCount,
+          chunkIndex,
+          chunkCount: section.chunks.length,
+          renderer: section.renderer,
+        });
+      });
+    });
+    return pages;
+  }, []);
+
+  const squareDetailPages = useMemo(
+    () =>
+      buildDetailPages([
+        {
+          key: "added",
+          title: "Added Today",
+          tone: "violet",
+          chunks: squareAddedChunks,
+          totalCount: addedToday.length,
+          renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "violet")),
+        },
+        {
+          key: "paid",
+          title: "Payment Done",
+          tone: "emerald",
+          chunks: squarePaidChunks,
+          totalCount: paymentDoneToday.length,
+          renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "emerald")),
+        },
+        {
+          key: "met",
+          title: "Clients Met",
+          tone: "teal",
+          chunks: squareMetChunks,
+          totalCount: metToday.length,
+          renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "teal")),
+        },
+        {
+          key: "scheduled",
+          title: "Scheduled for Plan Date",
+          tone: "amber",
+          chunks: squareScheduledChunks,
+          totalCount: scheduledTomorrowRows.length,
+          renderer: (rows) =>
+            rows.map((row) => (
+              <div key={`sq-scheduled-${row.id}`} className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3 overflow-hidden">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-black text-slate-900 leading-tight">{row.name}</div>
+                    <div className="text-[13px] font-bold text-amber-700 mt-1">{row.mediatorName}</div>
+                  </div>
+                  <div className="rounded-xl px-3 py-1 text-[11px] font-black uppercase bg-amber-100 text-amber-700">
+                    Scheduled
+                  </div>
+                </div>
+                <div className="mt-2 text-[13px] font-bold text-slate-700 leading-snug">
+                  {row.nextFollowUp ? formatDateTime(row.nextFollowUp) : "Not set"} • {row.status}
+                </div>
+              </div>
+            )),
+        },
+        {
+          key: "mediators",
+          title: "Mediators Spoken Today",
+          tone: "indigo",
+          chunks: squareMediatorChunks,
+          totalCount: mediatorTouches.length,
+          renderer: (rows) => rows.map((row) => renderMediatorTouchCard(row, "sq-med")),
+        },
+      ]),
+    [
+      addedToday.length,
+      buildDetailPages,
+      mediatorTouches.length,
+      metToday.length,
+      paymentDoneToday.length,
+      renderLeadExportCard,
+      scheduledTomorrowRows.length,
+      squareAddedChunks,
+      squareMediatorChunks,
+      squareMetChunks,
+      squarePaidChunks,
+      squareScheduledChunks,
+    ]
+  );
+
+  const portraitDetailPages = useMemo(
+    () =>
+      buildDetailPages([
+        {
+          key: "added",
+          title: "Added Today",
+          tone: "violet",
+          chunks: portraitAddedChunks,
+          totalCount: addedToday.length,
+          renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "violet")),
+        },
+        {
+          key: "paid",
+          title: "Payment Done",
+          tone: "emerald",
+          chunks: portraitPaidChunks,
+          totalCount: paymentDoneToday.length,
+          renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "emerald")),
+        },
+        {
+          key: "met",
+          title: "Clients Met",
+          tone: "teal",
+          chunks: portraitMetChunks,
+          totalCount: metToday.length,
+          renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "teal")),
+        },
+        {
+          key: "scheduled",
+          title: "Scheduled for Plan Date",
+          tone: "amber",
+          chunks: portraitScheduledChunks,
+          totalCount: scheduledTomorrowRows.length,
+          renderer: (rows) =>
+            rows.map((row) => (
+              <div key={`pt-scheduled-${row.id}`} className="rounded-[24px] border border-amber-100 bg-amber-50/60 px-5 py-4 overflow-hidden">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[28px] font-black text-slate-900">{row.name}</div>
+                    <div className="text-lg font-bold text-amber-700 mt-1">{row.mediatorName}</div>
+                  </div>
+                  <div className="rounded-xl px-3 py-1 text-sm font-black uppercase bg-amber-100 text-amber-700">
+                    Scheduled
+                  </div>
+                </div>
+                <div className="mt-3 text-lg font-bold text-slate-700">
+                  {row.nextFollowUp ? formatDateTime(row.nextFollowUp) : "Not set"} • {row.status}
+                </div>
+              </div>
+            )),
+        },
+        {
+          key: "mediators",
+          title: "Mediators Spoken Today",
+          tone: "indigo",
+          chunks: portraitMediatorChunks,
+          totalCount: mediatorTouches.length,
+          renderer: (rows) => rows.map((row) => renderMediatorTouchCard(row, "pt-med")),
+        },
+      ]),
+    [
+      addedToday.length,
+      buildDetailPages,
+      mediatorTouches.length,
+      metToday.length,
+      paymentDoneToday.length,
+      portraitAddedChunks,
+      portraitMediatorChunks,
+      portraitMetChunks,
+      portraitPaidChunks,
+      portraitScheduledChunks,
+      renderLeadExportCard,
+      scheduledTomorrowRows.length,
+    ]
+  );
+
+  const squarePageCount = 1 + squareDetailPages.length;
+  const portraitPageCount = 1 + portraitDetailPages.length;
+  const eodSquareAddedChunks = useMemo(() => chunkArray(addedToday, 2), [addedToday]);
+  const eodSquarePaidChunks = useMemo(() => chunkArray(paymentDoneToday, 2), [paymentDoneToday]);
+  const eodSquareMetChunks = useMemo(() => chunkArray(metToday, 2), [metToday]);
+  const eodSquareRejectedChunks = useMemo(() => chunkArray(rejectedToday, 2), [rejectedToday]);
+  const eodSquareOpenChunks = useMemo(() => chunkArray(addedStillOpenEod, 2), [addedStillOpenEod]);
+  const eodSquareMediatorChunks = useMemo(() => chunkArray(mediatorTouches, 6), [mediatorTouches]);
+  const eodPortraitAddedChunks = useMemo(() => chunkArray(addedToday, 3), [addedToday]);
+  const eodPortraitPaidChunks = useMemo(() => chunkArray(paymentDoneToday, 3), [paymentDoneToday]);
+  const eodPortraitMetChunks = useMemo(() => chunkArray(metToday, 3), [metToday]);
+  const eodPortraitRejectedChunks = useMemo(() => chunkArray(rejectedToday, 3), [rejectedToday]);
+  const eodPortraitOpenChunks = useMemo(() => chunkArray(addedStillOpenEod, 3), [addedStillOpenEod]);
+  const eodPortraitMediatorChunks = useMemo(() => chunkArray(mediatorTouches, 6), [mediatorTouches]);
+
+  const eodSquareDetailPages = useMemo(
+    () =>
+      buildDetailPages([
+        { key: "added", title: "Added Today", tone: "violet", chunks: eodSquareAddedChunks, totalCount: addedToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "violet")) },
+        { key: "paid", title: "Payment Done", tone: "emerald", chunks: eodSquarePaidChunks, totalCount: paymentDoneToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "emerald")) },
+        { key: "met", title: "Clients Met", tone: "teal", chunks: eodSquareMetChunks, totalCount: metToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "teal")) },
+        { key: "rejected", title: "Rejected Today", tone: "violet", chunks: eodSquareRejectedChunks, totalCount: rejectedToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "violet")) },
+        { key: "openEod", title: "Added but Open EOD", tone: "amber", chunks: eodSquareOpenChunks, totalCount: addedStillOpenEod.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "amber")) },
+        { key: "mediators", title: "Mediators Spoken Today", tone: "indigo", chunks: eodSquareMediatorChunks, totalCount: mediatorTouches.length, renderer: (rows) => rows.map((row) => renderMediatorTouchCard(row, "eod-sq-med")) },
+      ]),
+    [addedStillOpenEod.length, addedToday.length, buildDetailPages, eodSquareAddedChunks, eodSquareMediatorChunks, eodSquareMetChunks, eodSquareOpenChunks, eodSquarePaidChunks, eodSquareRejectedChunks, mediatorTouches.length, metToday.length, paymentDoneToday.length, rejectedToday.length]
+  );
+
+  const eodPortraitDetailPages = useMemo(
+    () =>
+      buildDetailPages([
+        { key: "added", title: "Added Today", tone: "violet", chunks: eodPortraitAddedChunks, totalCount: addedToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "violet")) },
+        { key: "paid", title: "Payment Done", tone: "emerald", chunks: eodPortraitPaidChunks, totalCount: paymentDoneToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "emerald")) },
+        { key: "met", title: "Clients Met", tone: "teal", chunks: eodPortraitMetChunks, totalCount: metToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "teal")) },
+        { key: "rejected", title: "Rejected Today", tone: "violet", chunks: eodPortraitRejectedChunks, totalCount: rejectedToday.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "violet")) },
+        { key: "openEod", title: "Added but Open EOD", tone: "amber", chunks: eodPortraitOpenChunks, totalCount: addedStillOpenEod.length, renderer: (rows) => rows.map((lead) => renderLeadExportCard(lead, "amber")) },
+        { key: "mediators", title: "Mediators Spoken Today", tone: "indigo", chunks: eodPortraitMediatorChunks, totalCount: mediatorTouches.length, renderer: (rows) => rows.map((row) => renderMediatorTouchCard(row, "eod-pt-med")) },
+      ]),
+    [addedStillOpenEod.length, addedToday.length, buildDetailPages, eodPortraitAddedChunks, eodPortraitMediatorChunks, eodPortraitMetChunks, eodPortraitOpenChunks, eodPortraitPaidChunks, eodPortraitRejectedChunks, mediatorTouches.length, metToday.length, paymentDoneToday.length, rejectedToday.length]
+  );
+  const eodSquarePageCount = 1 + eodSquareDetailPages.length;
+  const eodPortraitPageCount = 1 + eodPortraitDetailPages.length;
+
+  const renderExportFooter = (pageNumber, totalPages, sectionName = "") => (
+    <div className="mt-auto pt-4 text-right text-sm font-bold tracking-wide text-slate-500">
+      Page {pageNumber}{sectionName ? ` • ${sectionName}` : ""}{totalPages > 1 ? ` • ${totalPages} total` : ""}
+    </div>
+  );
+
+  const handleDownloadImage = async (mode = "square") => {
+    const targets =
+      mode === "portrait"
+        ? portraitExportRefs.current.filter(Boolean)
+        : mode === "eod-square"
+          ? eodSquareExportRefs.current.filter(Boolean)
+          : mode === "eod-portrait"
+            ? eodPortraitExportRefs.current.filter(Boolean)
+        : mode === "header"
+          ? [headerExportRef.current].filter(Boolean)
+          : mode === "full"
+            ? [reportRef.current].filter(Boolean)
+            : squareExportRefs.current.filter(Boolean);
+    if (!targets.length || isExportingImage) return;
+    try {
+      setIsExportingImage(true);
+      for (let index = 0; index < targets.length; index += 1) {
+        const canvas = await html2canvas(targets[index], {
+          backgroundColor: "#ffffff",
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          ignoreElements: (element) => element?.dataset?.exportIgnore === "true",
+        });
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
+        if (!blob) throw new Error("image_export_failed");
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = `Daily_Work_Update_${mode}_${todayYmd}${targets.length > 1 ? `_page_${index + 1}` : ""}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        if (targets.length > 1 && index < targets.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      }
+    } finally {
+      setIsExportingImage(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/40 to-slate-100 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white border-b border-slate-200 sticky top-0 z-20 flex justify-between items-center">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
+        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => handleDownloadImage("header")} className="btn-secondary px-4 py-2" disabled={isExportingImage}>
+            <Download size={16} /> Header Image
+          </button>
+          <button onClick={() => handleDownloadImage("square")} className="btn-primary px-4 py-2" disabled={isExportingImage}>
+            <Download size={16} /> {isExportingImage ? "Preparing..." : "Square Image"}
+          </button>
+          <button onClick={() => handleDownloadImage("portrait")} className="btn-secondary px-4 py-2" disabled={isExportingImage}>
+            <Download size={16} /> Story Image
+          </button>
+          <button onClick={() => handleDownloadImage("eod-square")} className="btn-secondary px-4 py-2" disabled={isExportingImage}>
+            <Download size={16} /> EOD Square
+          </button>
+          <button onClick={() => handleDownloadImage("eod-portrait")} className="btn-secondary px-4 py-2" disabled={isExportingImage}>
+            <Download size={16} /> EOD Story
+          </button>
+          <button
+            onClick={() => {
+              document.title = `Daily_Work_Update_${todayYmd}`;
+              window.print();
+            }}
+            className="btn-secondary px-4 py-2"
+          >
+            <Printer size={16} /> Print
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 print:p-5">
+        <div className="fixed -left-[20000px] top-0 pointer-events-none">
+          <div
+            ref={headerExportRef}
+            className="w-[1600px] h-[900px] bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.18),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.14),_transparent_30%),linear-gradient(135deg,#0f172a_0%,#111827_48%,#1e293b_100%)] text-white p-14 flex flex-col"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-5">
+                <div className="w-24 h-24 rounded-[28px] bg-white/10 border border-white/15 shadow-lg flex items-center justify-center backdrop-blur-sm">
+                  <BrandMark size={52} className="opacity-95" />
+                </div>
+                <div>
+                  <div className="text-[18px] tracking-[0.34em] uppercase font-extrabold text-slate-300">{BRAND.name}</div>
+                  <div className="text-6xl font-black mt-3">{groupTitleDraft.trim() || "Daily Group Update"}</div>
+                  <div className="text-3xl font-semibold text-slate-200 mt-3">{currentUser} • {todayYmd}</div>
+                </div>
+              </div>
+              <div className={`rounded-[26px] border px-6 py-4 ${workloadStatus.tone} bg-white`}>
+                <div className="text-xs uppercase tracking-[0.3em] font-black opacity-80">Load Status</div>
+                <div className="text-3xl font-black mt-2">{workloadStatus.label}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 gap-4 mt-10">
+              {summaryMetrics.slice(0, 4).map((item) => (
+                <div key={`hd-metric-${item.label}`} className="rounded-[28px] border border-white/10 bg-white/8 px-5 py-5 backdrop-blur-sm">
+                  <div className="text-sm uppercase tracking-[0.24em] font-black text-slate-300">{item.label}</div>
+                  <div className="text-6xl font-black mt-4">{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-[1.1fr_0.9fr] gap-6 mt-8 flex-1">
+              <div className="rounded-[32px] border border-white/10 bg-white/8 p-7 backdrop-blur-sm">
+                <div className="text-xs uppercase tracking-[0.3em] font-black text-indigo-300">Today Update</div>
+                <div className="mt-4 text-[32px] leading-[1.35] font-bold text-white whitespace-pre-wrap">
+                  {todayUpdateDraft.trim() || "No manual update added yet."}
+                </div>
+              </div>
+              <div className="rounded-[32px] border border-white/10 bg-white/8 p-7 backdrop-blur-sm flex flex-col">
+                <div className="text-xs uppercase tracking-[0.3em] font-black text-emerald-300">Tomorrow Plan</div>
+                <div className="mt-4 text-[28px] leading-[1.38] font-bold text-white whitespace-pre-wrap">
+                  {tomorrowPlanDraft.trim() || "No next-day plan added yet."}
+                </div>
+                <div className="mt-auto grid grid-cols-2 gap-4 pt-6">
+                  <div className="rounded-[22px] bg-white/10 p-4">
+                    <div className="text-xs uppercase tracking-[0.24em] font-black text-slate-300">Scheduled Leads</div>
+                    <div className={`text-5xl font-black mt-3 ${workloadStatus.accent}`}>{scheduledQueueCount}</div>
+                  </div>
+                  <div className="rounded-[22px] bg-white/10 p-4">
+                    <div className="text-xs uppercase tracking-[0.24em] font-black text-slate-300">Leads Worked</div>
+                    <div className="text-5xl font-black mt-3 text-amber-300">{workRowsToday.length}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {Array.from({ length: squarePageCount }).map((_, pageIndex) => {
+            const detailPage = pageIndex > 0 ? squareDetailPages[pageIndex - 1] : null;
+            return (
+              <div
+                key={`square-export-page-${pageIndex}`}
+                ref={(el) => {
+                  squareExportRefs.current[pageIndex] = el;
+                }}
+                className="w-[1080px] h-[1080px] overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.18),_transparent_34%),linear-gradient(135deg,#f8fafc_0%,#eef2ff_36%,#f8fafc_100%)] text-slate-900 p-12 flex flex-col"
+              >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-5">
+                <div className="w-24 h-24 rounded-[28px] bg-slate-900 shadow-lg flex items-center justify-center">
+                  <BrandMark size={52} className="opacity-95" />
+                </div>
+                <div>
+                  <div className="text-[18px] tracking-[0.32em] uppercase font-extrabold text-slate-500">{BRAND.name}</div>
+                  <div className="text-5xl font-black text-slate-950 mt-2">{groupTitleDraft.trim() || "Daily Work Update"}</div>
+                  <div className="text-2xl font-semibold text-slate-600 mt-2">
+                    {currentUser} • {todayYmd}{squarePageCount > 1 ? ` • Page ${pageIndex + 1}/${squarePageCount}` : ""}
+                  </div>
+                </div>
+              </div>
+              <div className={`rounded-[28px] border px-6 py-4 ${workloadStatus.tone}`}>
+                <div className="text-xs uppercase tracking-[0.3em] font-black opacity-80">Load Status</div>
+                <div className="text-3xl font-black mt-2">{workloadStatus.label}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mt-7">
+              {exportSummaryMetrics.map((item) => (
+                <div key={`sq-metric-${item.label}`} className={`rounded-[24px] border px-5 py-4 ${item.tone}`}>
+                  <div className="text-xs uppercase tracking-[0.24em] font-black opacity-80">{item.label}</div>
+                  <div className="text-4xl font-black mt-2">{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {pageIndex === 0 ? (
+              <div className="grid grid-cols-[1.02fr_0.98fr] gap-4 mt-5 flex-1 min-h-0">
+                <div className="rounded-[28px] border border-slate-200 bg-white/90 shadow-sm p-5 flex flex-col min-h-0 overflow-hidden">
+                  {renderExportSectionHeader("Today Update", "indigo")}
+                  <div className="mt-4 text-[22px] leading-[1.28] font-bold text-slate-900 whitespace-pre-wrap">
+                    {squareUpdatePreview || "No manual update yet."}
+                  </div>
+                  <div className="mt-auto pt-5">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.28em] font-black text-slate-500">Page Summary</div>
+                      <div className="mt-2 text-lg font-bold text-slate-700">
+                        {addedToday.length} added • {paymentDoneToday.length} paid • {metToday.length} met • {scheduledQueueCount} scheduled
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3 min-h-0">
+                  <div className="rounded-[28px] border border-emerald-200 bg-white/90 shadow-sm p-5">
+                    {renderExportSectionHeader("Tomorrow Plan", "emerald")}
+                    <div className="mt-4 text-[18px] leading-[1.28] font-bold text-slate-900 whitespace-pre-wrap min-h-[120px]">
+                      {squarePlanPreview || "No next-day plan yet."}
+                    </div>
+                  </div>
+                  <div className="rounded-[28px] border border-slate-200 bg-white/90 shadow-sm p-5 flex-1">
+                    {renderExportSectionHeader("Included In Detail Pages", "amber")}
+                    <div className="mt-4 space-y-3 text-base font-bold text-slate-700">
+                      <div>• Added Today</div>
+                      <div>• Payment Done</div>
+                      <div>• Clients Met</div>
+                      <div>• Scheduled for Plan Date</div>
+                      <div>• Mediators Spoken Today</div>
+                    </div>
+                  </div>
+                </div>
+                {renderExportFooter(pageIndex + 1, squarePageCount, "Summary")}
+              </div>
+            ) : (
+              <div className="mt-5 flex-1 min-h-0 flex flex-col">
+                <div className="rounded-[28px] border border-slate-200 bg-white/90 shadow-sm p-5 flex-1 min-h-0 overflow-hidden">
+                  {renderExportSectionHeader(
+                    `${detailPage?.title || "Detail"} • ${detailPage?.totalCount || 0}`,
+                    detailPage?.tone || "indigo"
+                  )}
+                  <div className="mt-4 flex items-center justify-between text-sm font-bold text-slate-500">
+                    <div>{detailPage?.chunkCount > 1 ? `Part ${detailPage.chunkIndex + 1} of ${detailPage.chunkCount}` : "Single page section"}</div>
+                    <div>{detailPage?.totalCount || 0} item{detailPage?.totalCount === 1 ? "" : "s"}</div>
+                  </div>
+                  <div className="mt-4 space-y-3 overflow-hidden">
+                    {detailPage?.renderer(detailPage.rows)}
+                  </div>
+                </div>
+                {renderExportFooter(pageIndex + 1, squarePageCount, detailPage?.title || "Detail")}
+              </div>
+            )}
+              </div>
+            );
+          })}
+
+          {Array.from({ length: portraitPageCount }).map((_, pageIndex) => {
+            const detailPage = pageIndex > 0 ? portraitDetailPages[pageIndex - 1] : null;
+            return (
+              <div
+                key={`portrait-export-page-${pageIndex}`}
+                ref={(el) => {
+                  portraitExportRefs.current[pageIndex] = el;
+                }}
+                className="w-[1080px] h-[1920px] bg-[radial-gradient(circle_at_top_right,_rgba(16,185,129,0.16),_transparent_28%),radial-gradient(circle_at_top_left,_rgba(99,102,241,0.14),_transparent_32%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_38%,#ffffff_100%)] text-slate-900 p-16 flex flex-col"
+              >
+            <div className="flex items-center gap-5">
+              <div className="w-24 h-24 rounded-[28px] bg-slate-900 shadow-lg flex items-center justify-center">
+                <BrandMark size={52} className="opacity-95" />
+              </div>
+              <div>
+                <div className="text-[18px] tracking-[0.32em] uppercase font-extrabold text-slate-500">{BRAND.name}</div>
+                <div className="text-6xl font-black text-slate-950 mt-2">{groupTitleDraft.trim() || "Daily Work Update"}</div>
+                <div className="text-3xl font-semibold text-slate-600 mt-2">
+                  {currentUser}{portraitPageCount > 1 ? ` • Page ${pageIndex + 1}/${portraitPageCount}` : ""}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 rounded-[32px] border border-slate-200 bg-white/90 shadow-sm p-8">
+              <div className="flex items-start justify-between gap-6">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] font-black text-slate-500">Report Date</div>
+                  <div className="text-4xl font-black text-slate-950 mt-2">{todayYmd}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] font-black text-emerald-500">Load Status</div>
+                  <div className={`text-4xl font-black mt-2 ${workloadStatus.accent}`}>{workloadStatus.label}</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 mt-7">
+                {exportSummaryMetrics.map((item) => (
+                  <div key={`pt-metric-${item.label}`} className={`rounded-[24px] border p-5 ${item.tone}`}>
+                    <div className="text-sm uppercase tracking-[0.24em] font-black opacity-80">{item.label}</div>
+                    <div className="text-5xl font-black mt-3">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {pageIndex === 0 ? (
+              <>
+                <div className="mt-8 rounded-[32px] border border-indigo-200 bg-white/90 shadow-sm p-8">
+                  {renderExportSectionHeader("Today Update", "indigo")}
+                  <div className="mt-5 text-[31px] leading-[1.42] font-bold text-slate-900 whitespace-pre-wrap min-h-[250px]">
+                    {portraitUpdatePreview || "No manual update added yet."}
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-[32px] border border-emerald-200 bg-white/90 shadow-sm p-8">
+                  {renderExportSectionHeader("Day Plan", "emerald")}
+                  <div className="mt-5 text-[29px] leading-[1.42] font-bold text-slate-900 whitespace-pre-wrap min-h-[240px]">
+                    {portraitPlanPreview || "No next-day plan added yet."}
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-[32px] border border-slate-200 bg-white/90 shadow-sm p-8 flex-1">
+                  {renderExportSectionHeader("Detail Pages Include", "amber")}
+                  <div className="mt-5 grid grid-cols-2 gap-4 text-xl font-bold text-slate-700">
+                    <div>Added Today</div>
+                    <div>Payment Done</div>
+                    <div>Clients Met</div>
+                    <div>Scheduled for Plan Date</div>
+                    <div>Mediators Spoken Today</div>
+                  </div>
+                </div>
+                {renderExportFooter(pageIndex + 1, portraitPageCount, "Summary")}
+              </>
+            ) : (
+              <div className="mt-6 rounded-[32px] border border-slate-200 bg-white/90 shadow-sm p-8 flex-1 flex flex-col">
+                {renderExportSectionHeader(
+                  `${detailPage?.title || "Detail"} • ${detailPage?.totalCount || 0}`,
+                  detailPage?.tone || "indigo"
+                )}
+                <div className="mt-5 flex items-center justify-between text-lg font-bold text-slate-500">
+                  <div>{detailPage?.chunkCount > 1 ? `Part ${detailPage.chunkIndex + 1} of ${detailPage.chunkCount}` : "Single page section"}</div>
+                  <div>{detailPage?.totalCount || 0} item{detailPage?.totalCount === 1 ? "" : "s"}</div>
+                </div>
+                <div className="mt-5 space-y-4 overflow-hidden">
+                  {detailPage?.renderer(detailPage.rows)}
+                </div>
+                {renderExportFooter(pageIndex + 1, portraitPageCount, detailPage?.title || "Detail")}
+              </div>
+            )}
+              </div>
+            );
+          })}
+
+          {Array.from({ length: eodSquarePageCount }).map((_, pageIndex) => {
+            const detailPage = pageIndex > 0 ? eodSquareDetailPages[pageIndex - 1] : null;
+            return (
+              <div
+                key={`eod-square-export-page-${pageIndex}`}
+                ref={(el) => {
+                  eodSquareExportRefs.current[pageIndex] = el;
+                }}
+                className="w-[1080px] h-[1080px] overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.12),_transparent_32%),linear-gradient(135deg,#f8fafc_0%,#ecfeff_36%,#f8fafc_100%)] text-slate-900 p-12 flex flex-col"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-5">
+                    <div className="w-24 h-24 rounded-[28px] bg-slate-900 shadow-lg flex items-center justify-center">
+                      <BrandMark size={52} className="opacity-95" />
+                    </div>
+                    <div>
+                      <div className="text-[18px] tracking-[0.32em] uppercase font-extrabold text-slate-500">{BRAND.name}</div>
+                      <div className="text-5xl font-black text-slate-950 mt-2">End of Day Update</div>
+                      <div className="text-2xl font-semibold text-slate-600 mt-2">
+                        {currentUser} • {todayYmd}{eodSquarePageCount > 1 ? ` • Page ${pageIndex + 1}/${eodSquarePageCount}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={`rounded-[28px] border px-6 py-4 ${workloadStatus.tone}`}>
+                    <div className="text-xs uppercase tracking-[0.3em] font-black opacity-80">EOD Status</div>
+                    <div className="text-3xl font-black mt-2">{workloadStatus.label}</div>
+                  </div>
+                </div>
+                {pageIndex === 0 ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-3 mt-7">
+                      {eodSummaryMetrics.slice(0, 6).map((item) => (
+                        <div key={`eod-sq-metric-${item.label}`} className={`rounded-[24px] border px-5 py-4 ${item.tone}`}>
+                          <div className="text-xs uppercase tracking-[0.24em] font-black opacity-80">{item.label}</div>
+                          <div className="text-4xl font-black mt-2">{item.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-5 rounded-[28px] border border-slate-200 bg-white/90 shadow-sm p-5">
+                      {renderExportSectionHeader("EOD Summary", "amber")}
+                      <div className="mt-4 text-[20px] leading-[1.35] font-bold text-slate-900">
+                        {addedToday.length} added • {paymentDoneToday.length} paid • {metToday.length} met • {rejectedToday.length} rejected • {addedStillOpenEod.length} still open at EOD
+                      </div>
+                      <div className="mt-4 text-sm font-semibold text-slate-600">
+                        Detail pages include added today, payment done, clients met, rejected today, still open at EOD, and mediators spoken today.
+                      </div>
+                    </div>
+                    {renderExportFooter(pageIndex + 1, eodSquarePageCount, "Summary")}
+                  </>
+                ) : (
+                  <div className="mt-5 flex-1 min-h-0 flex flex-col">
+                    <div className="rounded-[28px] border border-slate-200 bg-white/90 shadow-sm p-5 flex-1 min-h-0 overflow-hidden">
+                      {renderExportSectionHeader(`${detailPage?.title || "Detail"} • ${detailPage?.totalCount || 0}`, detailPage?.tone || "indigo")}
+                      <div className="mt-4 flex items-center justify-between text-sm font-bold text-slate-500">
+                        <div>{detailPage?.chunkCount > 1 ? `Part ${detailPage.chunkIndex + 1} of ${detailPage.chunkCount}` : "Single page section"}</div>
+                        <div>{detailPage?.totalCount || 0} item{detailPage?.totalCount === 1 ? "" : "s"}</div>
+                      </div>
+                      <div className="mt-4 space-y-3 overflow-hidden">{detailPage?.renderer(detailPage.rows)}</div>
+                    </div>
+                    {renderExportFooter(pageIndex + 1, eodSquarePageCount, detailPage?.title || "Detail")}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {Array.from({ length: eodPortraitPageCount }).map((_, pageIndex) => {
+            const detailPage = pageIndex > 0 ? eodPortraitDetailPages[pageIndex - 1] : null;
+            return (
+              <div
+                key={`eod-portrait-export-page-${pageIndex}`}
+                ref={(el) => {
+                  eodPortraitExportRefs.current[pageIndex] = el;
+                }}
+                className="w-[1080px] h-[1920px] bg-[radial-gradient(circle_at_top_right,_rgba(16,185,129,0.16),_transparent_28%),radial-gradient(circle_at_top_left,_rgba(251,191,36,0.12),_transparent_32%),linear-gradient(180deg,#f8fafc_0%,#f0fdfa_38%,#ffffff_100%)] text-slate-900 p-16 flex flex-col"
+              >
+                <div className="flex items-center gap-5">
+                  <div className="w-24 h-24 rounded-[28px] bg-slate-900 shadow-lg flex items-center justify-center">
+                    <BrandMark size={52} className="opacity-95" />
+                  </div>
+                  <div>
+                    <div className="text-[18px] tracking-[0.32em] uppercase font-extrabold text-slate-500">{BRAND.name}</div>
+                    <div className="text-6xl font-black text-slate-950 mt-2">End of Day Update</div>
+                    <div className="text-3xl font-semibold text-slate-600 mt-2">
+                      {currentUser}{eodPortraitPageCount > 1 ? ` • Page ${pageIndex + 1}/${eodPortraitPageCount}` : ""}
+                    </div>
+                  </div>
+                </div>
+                {pageIndex === 0 ? (
+                  <>
+                    <div className="mt-8 rounded-[32px] border border-slate-200 bg-white/90 shadow-sm p-8">
+                      <div className="flex items-start justify-between gap-6">
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.3em] font-black text-slate-500">Report Date</div>
+                          <div className="text-4xl font-black text-slate-950 mt-2">{todayYmd}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.3em] font-black text-emerald-500">EOD Status</div>
+                          <div className={`text-4xl font-black mt-2 ${workloadStatus.accent}`}>{workloadStatus.label}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4 mt-7">
+                        {eodSummaryMetrics.map((item) => (
+                          <div key={`eod-pt-metric-${item.label}`} className={`rounded-[24px] border p-5 ${item.tone}`}>
+                            <div className="text-sm uppercase tracking-[0.24em] font-black opacity-80">{item.label}</div>
+                            <div className="text-5xl font-black mt-3">{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-6 rounded-[32px] border border-slate-200 bg-white/90 shadow-sm p-8 flex-1">
+                      {renderExportSectionHeader("Detail Pages Include", "amber")}
+                      <div className="mt-5 grid grid-cols-2 gap-4 text-xl font-bold text-slate-700">
+                        <div>Added Today</div>
+                        <div>Payment Done</div>
+                        <div>Clients Met</div>
+                        <div>Rejected Today</div>
+                        <div>Added but Open EOD</div>
+                        <div>Mediators Spoken Today</div>
+                      </div>
+                    </div>
+                    {renderExportFooter(pageIndex + 1, eodPortraitPageCount, "Summary")}
+                  </>
+                ) : (
+                  <div className="mt-6 rounded-[32px] border border-slate-200 bg-white/90 shadow-sm p-8 flex-1 flex flex-col">
+                    {renderExportSectionHeader(`${detailPage?.title || "Detail"} • ${detailPage?.totalCount || 0}`, detailPage?.tone || "indigo")}
+                    <div className="mt-5 flex items-center justify-between text-lg font-bold text-slate-500">
+                      <div>{detailPage?.chunkCount > 1 ? `Part ${detailPage.chunkIndex + 1} of ${detailPage.chunkCount}` : "Single page section"}</div>
+                      <div>{detailPage?.totalCount || 0} item{detailPage?.totalCount === 1 ? "" : "s"}</div>
+                    </div>
+                    <div className="mt-5 space-y-4 overflow-hidden">{detailPage?.renderer(detailPage.rows)}</div>
+                    {renderExportFooter(pageIndex + 1, eodPortraitPageCount, detailPage?.title || "Detail")}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div ref={reportRef} className="bg-white rounded-2xl border border-slate-200 shadow-soft p-4 sm:p-6 print:shadow-none print:border-0 print:p-4">
+          <ReportBrandHeader
+            title="Daily Work Update + Day Plan"
+            subtitle={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-bold text-slate-900">{currentUser}</span>
+                <span className="text-slate-300">•</span>
+                <span className="font-semibold text-slate-700">{groupTitleDraft.trim() || "Daily execution summary for group update"}</span>
+              </span>
+            }
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Plan Date (IST)</div>
+                <div className="text-slate-900">{planDateYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Load Status</div>
+                <div className={`inline-flex rounded-lg border px-2 py-1 text-xs font-extrabold ${workloadStatus.tone}`}>{workloadStatus.label}</div>
+              </div>
+            }
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
+            <div className="surface-solid p-3 border border-indigo-100 bg-indigo-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Mediators Spoken</div>
+              <div className="text-xl font-extrabold text-indigo-700 mt-1">{mediatorTouches.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-cyan-100 bg-cyan-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Leads Worked</div>
+              <div className="text-xl font-extrabold text-cyan-700 mt-1">{workRowsToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-violet-100 bg-violet-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Added Today</div>
+              <div className="text-xl font-extrabold text-violet-700 mt-1">{addedToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-teal-100 bg-teal-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Met Today</div>
+              <div className="text-xl font-extrabold text-teal-700 mt-1">{metToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-emerald-100 bg-emerald-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Payment Done</div>
+              <div className="text-xl font-extrabold text-emerald-700 mt-1">{paymentDoneToday.length}</div>
+            </div>
+            <div className="surface-solid p-3 border border-rose-100 bg-rose-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Rejected</div>
+              <div className="text-xl font-extrabold text-rose-700 mt-1">{rejectedToday.length}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-indigo-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Update for Today</div>
+                <div className="text-xs text-indigo-200 font-bold">{groupTitleDraft.trim() || "For daily group message"}</div>
+              </div>
+              <div className="p-3 bg-white space-y-2">
+                <div data-export-ignore="true" className="print:hidden rounded-xl border border-indigo-100 bg-indigo-50/20 p-3 space-y-2">
+                  <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 block">Header / Group Title</label>
+                  <input
+                    value={groupTitleDraft}
+                    onChange={(e) => setGroupTitleDraft(e.target.value)}
+                    className="w-full p-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-300 outline-none"
+                    placeholder="Example: Daily Update to Partners Group"
+                  />
+                  <label className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-700 block">Today work update</label>
+                  <textarea
+                    value={todayUpdateDraft}
+                    onChange={(e) => setTodayUpdateDraft(e.target.value)}
+                    className="w-full min-h-[120px] p-3 text-sm bg-white border border-indigo-200 rounded-xl focus:ring-2 focus:ring-indigo-300 outline-none"
+                    placeholder="Example: Spoke to 3 mediators, handled 6 active leads, 1 client met, 1 payment completed, 2 follow-ups moved to tomorrow."
+                  />
+                </div>
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-500">Final update text</div>
+                  <div className="mt-2 text-sm text-slate-800 leading-relaxed font-semibold whitespace-pre-wrap">
+                    {todayUpdateDraft.trim() || "No custom update added yet."}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-emerald-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Day Plan</div>
+                <div className="text-xs text-emerald-200 font-bold">{planDateYmd}</div>
+              </div>
+              <div className="p-3 bg-white space-y-2">
+                <div data-export-ignore="true" className="print:hidden rounded-xl border border-emerald-100 bg-emerald-50/20 p-3 space-y-2">
+                  <label className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-700 block">Plan for next day</label>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 block">Plan date (IST)</label>
+                    <input
+                      type="date"
+                      value={planDateYmd}
+                      onChange={(e) => setPlanDateYmd(e.target.value || tomorrowYmd)}
+                      className="w-full p-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-300 outline-none"
+                    />
+                  </div>
+                  <textarea
+                    value={tomorrowPlanDraft}
+                    onChange={(e) => setTomorrowPlanDraft(e.target.value)}
+                    className="w-full min-h-[120px] p-3 text-sm bg-white border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-300 outline-none"
+                    placeholder="Example: Complete planned meetings, close pending statement follow-ups, and finish the leads scheduled for the selected plan date."
+                  />
+                </div>
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-500">Plan text</div>
+                  <div className="mt-2 text-sm text-slate-800 leading-relaxed font-semibold whitespace-pre-wrap">
+                    {tomorrowPlanDraft.trim() || "No next-day plan added yet."}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-cyan-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Work Completed Today</div>
+                <div className="text-xs text-cyan-200 font-bold">{workRowsToday.length} items</div>
+              </div>
+              <div className="p-3 bg-white space-y-2">
+                {workRowsToday.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">No lead work captured today.</div>
+                ) : (
+                  workRowsToday.slice(0, 18).map((row) => (
+                    <div key={`daily-work-${row.id}`} className="rounded-xl border border-cyan-100 p-3 bg-cyan-50/20">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-900">{row.name}</div>
+                          <div className="text-[11px] text-cyan-700 font-bold mt-0.5">Mediator: {row.mediatorName}</div>
+                        </div>
+                        <span className={`inline-flex px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[row.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                          {row.status}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-[12px] text-slate-700 font-semibold">{row.latestUpdate}</div>
+                      <div className="mt-2 text-[11px] text-slate-500 font-semibold">
+                        Last action: {row.lastActionAt ? formatDateTime(row.lastActionAt) : "—"}
+                        {row.nextFollowUp ? ` • Next: ${formatDateTime(row.nextFollowUp)}` : ""}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-amber-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Scheduled for Plan Date</div>
+                <div className="text-xs text-amber-200 font-bold">{scheduledTomorrowRows.length} items</div>
+              </div>
+              <div className="p-3 bg-white space-y-2">
+                {scheduledTomorrowRows.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">No leads scheduled for the selected plan date.</div>
+                ) : (
+                  scheduledTomorrowRows.slice(0, 12).map((row) => (
+                    <div key={`scheduled-plan-${row.id}`} className="rounded-xl border border-amber-100 p-3 bg-amber-50/20">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-900">{row.name}</div>
+                          <div className="text-[11px] text-amber-700 font-bold mt-0.5">Mediator: {row.mediatorName}</div>
+                        </div>
+                        <span className="inline-flex px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase bg-amber-100 text-amber-700 border-amber-200">
+                          Scheduled
+                        </span>
+                      </div>
+                      <div className="mt-2 text-[12px] text-slate-700 font-semibold">
+                        Next action: {row.nextFollowUp ? formatDateTime(row.nextFollowUp) : "Not set"} • {row.status}
+                      </div>
+                      {row.status === "Meeting Scheduled" && (
+                        <div className="mt-1 text-[11px] text-amber-700 font-extrabold">Meeting by: {row.meetingBy}</div>
+                      )}
+                      <div className="mt-1 text-[11px] text-slate-500 font-semibold">
+                        Last activity: {row.lastActionAt ? formatDateTime(row.lastActionAt) : "—"}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Generated by {BRAND.product} • {BRAND.name}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MidDayUpdateView = ({ mediator, leads, onBack }) => {
   const todayYmd = toYmdIST(new Date());
   const now = new Date();
+  const closedStatuses = new Set([
+    "Payment Done",
+    "Deal Closed",
+    "Not Eligible",
+    "Not Reliable",
+    "Lost to Competitor",
+    "Not Interested",
+    "Not Interested (Temp)",
+  ]);
+  const rejectedStatuses = new Set(["Not Eligible", "Not Reliable", "Lost to Competitor"]);
+
+  const mediatorLeads = useMemo(() => (leads || []).filter((l) => l && l.mediatorId === mediator.id), [leads, mediator.id]);
 
   const activeLeads = useMemo(() => {
-    return (leads || [])
+    return mediatorLeads
       .filter((l) => {
-        if (!l || l.mediatorId !== mediator.id) return false;
         const actionable = new Set([
           "Meeting Scheduled",
           "Follow-Up Required",
@@ -2901,7 +5834,99 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
         };
         return (priority[a.status] || 99) - (priority[b.status] || 99);
       });
-  }, [leads, mediator.id, todayYmd]);
+  }, [mediatorLeads, todayYmd]);
+
+  const getLastNote = (lead) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    return notes.length ? notes[notes.length - 1] : null;
+  };
+
+  const getLatestNoteMatching = (lead, pattern) => {
+    const notes = Array.isArray(lead?.notes) ? lead.notes : [];
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const t = String(notes[i]?.text || "");
+      if (pattern.test(t)) return notes[i];
+    }
+    return null;
+  };
+
+  const getClosedAt = (lead) => {
+    if (!lead) return null;
+    if (lead.status === "Payment Done" || lead.status === "Deal Closed") {
+      if (lead?.loanDetails?.paymentDate) return lead.loanDetails.paymentDate;
+      const paymentNote = getLatestNoteMatching(lead, /PAYMENT DONE|PAYMENT|DEAL CLOSED|CLOSED/i);
+      return paymentNote?.date || null;
+    }
+    if (rejectedStatuses.has(lead.status)) {
+      const rejectionNote = getLatestNoteMatching(lead, /\[REJECTION\]|\[REJECTION REASON\]|NOT ELIGIBLE|NOT RELIABLE|LOST TO COMPETITOR/i);
+      return rejectionNote?.date || null;
+    }
+    return null;
+  };
+
+  const isLeadTouchedToday = (lead) => {
+    if (!lead) return false;
+    if (isOnYmdIST(lead.createdAt, todayYmd)) return true;
+    const notes = Array.isArray(lead.notes) ? lead.notes : [];
+    return notes.some((n) => isOnYmdIST(n?.date, todayYmd));
+  };
+
+  const lifecycleToday = useMemo(() => {
+    return mediatorLeads
+      .filter((l) => isLeadTouchedToday(l))
+      .map((l) => {
+        const lastNote = getLastNote(l);
+        const closedAt = getClosedAt(l);
+        const actionTag = parseBriefingLedgerNote(lastNote?.text || "").tag;
+        return {
+          ...l,
+          entryAt: l.createdAt || null,
+          lastActionAt: lastNote?.date || l.createdAt || null,
+          closedAt,
+          actionTag,
+        };
+      })
+      .sort((a, b) => new Date(b.lastActionAt || b.createdAt || 0) - new Date(a.lastActionAt || a.createdAt || 0));
+  }, [mediatorLeads, todayYmd]);
+
+  const paymentDoneToday = useMemo(() => {
+    return mediatorLeads.filter((l) => {
+      if (!(l.status === "Payment Done" || l.status === "Deal Closed")) return false;
+      const closedAt = getClosedAt(l);
+      return closedAt ? isOnYmdIST(closedAt, todayYmd) : false;
+    });
+  }, [mediatorLeads, todayYmd]);
+
+  const rejectedToday = useMemo(() => {
+    return mediatorLeads.filter((l) => {
+      if (!rejectedStatuses.has(l.status)) return false;
+      const closedAt = getClosedAt(l);
+      return closedAt ? isOnYmdIST(closedAt, todayYmd) : false;
+    });
+  }, [mediatorLeads, todayYmd]);
+
+  const metToday = useMemo(() => {
+    return mediatorLeads.filter((l) => {
+      const notes = Array.isArray(l.notes) ? l.notes : [];
+      return notes.some((n) => isOnYmdIST(n?.date, todayYmd) && isMeetingDoneNoteText(n?.text));
+    });
+  }, [mediatorLeads, todayYmd]);
+
+  const leadsAddedToday = useMemo(() => mediatorLeads.filter((l) => isOnYmdIST(l.createdAt, todayYmd)), [mediatorLeads, todayYmd]);
+
+  const openEodFromAddedToday = useMemo(() => leadsAddedToday.filter((l) => !closedStatuses.has(l.status)), [leadsAddedToday]);
+
+  const callLogToday = useMemo(() => {
+    const history = (Array.isArray(mediator?.followUpHistory) ? mediator.followUpHistory : [])
+      .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
+      .filter((h) => h && typeof h === "object");
+    return history
+      .filter((h) => {
+        const ts = h.ts || h.endedAt || h.date;
+        return ts ? isOnYmdIST(ts, todayYmd) : false;
+      })
+      .sort((a, b) => new Date(b.ts || b.endedAt || b.date || 0) - new Date(a.ts || a.endedAt || a.date || 0));
+  }, [mediator, todayYmd]);
 
   const metrics = useMemo(() => {
     const meetings = activeLeads.filter((l) => l.status === "Meeting Scheduled").length;
@@ -2910,8 +5935,22 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
     const issues = activeLeads.filter((l) => ["Interest Rate Issue", "Statements Not Received", "Contact Details Not Received"].includes(l.status)).length;
     const followups = activeLeads.filter((l) => ["Follow-Up Required", "Partner Follow-Up", "No Appointment"].includes(l.status)).length;
     const value = activeLeads.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
-    return { meetings, overdueMeetings, payments, issues, followups, value };
-  }, [activeLeads, now, todayYmd]);
+    return {
+      meetings,
+      overdueMeetings,
+      payments,
+      issues,
+      followups,
+      value,
+      dealtToday: lifecycleToday.length,
+      callsToday: callLogToday.length,
+      addedToday: leadsAddedToday.length,
+      closedToday: paymentDoneToday.length + rejectedToday.length,
+      openEodFromAddedToday: openEodFromAddedToday.length,
+      metToday: metToday.length,
+      rejectedToday: rejectedToday.length,
+    };
+  }, [activeLeads, now, todayYmd, lifecycleToday.length, callLogToday.length, leadsAddedToday.length, paymentDoneToday.length, rejectedToday.length, openEodFromAddedToday.length, metToday.length]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
@@ -2953,7 +5992,7 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
             }
           />
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
             <div className="surface-solid p-4">
               <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Pipeline Value</div>
               <div className="text-lg font-extrabold text-slate-900 mt-1">{formatCompactCurrency(metrics.value)}</div>
@@ -2977,6 +6016,177 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
             </div>
           </div>
 
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-6">
+            <div className="surface-solid p-3 border border-indigo-100 bg-indigo-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Calls with Mediator</div>
+              <div className="text-xl font-extrabold text-indigo-700 mt-1">{metrics.callsToday}</div>
+            </div>
+            <div className="surface-solid p-3 border border-cyan-100 bg-cyan-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Leads Dealt</div>
+              <div className="text-xl font-extrabold text-cyan-700 mt-1">{metrics.dealtToday}</div>
+            </div>
+            <div className="surface-solid p-3 border border-violet-100 bg-violet-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Leads Added</div>
+              <div className="text-xl font-extrabold text-violet-700 mt-1">{metrics.addedToday}</div>
+            </div>
+            <div className="surface-solid p-3 border border-teal-100 bg-teal-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Met Today</div>
+              <div className="text-xl font-extrabold text-teal-700 mt-1">{metrics.metToday}</div>
+            </div>
+            <div className="surface-solid p-3 border border-emerald-100 bg-emerald-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Payment Done</div>
+              <div className="text-xl font-extrabold text-emerald-700 mt-1">{metrics.payments}</div>
+            </div>
+            <div className="surface-solid p-3 border border-rose-100 bg-rose-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Rejected</div>
+              <div className="text-xl font-extrabold text-rose-700 mt-1">{metrics.rejectedToday}</div>
+            </div>
+            <div className="surface-solid p-3 border border-amber-100 bg-amber-50/50">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Added but Open (EOD)</div>
+              <div className="text-xl font-extrabold text-amber-700 mt-1">{metrics.openEodFromAddedToday}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-indigo-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Mediator Call Log (Today)</div>
+                <div className="text-xs text-indigo-200 font-bold">{callLogToday.length} calls/logs</div>
+              </div>
+              <div className="p-3 bg-white">
+                {callLogToday.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">No mediator calls/logs captured today.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {callLogToday.map((h, idx) => {
+                      const at = h.endedAt || h.ts || `${h.date}T${h.time || "00:00"}`;
+                      return (
+                        <div key={`${h.ts || h.endedAt || h.date}-${idx}`} className="rounded-xl border border-slate-200 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">{String(h.type || "call").replace(/_/g, " ")}</div>
+                            <div className="text-xs text-slate-500 font-bold">{formatDateTime(at)}</div>
+                          </div>
+                          <div className="text-xs text-slate-700 mt-1 leading-relaxed">
+                            Outcome: <span className="font-bold">{String(h.outcome || "logged").replace(/_/g, " ")}</span>
+                            {h.notes ? <span> • Note: <span className="font-bold">{String(h.notes)}</span></span> : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-violet-900 text-white flex items-center justify-between">
+                <div className="font-extrabold text-sm">Lead Lifecycle (Today)</div>
+                <div className="text-xs text-violet-200 font-bold">{lifecycleToday.length} leads touched</div>
+              </div>
+              <div className="overflow-x-auto bg-white">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-extrabold">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Lead</th>
+                      <th className="px-3 py-2 text-left">Entry</th>
+                      <th className="px-3 py-2 text-left">Last Action</th>
+                      <th className="px-3 py-2 text-left">Close Time</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {lifecycleToday.slice(0, 12).map((l) => (
+                      <tr key={`lc-${l.id}`}>
+                        <td className="px-3 py-2 align-top">
+                          <div className="font-bold text-slate-800">{l.name}</div>
+                          <div className="text-[10px] text-slate-500">{l.status}</div>
+                        </td>
+                        <td className="px-3 py-2 font-bold text-slate-700">{l.entryAt ? formatDateTime(l.entryAt) : "—"}</td>
+                        <td className="px-3 py-2 font-bold text-slate-700">{l.lastActionAt ? formatDateTime(l.lastActionAt) : "—"}</td>
+                        <td className="px-3 py-2 font-bold text-slate-700">{l.closedAt ? formatDateTime(l.closedAt) : "Open"}</td>
+                      </tr>
+                    ))}
+                    {lifecycleToday.length === 0 && (
+                      <tr>
+                        <td colSpan="4" className="px-3 py-4 text-slate-500 italic text-center">
+                          No lead lifecycle movement captured today.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+            <div className="rounded-2xl border border-emerald-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-emerald-100 text-emerald-800 font-extrabold text-sm">Payment Done Today</div>
+              <div className="p-3 bg-white space-y-2">
+                {paymentDoneToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No payment closures today.</div>
+                ) : (
+                  paymentDoneToday.map((l) => (
+                    <div key={`pay-${l.id}`} className="rounded-lg border border-emerald-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">Closed: {formatDateTime(getClosedAt(l) || l.createdAt)}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-rose-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-rose-100 text-rose-800 font-extrabold text-sm">Rejected Today</div>
+              <div className="p-3 bg-white space-y-2">
+                {rejectedToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No rejection updates today.</div>
+                ) : (
+                  rejectedToday.map((l) => (
+                    <div key={`rej-${l.id}`} className="rounded-lg border border-rose-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">{l.status} • {formatDateTime(getClosedAt(l) || l.createdAt)}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-teal-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-teal-100 text-teal-800 font-extrabold text-sm">Clients Met Today</div>
+              <div className="p-3 bg-white space-y-2">
+                {metToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No meeting/visit logs captured today.</div>
+                ) : (
+                  metToday.map((l) => {
+                    const notes = Array.isArray(l.notes) ? l.notes : [];
+                    const note =
+                      [...notes].reverse().find((n) => isOnYmdIST(n?.date, todayYmd) && isMeetingDoneNoteText(n?.text)) ||
+                      notes[notes.length - 1];
+                    return (
+                      <div key={`met-${l.id}`} className="rounded-lg border border-teal-100 p-2">
+                        <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                        <div className="text-xs text-slate-600 font-bold mt-1">{note?.date ? formatDateTime(note.date) : "Today"} • {l.status}</div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-amber-200 overflow-hidden">
+              <div className="px-4 py-2.5 bg-amber-100 text-amber-800 font-extrabold text-sm">Added Today but Open (EOD)</div>
+              <div className="p-3 bg-white space-y-2">
+                {openEodFromAddedToday.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">No leads added today are pending open at EOD.</div>
+                ) : (
+                  openEodFromAddedToday.map((l) => (
+                    <div key={`eod-${l.id}`} className="rounded-lg border border-amber-100 p-2">
+                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
+                      <div className="text-xs text-slate-600 font-bold mt-1">Entry: {formatDateTime(l.createdAt)} • Status: {l.status}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="overflow-hidden rounded-2xl border border-slate-200">
             <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
               <div className="font-extrabold text-slate-900 flex items-center gap-2">
@@ -2985,7 +6195,7 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
               <div className="text-[11px] text-slate-500 font-bold">Sorted by priority • Latest note shown</div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto print:hidden">
               <table className="w-full text-sm text-left">
                 <thead className="bg-white border-b text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
                   <tr>
@@ -3030,7 +6240,7 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
                         <td className="p-4 align-top text-xs text-slate-700 font-bold">{nextAction}</td>
                         <td className="p-4 align-top text-xs text-slate-700 font-bold">{lastUpdate ? formatDateTime(lastUpdate) : "—"}</td>
                         <td className="p-4 align-top text-xs text-slate-700 max-w-[420px]">
-                          {lastNote ? String(lastNote.text || "").replace(/\[.*?\]/g, "").trim() : <span className="text-slate-400 italic">No notes</span>}
+                          <BriefingLedgerNotePreview note={lastNote} />
                         </td>
                         <td className="p-4 align-top text-right font-mono font-extrabold text-slate-800">{formatCurrency(l.loanAmount)}</td>
                       </tr>
@@ -3045,6 +6255,67 @@ const MidDayUpdateView = ({ mediator, leads, onBack }) => {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            <div className="hidden print:block p-4 space-y-3 bg-white">
+              {activeLeads.map((l) => {
+                const lastNote = l.notes?.length ? l.notes[l.notes.length - 1] : null;
+                const lastUpdate = lastNote?.date || l.createdAt;
+                const nextAction = l.nextFollowUp ? formatDateTime(l.nextFollowUp) : "—";
+                return (
+                  <div key={`print-${l.id}`} className="rounded-xl border border-slate-200 p-4 print:break-inside-avoid">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-slate-900 text-base leading-tight">{l.name}</div>
+                        <div className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                          {l.company ? (
+                            <span className="inline-flex items-center gap-1">
+                              <Briefcase size={11} /> {l.company}
+                            </span>
+                          ) : (
+                            <span>—</span>
+                          )}
+                          {l.location ? (
+                            <>
+                              <span className="text-slate-300">|</span>
+                              <span className="inline-flex items-center gap-1">
+                                <MapPin size={11} /> {l.location}
+                              </span>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono font-extrabold text-slate-900">{formatCurrency(l.loanAmount)}</div>
+                        <div className="mt-1">
+                          <span className={`chip border ${STATUS_CONFIG[l.status]?.color?.replace("text", "text").replace("bg", "bg")}`}>{l.status}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">Next Action</div>
+                        <div className="text-xs font-bold text-slate-800 mt-1 leading-relaxed">{nextAction}</div>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">Last Update</div>
+                        <div className="text-xs font-bold text-slate-800 mt-1 leading-relaxed">{lastUpdate ? formatDateTime(lastUpdate) : "—"}</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-extrabold mb-1">Latest Note</div>
+                      <BriefingLedgerNotePreview note={lastNote} />
+                    </div>
+                  </div>
+                );
+              })}
+              {activeLeads.length === 0 && (
+                <div className="rounded-xl border border-slate-200 p-6 text-center text-slate-500 italic">
+                  No active items for this partner today.
+                </div>
+              )}
             </div>
           </div>
 
@@ -3246,58 +6517,99 @@ const MediatorPendingReportViewLegacy = ({ mediator, leads, onBack, onUpdateLead
   );
 };
 
-const MediatorPendingReportView = ({ mediator, leads, onBack, onUpdateLead }) => {
-  const [updates, setUpdates] = useState({});
+const MediatorPendingReportView = ({ mediator, leads, onBack }) => {
   const todayYmd = toYmdIST(new Date());
   const partnerActionStatuses = ["Partner Follow-Up", "Statements Not Received", "Contact Details Not Received", "Interest Rate Issue"];
 
   const pendingLeads = useMemo(() => {
     return (leads || [])
       .filter((l) => l && l.mediatorId === mediator.id && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status))
-      .sort((a, b) => {
-        const aIsPartner = partnerActionStatuses.includes(a.status);
-        const bIsPartner = partnerActionStatuses.includes(b.status);
-        if (aIsPartner && !bIsPartner) return -1;
-        if (!aIsPartner && bIsPartner) return 1;
-        return new Date(a.createdAt) - new Date(b.createdAt);
-      });
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   }, [leads, mediator.id]);
 
-  const metrics = useMemo(() => {
-    const volume = pendingLeads.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
-    const critical = pendingLeads.filter((l) => Math.abs(getDaysDiff(l.createdAt)) > 15).length;
-    const partnerAction = pendingLeads.filter((l) => partnerActionStatuses.includes(l.status)).length;
-    return { volume, count: pendingLeads.length, critical, partnerAction, internal: Math.max(0, pendingLeads.length - partnerAction) };
-  }, [pendingLeads]);
+  const getAgeDays = (lead) => Math.abs(getDaysDiff(lead.createdAt));
 
-  const lastInstruction = (lead) => {
+  const getLastInstruction = (lead) => {
     const notes = Array.isArray(lead?.notes) ? lead.notes : [];
     const last =
       [...notes].reverse().find((n) => String(n?.text || "").includes("[Action Required]") || String(n?.text || "").includes("[Carry Forward]")) ||
       notes[notes.length - 1];
-    if (!last?.text) return { text: "Please provide status update.", ts: "" };
+    if (!last?.text) return { text: "No instruction logged yet.", ts: "" };
     const text = String(last.text).replace(/^\s*\[[^\]]+\]\s*:?/i, "").trim();
     return { text: text || String(last.text), ts: last.date || "" };
   };
 
-  const handleSaveUpdate = (leadId) => {
-    const text = String(updates[leadId] || "").trim();
-    if (!text) return;
-    const lead = (leads || []).find((l) => l.id === leadId);
-    if (!lead) return;
-    onUpdateLead(leadId, { notes: [...(lead.notes || []), { text: `[Action Required]: ${text}`, date: new Date().toISOString() }] });
-    setUpdates((prev) => ({ ...prev, [leadId]: "" }));
+  const getSlaMeta = (lead) => {
+    const age = getAgeDays(lead);
+    const isPartnerBlocked = partnerActionStatuses.includes(lead.status);
+    if (isPartnerBlocked || age >= 14) {
+      return {
+        band: "Critical",
+        badge: "bg-rose-100 text-rose-700 border-rose-200",
+        row: "bg-rose-50/60",
+        line: "border-l-4 border-rose-500",
+        score: Math.min(100, 65 + age * 2),
+      };
+    }
+    if (age >= 7) {
+      return {
+        band: "Attention",
+        badge: "bg-amber-100 text-amber-700 border-amber-200",
+        row: "bg-amber-50/50",
+        line: "border-l-4 border-amber-500",
+        score: Math.min(100, 40 + age * 2),
+      };
+    }
+    return {
+      band: "On Track",
+      badge: "bg-emerald-100 text-emerald-700 border-emerald-200",
+      row: "bg-emerald-50/40",
+      line: "border-l-4 border-emerald-500",
+      score: Math.min(100, 20 + age * 2),
+    };
   };
 
+  const metrics = useMemo(() => {
+    const exposure = pendingLeads.reduce((sum, lead) => sum + (Number(lead.loanAmount) || 0), 0);
+    const avgAge = pendingLeads.length ? Math.round(pendingLeads.reduce((sum, lead) => sum + getAgeDays(lead), 0) / pendingLeads.length) : 0;
+    let critical = 0;
+    let attention = 0;
+    let onTrack = 0;
+    pendingLeads.forEach((lead) => {
+      const band = getSlaMeta(lead).band;
+      if (band === "Critical") critical += 1;
+      else if (band === "Attention") attention += 1;
+      else onTrack += 1;
+    });
+    const partnerBlocked = pendingLeads.filter((lead) => partnerActionStatuses.includes(lead.status)).length;
+    return { exposure, avgAge, total: pendingLeads.length, critical, attention, onTrack, partnerBlocked };
+  }, [pendingLeads]);
+
+  const groupedBySla = useMemo(() => {
+    const groups = { Critical: [], Attention: [], "On Track": [] };
+    pendingLeads.forEach((lead) => {
+      const band = getSlaMeta(lead).band;
+      groups[band].push(lead);
+    });
+    Object.values(groups).forEach((list) => list.sort((a, b) => getAgeDays(b) - getAgeDays(a)));
+    return groups;
+  }, [pendingLeads]);
+
+  const slaSections = [
+    { key: "Critical", title: "Critical Leads", subtitle: "Immediate closure required", box: "border-rose-200", head: "bg-rose-100 text-rose-800", empty: "No critical leads." },
+    { key: "Attention", title: "Attention Leads", subtitle: "Needs follow-up this week", box: "border-amber-200", head: "bg-amber-100 text-amber-800", empty: "No attention leads." },
+    { key: "On Track", title: "On Track Leads", subtitle: "Within acceptable SLA", box: "border-emerald-200", head: "bg-emerald-100 text-emerald-800", empty: "No on-track leads." },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-50/50 to-slate-100 text-slate-900">
       <div className="print:hidden p-4 bg-white border-b border-slate-200 sticky top-0 z-20 flex justify-between items-center">
         <button onClick={onBack} className="btn-secondary px-3 py-2">
           <ArrowLeft size={18} /> Back
         </button>
         <button
           onClick={() => {
-            document.title = `Partner_Pending_Actions_${mediator.name}_${todayYmd}`;
+            document.title = `Partner_Action_Dossier_${mediator.name}_${todayYmd}`;
             window.print();
           }}
           className="btn-primary px-4 py-2"
@@ -3306,10 +6618,10 @@ const MediatorPendingReportView = ({ mediator, leads, onBack, onUpdateLead }) =>
         </button>
       </div>
 
-      <div className="max-w-6xl mx-auto p-6 print:p-8">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-7 min-h-[297mm] print:shadow-none print:border-0">
+      <div className="max-w-7xl mx-auto p-6 print:p-6">
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-soft p-6 print:shadow-none print:border-0 print:rounded-none">
           <ReportBrandHeader
-            title="Partner Pending Action Report"
+            title="Partner Pending Action Matrix"
             subtitle={
               <span className="inline-flex flex-wrap items-center gap-2">
                 <span className="font-bold text-slate-900">{mediator.name}</span>
@@ -3321,132 +6633,174 @@ const MediatorPendingReportView = ({ mediator, leads, onBack, onUpdateLead }) =>
             }
             metaRight={
               <div className="space-y-1">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500">Audit Date (IST)</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
                 <div className="text-slate-900">{todayYmd}</div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Pending Cases</div>
-                <div className="text-slate-900">{metrics.count}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Open Pending Leads</div>
+                <div className="text-slate-900 font-extrabold">{metrics.total}</div>
               </div>
             }
           />
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-            <div className="surface-solid p-4">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Pipeline Value</div>
-              <div className="text-lg font-extrabold text-slate-900 mt-1">{formatCompactCurrency(metrics.volume)}</div>
-            </div>
-            <div className="surface-solid p-4">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Partner Action</div>
-              <div className="text-2xl font-extrabold text-rose-700 mt-1">{metrics.partnerAction}</div>
-            </div>
-            <div className="surface-solid p-4">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Internal Follow-up</div>
-              <div className="text-2xl font-extrabold text-slate-900 mt-1">{metrics.internal}</div>
-            </div>
-            <div className="surface-solid p-4">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Stagnant &gt;15d</div>
-              <div className="text-2xl font-extrabold text-amber-700 mt-1">{metrics.critical}</div>
-            </div>
-            <div className="surface-solid p-4">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Priority</div>
-              <div className="text-[11px] text-slate-700 font-bold mt-2">Partner → Issues → Others</div>
+          <div className="rounded-2xl border border-slate-900 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 text-white p-5 mb-5">
+            <div className="text-[10px] uppercase tracking-[0.24em] font-extrabold text-slate-300">Executive Snapshot</div>
+            <div className="mt-2 text-sm md:text-base font-semibold leading-relaxed">
+              {metrics.critical > 0 ? `${metrics.critical} lead(s) are in critical SLA breach.` : "No critical SLA breach right now."}{" "}
+              {metrics.partnerBlocked > 0
+                ? `${metrics.partnerBlocked} lead(s) need partner-side confirmation to proceed.`
+                : "No direct partner blocker in current queue."}
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200">
-            <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
-              <div className="font-extrabold text-slate-900 flex items-center gap-2">
-                <AlertCircle size={18} className="text-rose-600" /> Pending Cases Ledger
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-5">
+            <div className="col-span-2 md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Queue Exposure</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{formatCompactCurrency(metrics.exposure)}</div>
+            </div>
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Avg Pending</div>
+              <div className="text-2xl font-extrabold text-indigo-700 mt-1">{metrics.avgAge}d</div>
+            </div>
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Critical</div>
+              <div className="text-2xl font-extrabold text-rose-700 mt-1">{metrics.critical}</div>
+            </div>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Attention</div>
+              <div className="text-2xl font-extrabold text-amber-700 mt-1">{metrics.attention}</div>
+            </div>
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">On Track</div>
+              <div className="text-2xl font-extrabold text-emerald-700 mt-1">{metrics.onTrack}</div>
+            </div>
+          </div>
+
+          <section className="rounded-2xl border border-slate-200 overflow-hidden">
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-900 to-violet-900 text-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-extrabold tracking-wide">Action Tracker Grid</div>
+                <div className="text-xs text-indigo-200">Clear SLA-based view with latest update, pending age, and next follow-up.</div>
               </div>
-              <div className="text-[11px] text-slate-500 font-bold">Action inputs are hidden on print.</div>
+              <div className="text-xs text-slate-300 font-bold">Sorted by highest pending days first</div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-white border-b text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
-                  <tr>
-                    <th className="p-4">Client</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4 text-center">Age</th>
-                    <th className="p-4">Latest Instruction</th>
-                    <th className="p-4 print:hidden">Update Partner</th>
-                    <th className="p-4 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {pendingLeads.map((l) => {
-                    const instruction = lastInstruction(l);
-                    const isPartnerAction = partnerActionStatuses.includes(l.status);
-                    return (
-                      <tr key={l.id} className="hover:bg-slate-50 print:break-inside-avoid">
-                        <td className="p-4 align-top">
-                          <div className="font-extrabold text-slate-900">{l.name}</div>
-                          <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-                            {l.company ? (
-                              <span className="inline-flex items-center gap-1">
-                                <Briefcase size={12} /> {l.company}
-                              </span>
-                            ) : (
-                              <span>—</span>
-                            )}
-                            {l.location ? (
-                              <>
-                                <span className="text-slate-300">|</span>
-                                <span className="inline-flex items-center gap-1">
-                                  <MapPin size={12} /> {l.location}
-                                </span>
-                              </>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="p-4 align-top">
-                          <div className="flex flex-col gap-2">
-                            <span className={`text-[10px] px-2 py-1 rounded font-extrabold uppercase ${STATUS_CONFIG[l.status]?.color || "bg-slate-100 text-slate-700"}`}>
-                              {l.status}
-                            </span>
-                            {isPartnerAction && (
-                              <span className="text-[10px] px-2 py-1 rounded font-extrabold uppercase bg-rose-50 text-rose-700 border border-rose-200">
-                                Partner Pending
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="p-4 align-top text-center">
-                          <div className="text-2xl font-extrabold text-slate-900">{Math.abs(getDaysDiff(l.createdAt))}</div>
-                          <div className="text-[10px] text-slate-500 font-bold uppercase">days</div>
-                        </td>
-                        <td className="p-4 align-top">
-                          <div className="text-xs text-slate-800 font-bold leading-relaxed">{instruction.text}</div>
-                          <div className="text-[10px] text-slate-400 font-bold mt-1">{instruction.ts ? `Sent: ${formatDateTime(instruction.ts)}` : ""}</div>
-                        </td>
-                        <td className="p-4 align-top print:hidden">
-                          <div className="flex gap-2">
-                            <input
-                              className="flex-1 py-2 text-xs"
-                              placeholder="Type instruction…"
-                              value={updates[l.id] || ""}
-                              onChange={(e) => setUpdates((p) => ({ ...(p || {}), [l.id]: e.target.value }))}
-                              onKeyDown={(e) => e.key === "Enter" && handleSaveUpdate(l.id)}
-                            />
-                            <button className="btn-primary px-3 py-2 text-xs" onClick={() => handleSaveUpdate(l.id)}>
-                              Update
-                            </button>
-                          </div>
-                        </td>
-                        <td className="p-4 align-top text-right font-mono font-extrabold text-slate-800">{formatCurrency(l.loanAmount)}</td>
-                      </tr>
-                    );
-                  })}
-                  {pendingLeads.length === 0 && (
-                    <tr>
-                      <td colSpan="6" className="p-8 text-center text-slate-500 italic">
-                        No pending cases for this partner.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+            <div className="px-4 py-3 border-b border-slate-200 bg-gradient-to-r from-white to-slate-50">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-rose-800">Critical SLA</span>
+                <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-amber-800">Attention</span>
+                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-emerald-800">On Track</span>
+              </div>
             </div>
-          </div>
+
+            {pendingLeads.length === 0 ? (
+              <div className="p-6 text-sm text-slate-500 italic bg-white">No open pending leads for this partner.</div>
+            ) : (
+              <div className="space-y-4 p-4 bg-white">
+                {slaSections.map((sec) => {
+                  const items = groupedBySla[sec.key] || [];
+                  return (
+                    <div key={sec.key} className={`rounded-xl border overflow-hidden ${sec.box}`}>
+                      <div className={`px-4 py-2.5 flex items-center justify-between ${sec.head}`}>
+                        <div className="font-extrabold text-sm">{sec.title}</div>
+                        <div className="text-xs font-bold">{items.length} lead(s) • {sec.subtitle}</div>
+                      </div>
+                      {items.length === 0 ? (
+                        <div className="px-4 py-3 text-xs italic text-slate-500 bg-white">{sec.empty}</div>
+                      ) : (
+                        <>
+                          <div className="overflow-x-auto print:hidden bg-white">
+                            <table className="w-full min-w-[820px] text-left">
+                              <thead>
+                                <tr className="border-b border-slate-200 bg-slate-50">
+                                  <th className="px-4 py-3 text-[10px] uppercase tracking-[0.12em] font-extrabold text-slate-500">Client</th>
+                                  <th className="px-4 py-3 text-[10px] uppercase tracking-[0.12em] font-extrabold text-slate-500">Pending</th>
+                                  <th className="px-4 py-3 text-[10px] uppercase tracking-[0.12em] font-extrabold text-slate-500">Latest Note</th>
+                                  <th className="px-4 py-3 text-[10px] uppercase tracking-[0.12em] font-extrabold text-slate-500">Next Follow-up</th>
+                                  <th className="px-4 py-3 text-[10px] uppercase tracking-[0.12em] font-extrabold text-slate-500 text-right">Value</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {items.map((lead) => {
+                                  const ageDays = getAgeDays(lead);
+                                  const instruction = getLastInstruction(lead);
+                                  const nextFollowUp = lead.nextFollowUp ? formatDateTime(lead.nextFollowUp) : "Not set";
+                                  return (
+                                    <tr key={lead.id} className="border-b border-slate-100 align-top">
+                                      <td className="px-4 py-4">
+                                        <div className="font-extrabold text-slate-900 text-[15px]">{lead.name}</div>
+                                        <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-2">
+                                          {lead.company ? <span className="inline-flex items-center gap-1"><Briefcase size={12} /> {lead.company}</span> : null}
+                                          {lead.location ? <span className="inline-flex items-center gap-1"><MapPin size={12} /> {lead.location}</span> : null}
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-4">
+                                        <div className="text-2xl font-extrabold text-slate-900 leading-none">{ageDays}</div>
+                                        <div className="text-[11px] text-slate-500 font-bold mt-1">days open</div>
+                                        <div className="text-[11px] text-slate-400 mt-2">Since {formatDate(lead.createdAt)}</div>
+                                      </td>
+                                      <td className="px-4 py-4">
+                                        <div className="mb-2">
+                                          <span className={`text-[10px] px-2 py-1 rounded-lg font-extrabold uppercase border ${STATUS_CONFIG[lead.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                                            {lead.status}
+                                          </span>
+                                        </div>
+                                        <div className="text-[12px] font-bold text-slate-700 leading-relaxed max-w-[260px] break-words">{instruction.text}</div>
+                                        <div className="text-[10px] text-slate-400 font-bold mt-2">{instruction.ts ? formatDateTime(instruction.ts) : "—"}</div>
+                                      </td>
+                                      <td className="px-4 py-4">
+                                        <div className="text-[13px] font-extrabold text-slate-900">{nextFollowUp}</div>
+                                      </td>
+                                      <td className="px-4 py-4 text-right">
+                                        <div className="font-mono text-[16px] font-extrabold text-slate-900">{formatCurrency(lead.loanAmount)}</div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="hidden print:block p-3 space-y-2 bg-white">
+                            {items.map((lead) => {
+                              const ageDays = getAgeDays(lead);
+                              const instruction = getLastInstruction(lead);
+                              const nextFollowUp = lead.nextFollowUp ? formatDateTime(lead.nextFollowUp) : "Not set";
+                              const sla = getSlaMeta(lead);
+                              return (
+                                <article key={`print-${sec.key}-${lead.id}`} className={`rounded-xl border border-slate-200 p-3 bg-white ${sla.line} print:break-inside-avoid`}>
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="text-[15px] font-extrabold text-slate-900 leading-tight">{lead.name}</div>
+                                      <div className="text-[11px] text-slate-500 mt-1 break-words">{lead.company || "Company not set"} {lead.location ? `• ${lead.location}` : ""}</div>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                      <div className="font-mono text-[14px] font-extrabold text-slate-900">{formatCurrency(lead.loanAmount)}</div>
+                                      <div className="text-[10px] font-bold text-slate-500 mt-1">Pending {ageDays} days</div>
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    <span className={`inline-flex items-center rounded-lg border px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide ${sla.badge}`}>{sla.band}</span>
+                                    <span className={`inline-flex items-center rounded-lg border px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide ${STATUS_CONFIG[lead.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                                      {lead.status}
+                                    </span>
+                                    <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-700">
+                                      Next {nextFollowUp}
+                                    </span>
+                                  </div>
+                                  <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                                    <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">Latest Note</div>
+                                    <div className="text-[11px] text-slate-800 font-bold leading-relaxed break-words">{instruction.text}</div>
+                                  </div>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
           <div className="mt-6 text-center text-[11px] text-slate-400">
             Confidential • Generated by {BRAND.product} • {BRAND.name}
@@ -3845,19 +7199,430 @@ const MediatorRejectionReportView = ({ mediator, leads, onBack }) => {
   );
 };
 
-const RejectReportView = ({ lead, onBack }) => {
-  const rejectionData = lead.rejectionDetails || {};
-  const latestReason =
-    rejectionData.reason ||
-    (lead.notes || [])
-      .slice()
-      .reverse()
-      .find((n) => n.text.includes("[REJECTION REASON]"))
-      ?.text.replace("[REJECTION REASON]:", "")
-      .trim() ||
-    "Not eligible according to current policy criteria.";
+const InternalRejectionMasterReportView = ({ leads, mediators, onBack }) => {
+  const todayYmd = toYmdIST(new Date());
+  const rejectedStatuses = useMemo(
+    () => new Set(["Not Eligible", "Not Reliable", "Lost to Competitor", "Not Interested (Temp)", "Rejected"]),
+    []
+  );
 
-  const rejectNote = rejectionData.defense ? `${latestReason}. ${rejectionData.defense}` : latestReason;
+  const mediatorNameById = useMemo(() => {
+    const map = new Map();
+    (mediators || []).forEach((m) => {
+      if (!m?.id) return;
+      map.set(String(m.id), String(m.name || "Unknown"));
+    });
+    return map;
+  }, [mediators]);
+
+  const rows = useMemo(() => {
+    return (leads || [])
+      .filter((l) => rejectedStatuses.has(String(l?.status || "").trim()))
+      .map((lead) => {
+        const rejection = extractLeadRejectionContext(lead);
+        const decisionTs = rejection?.decisionTs || lead?.updatedAt || lead?.createdAt;
+        return {
+          lead,
+          rejection,
+          decisionTs,
+          mediatorName: mediatorNameById.get(String(lead?.mediatorId || "")) || "Direct/None",
+        };
+      })
+      .sort((a, b) => new Date(b.decisionTs).getTime() - new Date(a.decisionTs).getTime());
+  }, [leads, rejectedStatuses, mediatorNameById]);
+
+  const analytics = useMemo(() => {
+    const byStatus = new Map();
+    const byStrategy = new Map();
+    const byReason = new Map();
+    const byMediator = new Map();
+
+    rows.forEach((row) => {
+      const status = String(row?.lead?.status || "Rejected");
+      const strategy = String(row?.rejection?.strategy || "Risk");
+      const reason = String(row?.rejection?.reason || "Unspecified");
+      const mediatorName = String(row?.mediatorName || "Direct/None");
+
+      byStatus.set(status, (byStatus.get(status) || 0) + 1);
+      byStrategy.set(strategy, (byStrategy.get(strategy) || 0) + 1);
+      byReason.set(reason, (byReason.get(reason) || 0) + 1);
+      byMediator.set(mediatorName, (byMediator.get(mediatorName) || 0) + 1);
+    });
+
+    const topReasons = [...byReason.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const topMediators = [...byMediator.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const statusEntries = [...byStatus.entries()].sort((a, b) => b[1] - a[1]);
+    const strategyEntries = [...byStrategy.entries()].sort((a, b) => b[1] - a[1]);
+
+    return {
+      totalRejected: rows.length,
+      uniqueClients: new Set(rows.map((r) => String(r?.lead?.id || ""))).size,
+      uniqueMediators: byMediator.size,
+      totalVolume: rows.reduce((sum, r) => sum + (Number(r?.lead?.loanAmount) || 0), 0),
+      topReasons,
+      topMediators,
+      statusEntries,
+      strategyEntries,
+    };
+  }, [rows]);
+
+  const strategyTone = (strategy) => {
+    const s = String(strategy || "").toLowerCase();
+    if (s.includes("competitor")) return "bg-amber-50 text-amber-800 border-amber-200";
+    if (s.includes("internal")) return "bg-violet-50 text-violet-800 border-violet-200";
+    if (s.includes("client")) return "bg-slate-100 text-slate-700 border-slate-200";
+    return "bg-rose-50 text-rose-800 border-rose-200";
+  };
+
+  const statusTone = (status) => {
+    const s = String(status || "").toLowerCase();
+    if (s.includes("competitor")) return "bg-amber-50 text-amber-800 border-amber-200";
+    if (s.includes("interested")) return "bg-slate-100 text-slate-700 border-slate-200";
+    return "bg-rose-50 text-rose-800 border-rose-200";
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white border-b border-slate-200 sticky top-0 z-20 flex justify-between items-center">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `Detailed_Rejection_List_Internal_${todayYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-4 py-2"
+        >
+          <Printer size={16} /> Print / Save PDF
+        </button>
+      </div>
+
+      <div className="max-w-7xl mx-auto p-3 md:p-6 print:p-4 print:max-w-[190mm]">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-4 md:p-7 min-h-[297mm] print:shadow-none print:border-0">
+          <ReportBrandHeader
+            title="Detailed Rejection List (Internal)"
+            subtitle="Combined rejection register for office verification"
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Rows</div>
+                <div className="text-slate-900">{analytics.totalRejected}</div>
+              </div>
+            }
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-4 print:grid-cols-1 gap-3 mb-6">
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-rose-700">Total Rejected</div>
+              <div className="text-2xl font-extrabold text-rose-900 mt-1">{analytics.totalRejected}</div>
+            </div>
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-700">Unique Clients</div>
+              <div className="text-2xl font-extrabold text-indigo-900 mt-1">{analytics.uniqueClients}</div>
+            </div>
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-violet-700">Contributors</div>
+              <div className="text-2xl font-extrabold text-violet-900 mt-1">{analytics.uniqueMediators}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-600">Rejected Volume</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">{formatCompactCurrency(analytics.totalVolume)}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 print:grid-cols-1 gap-4 mb-6">
+            <div className="surface-solid p-5">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2 mb-3">
+                <FileWarning size={17} className="text-amber-600" /> Top Rejection Reasons
+              </div>
+              <div className="space-y-2">
+                {analytics.topReasons.length === 0 ? (
+                  <div className="text-sm text-slate-500 italic">No reasons logged.</div>
+                ) : (
+                  analytics.topReasons.map(([reason, count]) => (
+                    <div key={reason} className="flex items-center justify-between gap-2 border-b border-slate-200/60 pb-2">
+                      <div className="text-xs font-bold text-slate-700 truncate">{reason}</div>
+                      <span className="chip">{count}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="surface-solid p-5">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2 mb-3">
+                <Users size={17} className="text-indigo-600" /> Rejection by Contributor
+              </div>
+              <div className="space-y-2">
+                {analytics.topMediators.length === 0 ? (
+                  <div className="text-sm text-slate-500 italic">No contributor mapping.</div>
+                ) : (
+                  analytics.topMediators.map(([name, count]) => (
+                    <div key={name} className="flex items-center justify-between gap-2 border-b border-slate-200/60 pb-2">
+                      <div className="text-xs font-bold text-slate-700 truncate">{name}</div>
+                      <span className="chip bg-indigo-50 border-indigo-200 text-indigo-700">{count}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="surface-solid p-5">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2 mb-3">
+                <AlertTriangle size={17} className="text-rose-600" /> Status / Strategy Mix
+              </div>
+              <div className="space-y-2">
+                {analytics.statusEntries.map(([status, count]) => (
+                  <div key={`status_${status}`} className="flex items-center justify-between gap-2">
+                    <span className={`text-[10px] px-2 py-1 rounded border font-extrabold uppercase ${statusTone(status)}`}>{status}</span>
+                    <span className="chip">{count}</span>
+                  </div>
+                ))}
+                <div className="h-px bg-slate-200 my-2"></div>
+                {analytics.strategyEntries.map(([strategy, count]) => (
+                  <div key={`strategy_${strategy}`} className="flex items-center justify-between gap-2">
+                    <span className={`text-[10px] px-2 py-1 rounded border font-extrabold uppercase ${strategyTone(strategy)}`}>{strategy}</span>
+                    <span className="chip">{count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="font-extrabold text-slate-900 flex items-center gap-2">
+                <ClipboardList size={18} className="text-rose-600" /> Detailed Combined Rejection Ledger
+              </div>
+              <div className="text-[11px] text-slate-500 font-bold">Latest decision first • Internal office use only</div>
+            </div>
+
+            <div className="md:hidden print:hidden p-3 space-y-3 bg-slate-50/40">
+              {rows.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-center text-slate-500 italic">
+                  No rejected clients available in current data.
+                </div>
+              ) : (
+                rows.map((row) => {
+                  const lead = row.lead;
+                  const rejection = row.rejection;
+                  return (
+                    <div key={lead.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-base font-extrabold text-slate-900 truncate">{lead.name}</div>
+                          <div className="text-xs text-slate-500 mt-0.5 truncate">{lead.company || lead.location || "—"}</div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Amount</div>
+                          <div className="text-sm font-extrabold text-slate-900">{formatCompactCurrency(lead.loanAmount)}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-3">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Decision</div>
+                          <div className="text-xs font-mono text-slate-700 mt-1">{formatDateTime(row.decisionTs)}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Contributor</div>
+                          <div className="text-xs font-bold text-slate-700 mt-1 truncate">{row.mediatorName}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className={`text-[10px] px-2 py-1 rounded border font-extrabold uppercase ${statusTone(lead.status)}`}>{lead.status}</span>
+                        <span className={`text-[10px] px-2 py-1 rounded border font-extrabold uppercase ${strategyTone(rejection.strategy)}`}>{rejection.strategy}</span>
+                      </div>
+
+                      <div className="mt-3 rounded-lg border border-rose-100 bg-rose-50/50 p-2">
+                        <div className="text-[10px] uppercase tracking-wider text-rose-700 font-bold">Reason</div>
+                        <div className="text-xs text-slate-800 font-bold mt-1 leading-relaxed">{rejection.reason || "Unspecified"}</div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 mt-2">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Observation</div>
+                          <div className="text-xs text-slate-700 mt-1 leading-relaxed">{rejection.note || "—"}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Competitor</div>
+                          <div className="text-xs text-slate-700 mt-1">{rejection.competitor || "—"}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="hidden md:block print:hidden overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-white border-b text-[10px] uppercase tracking-wider text-slate-500 font-extrabold">
+                  <tr>
+                    <th className="p-4">Decision</th>
+                    <th className="p-4">Client</th>
+                    <th className="p-4">Contributor</th>
+                    <th className="p-4">Outcome</th>
+                    <th className="p-4">Reason</th>
+                    <th className="p-4">Observation</th>
+                    <th className="p-4">Competitor</th>
+                    <th className="p-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rows.map((row) => {
+                    const lead = row.lead;
+                    const rejection = row.rejection;
+                    return (
+                      <tr key={lead.id} className="hover:bg-slate-50 print:break-inside-avoid">
+                        <td className="p-4 align-top font-mono text-xs text-slate-600 whitespace-nowrap">{formatDateTime(row.decisionTs)}</td>
+                        <td className="p-4 align-top">
+                          <div className="font-extrabold text-slate-900">{lead.name}</div>
+                          <div className="text-xs text-slate-500 mt-1">{lead.company || lead.location || "—"}</div>
+                        </td>
+                        <td className="p-4 align-top text-xs font-bold text-slate-700">{row.mediatorName}</td>
+                        <td className="p-4 align-top">
+                          <div className={`inline-flex items-center gap-2 px-2 py-1 rounded border text-[10px] font-extrabold uppercase ${statusTone(lead.status)}`}>
+                            {lead.status}
+                          </div>
+                          <div className={`inline-flex items-center gap-2 px-2 py-1 rounded border text-[10px] font-extrabold uppercase mt-2 ${strategyTone(rejection.strategy)}`}>
+                            {rejection.strategy}
+                          </div>
+                        </td>
+                        <td className="p-4 align-top text-xs text-slate-700 font-bold leading-relaxed max-w-[360px]">{rejection.reason || "Unspecified"}</td>
+                        <td className="p-4 align-top text-xs text-slate-700 leading-relaxed max-w-[320px]">{rejection.note || <span className="text-slate-400">—</span>}</td>
+                        <td className="p-4 align-top text-xs text-slate-700 font-bold">{rejection.competitor || <span className="text-slate-400">—</span>}</td>
+                        <td className="p-4 align-top text-right font-mono font-extrabold text-slate-800">{formatCompactCurrency(lead.loanAmount)}</td>
+                      </tr>
+                    );
+                  })}
+                  {rows.length === 0 && (
+                    <tr>
+                      <td colSpan="8" className="p-8 text-center text-slate-500 italic">
+                        No rejected clients available in current data.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="hidden print:block p-4 space-y-3 bg-white">
+              {rows.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-center text-slate-500 italic">
+                  No rejected clients available in current data.
+                </div>
+              ) : (
+                rows.map((row) => {
+                  const lead = row.lead;
+                  const rejection = row.rejection;
+                  return (
+                    <div
+                      key={`print_${lead.id}`}
+                      className="rounded-xl border border-slate-200 p-4"
+                      style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-lg font-extrabold text-slate-900">{lead.name}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">{lead.company || lead.location || "—"}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Amount</div>
+                          <div className="text-sm font-extrabold text-slate-900">{formatCompactCurrency(lead.loanAmount)}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-3">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Decision</div>
+                          <div className="text-xs font-mono text-slate-700 mt-1">{formatDateTime(row.decisionTs)}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Contributor</div>
+                          <div className="text-xs font-bold text-slate-700 mt-1">{row.mediatorName}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className={`text-[10px] px-2 py-1 rounded border font-extrabold uppercase ${statusTone(lead.status)}`}>{lead.status}</span>
+                        <span className={`text-[10px] px-2 py-1 rounded border font-extrabold uppercase ${strategyTone(rejection.strategy)}`}>{rejection.strategy}</span>
+                      </div>
+
+                      <div className="mt-3 rounded-lg border border-rose-100 bg-rose-50/50 p-2">
+                        <div className="text-[10px] uppercase tracking-wider text-rose-700 font-bold">Reason</div>
+                        <div className="text-xs text-slate-800 font-bold mt-1 leading-relaxed">{rejection.reason || "Unspecified"}</div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 mt-2">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Observation</div>
+                          <div className="text-xs text-slate-700 mt-1 leading-relaxed">{rejection.note || "—"}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Competitor</div>
+                          <div className="text-xs text-slate-700 mt-1">{rejection.competitor || "—"}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Internal Verification Copy • Generated by {BRAND.product}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const extractLeadRejectionContext = (lead) => {
+  const r = lead?.rejectionDetails || {};
+  const notes = Array.isArray(lead?.notes) ? [...lead.notes].slice().reverse() : [];
+  const rejectionStructured = notes.find((n) => String(n?.text || "").includes("[REJECTION]"))?.text || "";
+  const rejectionReasonTagged = notes.find((n) => String(n?.text || "").includes("[REJECTION REASON]"))?.text || "";
+
+  const kvMap = {};
+  String(rejectionStructured)
+    .replace(/^\s*\[REJECTION\]\s*:?\s*/i, "")
+    .split("|")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const m = part.match(/^([A-Za-z][A-Za-z\s]{1,30})\s*=\s*(.+)$/);
+      if (m) kvMap[m[1].trim().toLowerCase()] = m[2].trim();
+    });
+
+  const strategy = String(r.strategy || kvMap.strategy || (lead?.status === "Lost to Competitor" ? "Competitor" : "Risk") || "Risk");
+  const reason = String(r.reason || kvMap.reason || rejectionReasonTagged.replace("[REJECTION REASON]:", "").trim() || "Not eligible according to current policy criteria.");
+  const note = String(r.defense || kvMap.note || kvMap.notes || "").trim();
+  const competitor = String(r.competitor || kvMap.competitor || "").trim();
+  const decisionTs =
+    r.date ||
+    notes.find((n) => /\[REJECTION\]|\[REJECTION REASON\]/i.test(String(n?.text || "")))?.date ||
+    lead?.updatedAt ||
+    lead?.createdAt;
+
+  const reasons = [
+    { label: "Decision Outcome", value: lead?.status || "Not Eligible" },
+    { label: "Strategy", value: strategy },
+    { label: "Primary Reason", value: reason },
+    note ? { label: "Detailed Observation", value: note } : null,
+    competitor ? { label: "Competitor (if shared)", value: competitor } : null,
+  ].filter(Boolean);
+
+  return { strategy, reason, note, competitor, decisionTs, reasons };
+};
+
+const RejectReportView = ({ lead, onBack }) => {
+  const rejection = extractLeadRejectionContext(lead);
 
   return (
     <div className="min-h-screen bg-gray-100 font-serif text-slate-900 p-8 flex flex-col items-center">
@@ -3867,19 +7632,19 @@ const RejectReportView = ({ lead, onBack }) => {
         </button>
         <button
           onClick={() => {
-            document.title = `Rejection_Letter_${lead.name}`;
+            document.title = `Mediator_Rejection_Letter_${lead.name}`;
             window.print();
           }}
           className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 shadow-md transition-all"
         >
-          <Printer size={16} /> Print Letter
+          <Printer size={16} /> Print Mediator Letter
         </button>
       </div>
 
       <div className="bg-white w-full max-w-[210mm] min-h-[297mm] p-[20mm] shadow-2xl print:shadow-none">
         <ReportBrandHeader
-          title="Rejection Notice"
-          subtitle="Application Status Report"
+          title="Mediator Rejection Decision Letter"
+          subtitle="Detailed rejection reason summary"
           metaRight={
             <div className="space-y-1">
               <div className="text-[10px] uppercase tracking-wider text-slate-500">Date (IST)</div>
@@ -3892,37 +7657,61 @@ const RejectReportView = ({ lead, onBack }) => {
 
         <div className="flex justify-between mb-12 text-sm font-sans">
           <div>
-            <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Applicant</p>
+            <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Client</p>
             <p className="font-bold text-slate-800 text-lg">{lead.name}</p>
             <p className="text-slate-600">{lead.company}</p>
             <p className="text-slate-600">{lead.location}</p>
+            {lead.phone ? <p className="text-slate-600">Phone: {lead.phone}</p> : null}
           </div>
           <div className="text-right">
             <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Reference ID</p>
             <p className="font-mono font-bold text-slate-800">{lead.id}</p>
             <div className="mt-4">
               <span className="bg-slate-100 border border-slate-300 text-slate-700 px-3 py-1 rounded text-xs font-bold uppercase tracking-wider">
-                Status: Not Eligible
+                Status: {lead.status || "Not Eligible"}
               </span>
             </div>
           </div>
         </div>
 
         <div className="mb-10 text-base leading-relaxed font-sans">
-          <p className="text-slate-700 mb-6">Dear Partner,</p>
+          <p className="text-slate-700 mb-6">Dear Partner / Mediator,</p>
           <p className="text-slate-700 mb-6 text-justify">
-            We have completed the credit assessment for the loan application referenced above. We appreciate the opportunity to review this file.
-            However, based on our current underwriting guidelines and the documentation provided, we are unable to approve this facility at this time.
+            We have completed the review of the above client file and are unable to proceed with this case at present. This letter provides a clear rejection summary that can be shared with your team/client for closure and follow-up clarity.
           </p>
 
           <div className="my-8 p-6 border border-slate-200 bg-slate-50 rounded-lg">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-widest mb-3 border-b border-slate-300 pb-2">Reason for Decline</h3>
-            <p className="text-slate-800 text-lg font-medium leading-relaxed">{rejectNote.trim()}</p>
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-widest mb-3 border-b border-slate-300 pb-2">Detailed Rejection Reasons</h3>
+            <div className="space-y-3">
+              {rejection.reasons.map((item) => (
+                <div key={item.label} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[10px] uppercase tracking-wider font-extrabold text-slate-500">{item.label}</div>
+                  <div className="text-slate-900 text-base font-bold leading-relaxed mt-1">{item.value}</div>
+                </div>
+              ))}
+            </div>
+            {rejection.decisionTs ? (
+              <div className="mt-3 text-xs text-slate-500 font-bold">
+                Decision recorded on: {formatDateTime(rejection.decisionTs)}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="my-8 p-6 border border-slate-200 bg-white rounded-lg">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-widest mb-3 border-b border-slate-200 pb-2">Recent Activity Timeline</h3>
+            <div className="space-y-3">
+              {(Array.isArray(lead.notes) ? [...lead.notes].slice(-6).reverse() : []).map((n, idx) => (
+                <div key={idx} className="border border-slate-100 rounded-lg p-3">
+                  <div className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">{n?.date ? formatDateTime(n.date) : "—"}</div>
+                  <div className="text-sm text-slate-800 font-semibold mt-1 leading-relaxed">{String(n?.text || "").trim()}</div>
+                </div>
+              ))}
+              {(!lead.notes || lead.notes.length === 0) && <div className="text-sm text-slate-500 italic">No activity timeline available.</div>}
+            </div>
           </div>
 
           <p className="text-slate-700 mb-6 text-justify">
-            Please communicate this decision to the applicant. We remain committed to our partnership and look forward to reviewing future applications that align with our
-            credit policies.
+            Please use the above rejection details when updating the client status and share revised information only if the client profile/documents materially change.
           </p>
         </div>
 
@@ -3932,6 +7721,313 @@ const RejectReportView = ({ lead, onBack }) => {
           <div className="mt-8 border-t border-slate-200 pt-2 flex justify-between text-[10px] text-slate-400">
             <p>Generated via LIRAS System</p>
             <p>Confidential & Proprietary</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const roundRectCanvas = (ctx, x, y, w, h, r, fill = true, stroke = false) => {
+  const radius = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
+};
+
+const wrapCanvasText = (ctx, text, x, y, maxWidth, lineHeight, maxLines = 99) => {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width <= maxWidth) {
+      line = test;
+    } else {
+      if (line) lines.push(line);
+      line = word;
+      if (lines.length >= maxLines - 1) break;
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  lines.forEach((ln, idx) => ctx.fillText(ln, x, y + idx * lineHeight));
+  return lines.length;
+};
+
+const drawPillCanvas = (ctx, text, x, y, tone = "#10b981") => {
+  ctx.font = "700 20px ui-sans-serif, system-ui, -apple-system";
+  const label = String(text || "");
+  const width = Math.max(120, Math.ceil(ctx.measureText(label).width) + 34);
+  ctx.fillStyle = `${tone}22`;
+  roundRectCanvas(ctx, x, y, width, 44, 14, true, false);
+  ctx.strokeStyle = `${tone}88`;
+  ctx.lineWidth = 2;
+  roundRectCanvas(ctx, x, y, width, 44, 14, false, true);
+  ctx.fillStyle = tone;
+  ctx.fillText(label, x + 17, y + 29);
+};
+
+const drawMetricCardCanvas = (ctx, { x, y, w, h, title, value, sub = "", tone = "slate" }) => {
+  const tones = {
+    emerald: { border: "#1d5b4f", fill: "#0d1d1f", accent: "#34d399" },
+    amber: { border: "#5b4220", fill: "#1b1410", accent: "#f59e0b" },
+    rose: { border: "#5b2530", fill: "#1b1116", accent: "#fb7185" },
+    slate: { border: "#23344f", fill: "#101a2b", accent: "#cbd5e1" },
+  };
+  const t = tones[tone] || tones.slate;
+  ctx.fillStyle = t.fill;
+  roundRectCanvas(ctx, x, y, w, h, 18, true, false);
+  ctx.strokeStyle = t.border;
+  ctx.lineWidth = 2;
+  roundRectCanvas(ctx, x, y, w, h, 18, false, true);
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "700 16px ui-sans-serif, system-ui, -apple-system";
+  ctx.fillText(String(title || "").toUpperCase(), x + 18, y + 30);
+  ctx.fillStyle = t.accent;
+  ctx.font = "800 27px ui-sans-serif, system-ui, -apple-system";
+  wrapCanvasText(ctx, value || "—", x + 18, y + 68, w - 36, 30, 2);
+  if (sub) {
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "500 16px ui-sans-serif, system-ui, -apple-system";
+    wrapCanvasText(ctx, sub, x + 18, y + h - 22, w - 36, 20, 2);
+  }
+};
+
+const LeadPartnerStatusRequestPdfView = ({ lead, mediator, includeTimeline = false, onBack }) => {
+  if (!lead) return null;
+
+  const todayYmd = toYmdIST(new Date());
+  const mediatorLabel = mediator?.name || "Direct/None";
+  const mediatorPhone = mediator?.phone || "";
+  const leadPhone = String(lead.phone || "").trim();
+  const contactMissing = !leadPhone || leadPhone.length < 8;
+  const docs = lead.documents || {};
+  const docsMissing = ["kyc", "itr", "bank"].filter((k) => !docs?.[k]);
+  const triage = (docs && typeof docs.triage === "object" && docs.triage) || {};
+  const nextAction = lead?.nextFollowUp ? `${toYmdIST(lead.nextFollowUp)}${formatTimeIST(lead.nextFollowUp) ? ` • ${formatTimeIST(lead.nextFollowUp)}` : ""}` : "—";
+  const isClosed = ["Payment Done", "Deal Closed"].includes(lead.status);
+  const isRejected = isClosedOrRejectedLeadStatus(lead.status) && !isClosed;
+
+  const timelineRows = useMemo(() => {
+    const out = [];
+    if (lead.createdAt) {
+      out.push({
+        ts: lead.createdAt,
+        tag: "Lead Created",
+        text: `Lead created${lead.createdBy ? ` by ${lead.createdBy}` : ""}.`,
+      });
+    }
+    const notes = Array.isArray(lead.notes) ? lead.notes : [];
+    for (const n of notes) {
+      if (!n) continue;
+      if (typeof n === "string") {
+        out.push({ ts: "", tag: "Note", text: n });
+        continue;
+      }
+      const text = String(n.text || "").trim();
+      if (!text) continue;
+      const tagMatch = text.match(/^\s*\[([^\]]+)\]/);
+      out.push({
+        ts: n.date || "",
+        tag: tagMatch ? tagMatch[1] : "Note",
+        text,
+      });
+    }
+    return out.sort((a, b) => {
+      const at = parseIsoOrNull(a.ts)?.getTime?.() || 0;
+      const bt = parseIsoOrNull(b.ts)?.getTime?.() || 0;
+      return bt - at;
+    });
+  }, [lead]);
+
+  const timelineTone = (tag) => {
+    const t = String(tag || "").toLowerCase();
+    if (t.includes("payment") || t.includes("closed")) return "emerald";
+    if (t.includes("reject")) return "rose";
+    if (t.includes("follow")) return "indigo";
+    if (t.includes("meeting") || t.includes("reschedule")) return "violet";
+    if (t.includes("call")) return "sky";
+    if (t.includes("check")) return "teal";
+    return "slate";
+  };
+
+  const toneClasses = (tone) =>
+    ({
+      emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      rose: "border-rose-200 bg-rose-50 text-rose-700",
+      indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+      violet: "border-violet-200 bg-violet-50 text-violet-700",
+      sky: "border-sky-200 bg-sky-50 text-sky-700",
+      teal: "border-teal-200 bg-teal-50 text-teal-700",
+      slate: "border-slate-200 bg-slate-50 text-slate-700",
+    }[tone] || "border-slate-200 bg-slate-50 text-slate-700");
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className="print:hidden p-4 bg-white border-b border-slate-200 sticky top-0 z-20 flex justify-between items-center gap-3">
+        <button onClick={onBack} className="btn-secondary px-3 py-2">
+          <ArrowLeft size={18} /> Back
+        </button>
+        <button
+          onClick={() => {
+            document.title = `Partner_Status_Request_${String(lead.name || "Lead").replace(/[^\w]+/g, "_")}_${todayYmd}`;
+            window.print();
+          }}
+          className="btn-primary px-4 py-2"
+        >
+          <Printer size={16} /> Print / Save PDF
+        </button>
+      </div>
+
+      <div className="max-w-5xl mx-auto p-6 print:p-8">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-soft p-7 min-h-[297mm] print:shadow-none print:border-0">
+          <ReportBrandHeader
+            title="Partner / Mediator Status Follow-up"
+            subtitle={
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-bold text-slate-900">{lead.name}</span>
+                <span className="text-slate-300">•</span>
+                <span className="text-slate-700">{lead.company || "—"}</span>
+              </span>
+            }
+            metaRight={
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500">Generated (IST)</div>
+                <div className="text-slate-900">{todayYmd}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Timeline</div>
+                <div className="text-slate-900">{includeTimeline ? "Included" : "Summary only"}</div>
+              </div>
+            }
+          />
+
+          <div className="mb-6 rounded-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-5 bg-gradient-to-r from-slate-50 via-white to-slate-50 border-b border-slate-200">
+              <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Lead Snapshot</div>
+              <div className="mt-1 text-3xl md:text-4xl font-black tracking-tight text-slate-900">{lead.name || "—"}</div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-lg font-extrabold border ${STATUS_CONFIG[lead.status]?.color?.replace("bg-", "bg-").replace("text-", "text-") || "bg-slate-100 text-slate-700"} border-slate-200`}>
+                  {lead.status || "Unknown"}
+                </span>
+                {lead.company ? <span className="text-slate-600 font-semibold">{lead.company}</span> : null}
+                {lead.location ? <span className="text-slate-400">•</span> : null}
+                {lead.location ? <span className="text-slate-600">{lead.location}</span> : null}
+              </div>
+            </div>
+
+            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className={`rounded-2xl border p-5 ${contactMissing || triage?.contactUpdated === false ? "border-rose-200 bg-rose-50/50" : "border-emerald-200 bg-emerald-50/40"}`}>
+                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-2">Contact Details</div>
+                <div className={`text-lg font-black ${contactMissing || triage?.contactUpdated === false ? "text-rose-700" : "text-emerald-700"}`}>
+                  {contactMissing || triage?.contactUpdated === false ? "Pending / Not Updated" : "Available"}
+                </div>
+                <div className="mt-2 text-sm text-slate-700">
+                  Client Phone: <span className="font-extrabold">{leadPhone || "Not updated"}</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Partner/Mediator: <span className="font-bold text-slate-700">{mediatorLabel}</span>{mediatorPhone ? ` • ${mediatorPhone}` : ""}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-5 bg-white">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-2">Current Pending Status</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Phone PD</div>
+                    <div className={`mt-1 text-base font-extrabold ${triage?.phonePdDone ? "text-emerald-700" : "text-amber-700"}`}>
+                      {triage?.phonePdDone ? "Done" : "Pending"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Statement</div>
+                    <div className={`mt-1 text-base font-extrabold ${triage?.statementCollected ? "text-emerald-700" : "text-amber-700"}`}>
+                      {triage?.statementCollected ? "Collected" : "Pending"}
+                    </div>
+                    {!triage?.statementCollected && triage?.statementReason ? (
+                      <div className="mt-1 text-[10px] text-slate-500 truncate">{triage.statementReason}</div>
+                    ) : null}
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Statement Working</div>
+                    <div className={`mt-1 text-base font-extrabold ${triage?.perfiosDone ? "text-emerald-700" : "text-amber-700"}`}>
+                      {triage?.perfiosDone ? "Done" : "Pending"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Docs Pending</div>
+                    <div className={`mt-1 text-base font-extrabold ${docsMissing.length ? "text-rose-700" : "text-emerald-700"}`}>
+                      {docsMissing.length ? docsMissing.map((d) => d.toUpperCase()).join(", ") : "None"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-5 bg-white">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-2">Next Action (IST)</div>
+                <div className="text-xl font-black text-slate-900">{nextAction}</div>
+                <div className="mt-2 text-xs text-slate-500">Lead Value: <span className="font-bold text-slate-700">{formatCompactCurrency(Number(lead.loanAmount) || 0)}</span></div>
+              </div>
+
+              {(isClosed || isRejected) && (
+                <div className={`rounded-2xl border p-5 ${isClosed ? "border-emerald-200 bg-emerald-50/40" : "border-rose-200 bg-rose-50/40"}`}>
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-2">Outcome</div>
+                  <div className={`text-xl font-black ${isClosed ? "text-emerald-700" : "text-rose-700"}`}>{lead.status}</div>
+                  <div className="mt-2 text-sm text-slate-700">
+                    {isClosed ? "Closed / payment completed case." : "Rejected / dropped case."}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {includeTimeline && (
+            <div className="mb-6 rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-5 py-4 bg-gradient-to-r from-violet-50 via-indigo-50 to-sky-50 border-b border-slate-200 flex items-center justify-between">
+                <div className="font-extrabold text-slate-900">Lead Action Timeline</div>
+                <div className="text-[11px] text-slate-500 font-bold">{timelineRows.length} entries</div>
+              </div>
+              <div className="p-5 bg-white">
+                {timelineRows.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-slate-400 italic rounded-xl border border-dashed border-slate-200">
+                    No timeline entries recorded.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {timelineRows.slice(0, 30).map((row, idx) => {
+                      const tone = timelineTone(row.tag);
+                      return (
+                        <div key={`${row.ts || "na"}-${idx}`} className="relative pl-6">
+                          <div className="absolute left-2 top-0 bottom-0 w-px bg-slate-200" />
+                          <div className={`absolute left-0 top-3 w-4 h-4 rounded-full border-2 ${toneClasses(tone).replace("bg-", "bg-").split(" ").slice(0, 2).join(" ")} bg-white`} />
+                          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                            <div className="px-4 py-2 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                              <div className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[11px] font-extrabold uppercase tracking-wider border ${toneClasses(tone)}`}>
+                                {row.tag || "Note"}
+                              </div>
+                              <div className="text-[11px] font-bold text-slate-500">
+                                {row.ts ? `${toYmdIST(row.ts)}${formatTimeIST(row.ts) ? ` • ${formatTimeIST(row.ts)}` : ""}` : "Time not recorded"}
+                              </div>
+                            </div>
+                            <div className="px-4 py-3 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                              {row.text}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 text-center text-[11px] text-slate-400">
+            Confidential • Generated by {BRAND.product} • {BRAND.name}
           </div>
         </div>
       </div>
@@ -4175,7 +8271,9 @@ const ClearancePrintReport = ({ leads, mediators, onBack }) => {
     return (leads || []).filter(
       (l) =>
         l &&
-        !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status) &&
+        !isClosedOrRejectedLeadStatus(l.status) &&
+        l.status !== "Meeting Scheduled" &&
+        !(parseIsoOrNull(l?.nextFollowUp) && getDaysDiff(l.nextFollowUp) > 0) &&
         (!l.notes?.length || !isTodayIST(l.notes[l.notes.length - 1].date))
     );
   }, [leads]);
@@ -4363,11 +8461,19 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
   const [userFilter, setUserFilter] = useState("all"); // userId | "all"
 
   const reportTitle = mode === "daily" ? "Daily Activity Report" : "End of Day Activity Report";
+  const getLeadOwnerId = (l) => String(l?.ownerId || l?.createdBy || "");
+  const getMediatorOwnerId = (m) => String(m?.ownerId || m?.createdBy || "");
 
   const allOwnerIds = useMemo(() => {
     const set = new Set();
-    (leads || []).forEach((l) => l?.ownerId && set.add(String(l.ownerId)));
-    (mediators || []).forEach((m) => m?.ownerId && set.add(String(m.ownerId)));
+    (leads || []).forEach((l) => {
+      const id = getLeadOwnerId(l);
+      if (id) set.add(id);
+    });
+    (mediators || []).forEach((m) => {
+      const id = getMediatorOwnerId(m);
+      if (id) set.add(id);
+    });
     return Array.from(set);
   }, [leads, mediators]);
 
@@ -4392,20 +8498,32 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
   }, [staffUsers, allOwnerIds]);
 
   const staffList = useMemo(() => {
+    const activeOwnerIds = new Set(allOwnerIds.map(String));
     const nonAdmin = usersForReport.filter((u) => u.role !== "admin");
-    return nonAdmin.length ? nonAdmin : usersForReport;
-  }, [usersForReport]);
+    const activeAdmins = usersForReport.filter((u) => u.role === "admin" && activeOwnerIds.has(String(u.userId || "")));
+    const base = nonAdmin.length ? nonAdmin : usersForReport;
+    const merged = [...base];
+    activeAdmins.forEach((u) => {
+      if (!merged.some((x) => String(x.userId) === String(u.userId))) merged.push(u);
+    });
+    return merged;
+  }, [usersForReport, allOwnerIds]);
 
   const computeReportForUser = (user) => {
     const uid = String(user.userId);
-    const leadsOwned = (leads || []).filter((l) => String(l?.ownerId || "") === uid);
-    const mediatorsOwned = (mediators || []).filter((m) => String(m?.ownerId || "") === uid && String(m?.id || "") !== "3");
+    const leadsOwned = (leads || []).filter((l) => getLeadOwnerId(l) === uid);
+    const mediatorsOwned = (mediators || []).filter((m) => getMediatorOwnerId(m) === uid && String(m?.id || "") !== "3");
 
     const endDay = endOfIstDay(dateYmd);
     const activeExclude = new Set(["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"]);
+    const isOnReportYmd = (value) => {
+      const parsed = parseIsoOrNull(value);
+      return parsed ? toYmdIST(parsed) === dateYmd : false;
+    };
+    const parseTs = (value) => parseIsoOrNull(value);
 
-    const newLeads = leadsOwned.filter((l) => isOnYmdIST(l.createdAt, dateYmd));
-    const payments = leadsOwned.filter((l) => l?.loanDetails?.paymentDate && isOnYmdIST(l.loanDetails.paymentDate, dateYmd));
+    const newLeads = leadsOwned.filter((l) => isOnReportYmd(l.createdAt));
+    const payments = leadsOwned.filter((l) => l?.loanDetails?.paymentDate && isOnReportYmd(l.loanDetails.paymentDate));
     const paymentVolume = payments.reduce((sum, l) => sum + (Number(l.loanDetails?.netDisbursed) || Number(l.loanAmount) || 0), 0);
 
     const leadsTouched = new Set();
@@ -4463,7 +8581,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
     leadsOwned.forEach((l) => {
       if (!l?.id) return;
 
-      if (isOnYmdIST(l.createdAt, dateYmd)) {
+      if (isOnReportYmd(l.createdAt)) {
         pushEvent({
           ts: l.createdAt,
           type: "new_lead",
@@ -4476,7 +8594,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       const notesAll = Array.isArray(l.notes) ? l.notes : [];
       const notes = notesAll.length > MAX_NOTES_SCAN ? notesAll.slice(notesAll.length - MAX_NOTES_SCAN) : notesAll;
       notes.forEach((n) => {
-        if (!n?.date || !isOnYmdIST(n.date, dateYmd)) return;
+        if (!n?.date || !isOnReportYmd(n.date)) return;
         leadsTouched.add(l.id);
         const meta = noteKind(n.text);
         if (meta.kind === "call") callsCount += 1;
@@ -4495,7 +8613,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       const attachmentsAll = Array.isArray(l.documents?.attachments) ? l.documents.attachments : [];
       const attachments = attachmentsAll.length > MAX_ATTACHMENTS_SCAN ? attachmentsAll.slice(0, MAX_ATTACHMENTS_SCAN) : attachmentsAll;
       attachments.forEach((a) => {
-        if (!a?.createdAt || !isOnYmdIST(a.createdAt, dateYmd)) return;
+        if (!a?.createdAt || !isOnReportYmd(a.createdAt)) return;
         leadsTouched.add(l.id);
         attachmentsCount += 1;
         pushEvent({
@@ -4508,8 +8626,8 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       });
 
       // If payment was recorded without a note, add an event.
-      if (l?.loanDetails?.paymentDate && isOnYmdIST(l.loanDetails.paymentDate, dateYmd)) {
-        const hasNote = notesAll.some((n) => isOnYmdIST(n?.date, dateYmd) && String(n?.text || "").toUpperCase().includes("PAYMENT DONE"));
+      if (l?.loanDetails?.paymentDate && isOnReportYmd(l.loanDetails.paymentDate)) {
+        const hasNote = notesAll.some((n) => isOnReportYmd(n?.date) && String(n?.text || "").toUpperCase().includes("PAYMENT DONE"));
         if (!hasNote) {
           pushEvent({
             ts: l.loanDetails.paymentDate,
@@ -4526,10 +8644,11 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
       const history = Array.isArray(m.followUpHistory) ? m.followUpHistory : [];
       history
         .map((h) => (typeof h === "string" ? { date: h, time: "00:00", type: "legacy" } : h))
-        .filter((h) => h && typeof h === "object" && typeof h.date === "string")
+        .filter((h) => h && typeof h === "object" && (typeof h.date === "string" || typeof h.ts === "string"))
         .forEach((h) => {
           const ts = h.ts || (h.date ? `${h.date}T00:00:00` : "");
-          if (!ts || !isOnYmdIST(ts, dateYmd)) return;
+          const parsedTs = parseTs(ts);
+          if (!parsedTs || toYmdIST(parsedTs) !== dateYmd) return;
           const t = String(h.type || "legacy");
           const label = t === "call" ? "Partner Call" : t === "whatsapp" ? "Partner WhatsApp" : t === "meeting" ? "Partner Meeting" : "Partner";
           const outcome = h.outcome ? ` • ${String(h.outcome).replace(/_/g, " ")}` : "";
@@ -4538,7 +8657,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
           if (t === "whatsapp") whatsappCount += 1;
           if (t === "meeting") meetingsCount += 1;
           pushEvent({
-            ts,
+            ts: parsedTs.toISOString(),
             type: t,
             label,
             subject: m.name || "Mediator",
@@ -4559,12 +8678,16 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
 
     const pendingMeetings = leadsOwned.filter((l) => {
       if (!l || l.status !== "Meeting Scheduled" || !l.nextFollowUp) return false;
-      const when = new Date(l.nextFollowUp);
-      if (!Number.isFinite(when.getTime())) return false;
+      const when = parseTs(l.nextFollowUp);
+      if (!when) return false;
       return when <= endDay;
     }).length;
 
-    events.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+    events.sort((a, b) => {
+      const aMs = parseTs(a.ts)?.getTime() ?? 0;
+      const bMs = parseTs(b.ts)?.getTime() ?? 0;
+      return aMs - bMs;
+    });
 
     return {
       user,
@@ -4691,7 +8814,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
               <input value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} type="date" className="w-full py-3" />
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Staff</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">User</label>
               <select value={userFilter} onChange={(e) => setUserFilter(e.target.value)} className="w-full py-3">
                 <option value="all">All staff</option>
                 {staffList.map((u) => (
@@ -4766,7 +8889,7 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
           <div key={r.user.userId} className="surface-solid p-6 md:p-8 no-break">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Staff</div>
+                <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">User</div>
                 <div className="text-2xl font-extrabold text-slate-900 mt-2">{r.user.label}</div>
                 <div className="text-sm text-slate-600 mt-1">{r.user.email}</div>
               </div>
@@ -4907,10 +9030,589 @@ const EodActivityReport = ({ leads, mediators, staffUsers, onBack, mode = "eod" 
   );
 };
 
-const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, onRejectionReport, onEdit, onDelete, onPendingReport, onFollowUp }) => {
+const isAashishPilotPartner = (name) => /aashish/i.test(String(name || ""));
+
+const PARTNER_SIMPLE_STATUS_OPTIONS = [
+  "Meeting Scheduled",
+  "Partner Follow-Up",
+  "Follow-Up Required",
+  "Contact Details Not Received",
+  "Statements Not Received",
+  "Payment Done",
+  "Not Eligible",
+  "Not Interested (Temp)",
+];
+
+const PARTNER_NEXT_ACTION_REQUIRED = new Set([
+  "Meeting Scheduled",
+  "Partner Follow-Up",
+  "Follow-Up Required",
+  "Contact Details Not Received",
+  "Statements Not Received",
+]);
+
+const PartnerSimpleStatusPortal = ({ mediator, leads, onUpdateLead, onLogout }) => {
+  const [query, setQuery] = useState("");
+  const [draftByLeadId, setDraftByLeadId] = useState({});
+
+  const mappedLeads = useMemo(() => {
+    const source = (leads || []).filter((l) => String(l?.mediatorId || "") === String(mediator?.id || ""));
+    const q = String(query || "").trim().toLowerCase();
+    const filtered = !q
+      ? source
+      : source.filter((l) => {
+          const hay = `${l?.name || ""} ${l?.company || ""} ${l?.phone || ""}`.toLowerCase();
+          return hay.includes(q);
+        });
+    return filtered
+      .slice()
+      .sort((a, b) => {
+        const at = parseIsoOrNull(a?.nextFollowUp)?.getTime?.() || Number.MAX_SAFE_INTEGER;
+        const bt = parseIsoOrNull(b?.nextFollowUp)?.getTime?.() || Number.MAX_SAFE_INTEGER;
+        return at - bt;
+      });
+  }, [leads, mediator?.id, query]);
+
+  const openCount = useMemo(
+    () => mappedLeads.filter((l) => !isClosedOrRejectedLeadStatus(l?.status)).length,
+    [mappedLeads]
+  );
+  const paymentDoneCount = useMemo(
+    () => mappedLeads.filter((l) => ["Payment Done", "Deal Closed"].includes(String(l?.status || ""))).length,
+    [mappedLeads]
+  );
+  const rejectedCount = useMemo(
+    () => mappedLeads.filter((l) => ["Not Eligible", "Not Reliable", "Lost to Competitor", "Not Interested (Temp)", "Rejected"].includes(String(l?.status || ""))).length,
+    [mappedLeads]
+  );
+
+  const getDraft = (lead) => {
+    const fallbackDate = lead?.nextFollowUp ? toYmdIST(lead.nextFollowUp) : toYmdIST(new Date(Date.now() + 86400000));
+    const fallbackTime = lead?.nextFollowUp ? formatTimeIST(lead.nextFollowUp) : "10:00";
+    return (
+      draftByLeadId[lead.id] || {
+        status: String(lead?.status || "Partner Follow-Up"),
+        note: "",
+        nextDate: fallbackDate,
+        nextTime: fallbackTime || "10:00",
+      }
+    );
+  };
+
+  const updateDraft = (leadId, patch) => {
+    setDraftByLeadId((prev) => {
+      const current = prev[leadId] || {};
+      return { ...prev, [leadId]: { ...current, ...patch } };
+    });
+  };
+
+  const submitUpdate = (lead) => {
+    const draft = getDraft(lead);
+    const nextStatus = String(draft.status || lead?.status || "Partner Follow-Up").trim();
+    const nowIso = new Date().toISOString();
+    const noteLine = String(draft.note || "").trim();
+    const noteText = noteLine
+      ? `[PARTNER UPDATE]: ${noteLine}`
+      : `[PARTNER UPDATE]: Status updated to ${nextStatus}.`;
+    const nextNotes = [...(Array.isArray(lead?.notes) ? lead.notes : []), { text: noteText, date: nowIso }];
+
+    const patch = { status: nextStatus, notes: nextNotes };
+    if (PARTNER_NEXT_ACTION_REQUIRED.has(nextStatus)) {
+      const ymd = String(draft.nextDate || "").trim() || toYmdIST(new Date(Date.now() + 86400000));
+      const hm = String(draft.nextTime || "").trim() || "10:00";
+      patch.nextFollowUp = `${ymd}T${hm}:00+05:30`;
+    }
+    onUpdateLead?.(lead.id, patch);
+    updateDraft(lead.id, { note: "" });
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="surface p-4 md:p-6">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.22em] font-bold text-slate-500">Partner Portal</div>
+              <div className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-1">Client Status Board</div>
+              <div className="text-sm text-slate-600 mt-1">
+                {mediator?.name || "Partner"} • mapped clients only
+              </div>
+            </div>
+            {onLogout ? (
+              <button type="button" className="btn-secondary px-4 py-2" onClick={onLogout}>
+                Logout
+              </button>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 mt-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-slate-500">Open</div>
+              <div className="text-xl font-extrabold text-slate-900">{openCount}</div>
+            </div>
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-indigo-700">Payment Done</div>
+              <div className="text-xl font-extrabold text-indigo-900">{paymentDoneCount}</div>
+            </div>
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-rose-700">Rejected</div>
+              <div className="text-xl font-extrabold text-rose-900">{rejectedCount}</div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search client / company / phone"
+              className="w-full py-3"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {mappedLeads.length === 0 ? (
+            <div className="surface p-5 text-sm text-slate-500 italic">No mapped clients found.</div>
+          ) : (
+            mappedLeads.map((lead) => {
+              const draft = getDraft(lead);
+              const statusColor = STATUS_CONFIG[lead?.status]?.color || "bg-slate-100 text-slate-700";
+              return (
+                <div key={lead.id} className="surface p-4">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <div className="text-lg font-extrabold text-slate-900 truncate">{lead?.name || "—"}</div>
+                      <div className="text-sm text-slate-600 truncate">{lead?.company || "No company"}</div>
+                      <div className="text-xs text-slate-500 mt-1">{lead?.phone || "No phone"}</div>
+                    </div>
+                    <div className={`text-[11px] px-2 py-1 rounded-full font-bold uppercase tracking-wide ${statusColor}`}>
+                      {lead?.status || "New"}
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-slate-500 mt-2">
+                    Next action:{" "}
+                    <span className="font-bold text-slate-700">
+                      {lead?.nextFollowUp
+                        ? `${toYmdIST(lead.nextFollowUp)}${formatTimeIST(lead.nextFollowUp) ? ` • ${formatTimeIST(lead.nextFollowUp)}` : ""}`
+                        : "Not scheduled"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2 mt-3">
+                    <div className="md:col-span-4">
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-bold text-slate-500 block mb-1">Status</label>
+                      <select
+                        value={draft.status}
+                        onChange={(e) => updateDraft(lead.id, { status: e.target.value })}
+                        className="w-full py-2"
+                      >
+                        {PARTNER_SIMPLE_STATUS_OPTIONS.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-bold text-slate-500 block mb-1">Next Date</label>
+                      <input
+                        type="date"
+                        value={draft.nextDate}
+                        onChange={(e) => updateDraft(lead.id, { nextDate: e.target.value })}
+                        className="w-full py-2"
+                        disabled={!PARTNER_NEXT_ACTION_REQUIRED.has(draft.status)}
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-bold text-slate-500 block mb-1">Time</label>
+                      <input
+                        type="time"
+                        value={draft.nextTime}
+                        onChange={(e) => updateDraft(lead.id, { nextTime: e.target.value })}
+                        className="w-full py-2"
+                        disabled={!PARTNER_NEXT_ACTION_REQUIRED.has(draft.status)}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-bold text-slate-500 block mb-1">Note</label>
+                      <input
+                        type="text"
+                        value={draft.note}
+                        onChange={(e) => updateDraft(lead.id, { note: e.target.value })}
+                        className="w-full py-2"
+                        placeholder="Short update"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex justify-end">
+                    <button type="button" className="btn-primary px-4 py-2" onClick={() => submitUpdate(lead)}>
+                      Save Update
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MediatorQuickUpdateView = ({ mediator, leads, onBack, onUpdateLead, onOpenLead }) => {
+  const [activeTab, setActiveTab] = useState("today");
+  const rejectedStatuses = useMemo(() => new Set(["Not Eligible", "Not Reliable", "Lost to Competitor", "Not Interested (Temp)", "Rejected"]), []);
+  const paymentStatuses = useMemo(() => new Set(["Payment Done", "Deal Closed"]), []);
+
+  const partnerLeads = useMemo(() => {
+    return (leads || []).filter((l) => l && String(l.mediatorId || "") === String(mediator?.id || ""));
+  }, [leads, mediator?.id]);
+
+  const openLeads = useMemo(() => partnerLeads.filter((l) => !isClosedOrRejectedLeadStatus(l?.status)), [partnerLeads]);
+  const rejectedLeads = useMemo(
+    () => partnerLeads.filter((l) => rejectedStatuses.has(String(l?.status || "").trim()) && !paymentStatuses.has(String(l?.status || "").trim())),
+    [partnerLeads, rejectedStatuses, paymentStatuses]
+  );
+  const paymentDoneLeads = useMemo(
+    () => partnerLeads.filter((l) => paymentStatuses.has(String(l?.status || "").trim())),
+    [partnerLeads, paymentStatuses]
+  );
+
+  const openVolume = useMemo(() => openLeads.reduce((sum, l) => sum + (Number(l?.loanAmount) || 0), 0), [openLeads]);
+  const paymentVolume = useMemo(() => paymentDoneLeads.reduce((sum, l) => sum + (Number(l?.loanAmount) || 0), 0), [paymentDoneLeads]);
+
+  const todayLeads = useMemo(() => openLeads.filter((l) => isTodayIST(l?.nextFollowUp)), [openLeads]);
+  const overdueLeads = useMemo(
+    () => openLeads.filter((l) => getDaysDiff(l?.nextFollowUp) < 0 && !isTodayIST(l?.nextFollowUp)),
+    [openLeads]
+  );
+  const upcomingLeads = useMemo(() => openLeads.filter((l) => getDaysDiff(l?.nextFollowUp) > 0), [openLeads]);
+
+  const queueList = activeTab === "overdue" ? overdueLeads : activeTab === "upcoming" ? upcomingLeads : todayLeads;
+
+  const monthlyPerformance = useMemo(() => {
+    const anchor = new Date(`${toYmIST(new Date())}-01T00:00:00+05:30`);
+    const keys = [];
+    for (let i = 5; i >= 0; i -= 1) {
+      const d = new Date(anchor.getTime());
+      d.setMonth(d.getMonth() - i);
+      keys.push(toYmIST(d));
+    }
+    return keys.map((ym) => {
+      const newClients = partnerLeads.filter((l) => toYmIST(l?.createdAt) === ym).length;
+      const doneRows = paymentDoneLeads.filter((l) => toYmIST(getLeadLastActivityIso(l)) === ym);
+      const rejectedRows = rejectedLeads.filter((l) => toYmIST(getLeadLastActivityIso(l)) === ym);
+      const doneVolume = doneRows.reduce((sum, l) => sum + (Number(l?.loanAmount) || 0), 0);
+      return {
+        ym,
+        newClients,
+        paymentDone: doneRows.length,
+        rejected: rejectedRows.length,
+        doneVolume,
+      };
+    });
+  }, [partnerLeads, paymentDoneLeads, rejectedLeads]);
+
+  const appendNote = (lead, text, patch = {}) => {
+    if (!lead?.id) return;
+    const nowIso = new Date().toISOString();
+    const nextNotes = [...(Array.isArray(lead.notes) ? lead.notes : []), { text, date: nowIso }];
+    onUpdateLead(lead.id, { ...patch, notes: nextNotes });
+  };
+
+  const onMarkContactUpdated = (lead) => {
+    const currentPhone = String(lead?.phone || "").trim();
+    let nextPhone = currentPhone;
+    if (!nextPhone) {
+      const entered = prompt("Enter updated client phone number:", "");
+      if (!entered) return;
+      nextPhone = String(entered).replace(/[^\d+]/g, "").trim();
+      if (!nextPhone) return;
+    }
+    appendNote(lead, `[PARTNER UPDATE]: Contact details updated${nextPhone ? ` (${nextPhone})` : ""}.`, {
+      phone: nextPhone,
+      status: "Partner Follow-Up",
+    });
+  };
+
+  const onMarkStatementShared = (lead) => {
+    appendNote(lead, "[PARTNER UPDATE]: Statement shared and sent for internal processing.", {
+      status: "Follow-Up Required",
+    });
+  };
+
+  const onMeetingDone = (lead) => {
+    const nextActionIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    appendNote(lead, "[PARTNER UPDATE]: Meeting completed.", {
+      status: "Follow-Up Required",
+      nextFollowUp: nextActionIso,
+    });
+  };
+
+  const onReschedule = (lead) => {
+    const ymd = prompt("Reschedule date (YYYY-MM-DD):", toYmdIST(new Date(Date.now() + 24 * 60 * 60 * 1000)));
+    if (!ymd) return;
+    const hm = prompt("Time (HH:MM, 24h):", "10:00");
+    if (!hm) return;
+    const iso = `${ymd}T${hm}:00+05:30`;
+    appendNote(lead, `[PARTNER UPDATE]: Meeting rescheduled to ${ymd} ${hm} IST.`, {
+      status: "Meeting Scheduled",
+      nextFollowUp: iso,
+    });
+  };
+
+  const onNotInterested = (lead) => {
+    const reason = prompt("Reason from client (short):", "") || "Client not interested currently.";
+    appendNote(lead, `[PARTNER UPDATE]: Not interested. ${reason}`, {
+      status: "Not Interested (Temp)",
+    });
+  };
+
+  return (
+    <div className="h-full bg-slate-50 flex flex-col overflow-hidden animate-fade-in">
+      <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button type="button" onClick={onBack} className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50">
+              <ArrowLeft size={16} className="text-slate-600" />
+            </button>
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-[0.22em] font-bold text-slate-500">Partner Workspace</div>
+              <div className="text-lg md:text-2xl font-extrabold text-slate-900 truncate">Sunrays 🤝 Jubilant</div>
+              <div className="text-xs text-slate-500">{mediator?.name || "Aashish"} • {mediator?.phone || "No phone number"}</div>
+            </div>
+          </div>
+          <div className="chip bg-slate-100 border-slate-200 text-slate-700">{partnerLeads.length} total clients</div>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-4">
+          <button
+            type="button"
+            onClick={() => setActiveTab("today")}
+            className={`rounded-xl border px-3 py-2 text-left ${activeTab === "today" ? "bg-emerald-50 border-emerald-200" : "bg-white border-slate-200"}`}
+          >
+            <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-slate-500">Today</div>
+            <div className="text-xl font-extrabold text-slate-900">{todayLeads.length}</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("overdue")}
+            className={`rounded-xl border px-3 py-2 text-left ${activeTab === "overdue" ? "bg-rose-50 border-rose-200" : "bg-white border-slate-200"}`}
+          >
+            <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-slate-500">Overdue</div>
+            <div className="text-xl font-extrabold text-rose-700">{overdueLeads.length}</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("upcoming")}
+            className={`rounded-xl border px-3 py-2 text-left ${activeTab === "upcoming" ? "bg-indigo-50 border-indigo-200" : "bg-white border-slate-200"}`}
+          >
+            <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-slate-500">Upcoming</div>
+            <div className="text-xl font-extrabold text-indigo-700">{upcomingLeads.length}</div>
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-3">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-emerald-700">Open</div>
+            <div className="text-xl font-extrabold text-emerald-900">{openLeads.length}</div>
+            <div className="text-xs text-emerald-700 mt-0.5">Volume {formatCurrency(openVolume)}</div>
+          </div>
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-rose-700">Rejected</div>
+            <div className="text-xl font-extrabold text-rose-900">{rejectedLeads.length}</div>
+            <div className="text-xs text-rose-700 mt-0.5">Closed out of pipeline</div>
+          </div>
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.2em] font-bold text-indigo-700">Payment Done</div>
+            <div className="text-xl font-extrabold text-indigo-900">{paymentDoneLeads.length}</div>
+            <div className="text-xs text-indigo-700 mt-0.5">Total {formatCurrency(paymentVolume)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+        <div className="surface p-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-extrabold text-slate-900">Open Queue</div>
+            <div className="text-xs text-slate-500">One-tap updates</div>
+          </div>
+          {queueList.length === 0 ? (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 italic">No leads in this queue.</div>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {queueList
+                .slice()
+                .sort((a, b) => {
+                  const at = parseIsoOrNull(a?.nextFollowUp)?.getTime?.() || Number.MAX_SAFE_INTEGER;
+                  const bt = parseIsoOrNull(b?.nextFollowUp)?.getTime?.() || Number.MAX_SAFE_INTEGER;
+                  return at - bt;
+                })
+                .map((lead) => {
+                  const leadNotes = Array.isArray(lead?.notes) ? lead.notes : [];
+                  const lastNote = leadNotes[leadNotes.length - 1]?.text || "";
+                  const nextActionLabel = lead?.nextFollowUp
+                    ? `${toYmdIST(lead.nextFollowUp)}${formatTimeIST(lead.nextFollowUp) ? ` • ${formatTimeIST(lead.nextFollowUp)}` : ""}`
+                    : "Not scheduled";
+                  return (
+                    <div key={lead.id} className="surface p-4 border border-slate-200">
+                      <div className="flex items-start justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => onOpenLead?.(lead)}
+                          className="text-left min-w-0 flex-1"
+                        >
+                          <div className="text-lg font-extrabold text-slate-900 truncate">{lead?.name || "—"}</div>
+                          <div className="text-sm text-slate-500 truncate">{lead?.company || "No company"}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${STATUS_CONFIG[lead?.status]?.color || "bg-slate-100 text-slate-700"}`}>
+                              {lead?.status || "New"}
+                            </span>
+                            <span className="text-[11px] text-slate-600">Next: {nextActionLabel}</span>
+                          </div>
+                        </button>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs text-slate-500">Amount</div>
+                          <div className="text-base font-extrabold text-slate-900">{formatCurrency(lead?.loanAmount || 0)}</div>
+                        </div>
+                      </div>
+                      {lastNote ? (
+                        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 line-clamp-2">
+                          {lastNote}
+                        </div>
+                      ) : null}
+                      <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
+                        <button type="button" onClick={() => onMarkContactUpdated(lead)} className="btn-secondary px-3 py-2 text-xs font-bold">
+                          Contact Updated
+                        </button>
+                        <button type="button" onClick={() => onMarkStatementShared(lead)} className="btn-secondary px-3 py-2 text-xs font-bold">
+                          Statement Shared
+                        </button>
+                        <button type="button" onClick={() => onMeetingDone(lead)} className="btn-secondary px-3 py-2 text-xs font-bold">
+                          Meeting Done
+                        </button>
+                        <button type="button" onClick={() => onReschedule(lead)} className="btn-secondary px-3 py-2 text-xs font-bold">
+                          Reschedule
+                        </button>
+                        <button type="button" onClick={() => onNotInterested(lead)} className="btn-secondary px-3 py-2 text-xs font-bold text-rose-700 border-rose-200">
+                          Not Interested
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+
+        <div className="surface p-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-extrabold text-slate-900">Monthly Performance</div>
+            <div className="text-xs text-slate-500">No interest-rate details shown</div>
+          </div>
+          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 font-bold">
+                <tr>
+                  <th className="p-3 text-left">Month</th>
+                  <th className="p-3 text-right">New</th>
+                  <th className="p-3 text-right">Payment Done</th>
+                  <th className="p-3 text-right">Rejected</th>
+                  <th className="p-3 text-right">Payment Value</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {monthlyPerformance.map((row) => (
+                  <tr key={row.ym}>
+                    <td className="p-3 font-bold text-slate-900">{monthKeyLabel(row.ym)}</td>
+                    <td className="p-3 text-right text-slate-700">{row.newClients}</td>
+                    <td className="p-3 text-right text-indigo-700 font-bold">{row.paymentDone}</td>
+                    <td className="p-3 text-right text-rose-700 font-bold">{row.rejected}</td>
+                    <td className="p-3 text-right font-bold text-slate-900">{formatCurrency(row.doneVolume)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="surface p-4">
+            <div className="text-sm font-extrabold text-slate-900">Open Clients</div>
+            <div className="mt-3 space-y-2">
+              {openLeads.length === 0 ? (
+                <div className="text-sm text-slate-500 italic">No open clients.</div>
+              ) : (
+                openLeads.slice().sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""))).map((lead) => (
+                  <button key={lead.id} type="button" onClick={() => onOpenLead?.(lead)} className="w-full text-left rounded-lg border border-slate-200 p-3 hover:bg-slate-50">
+                    <div className="font-bold text-slate-900 truncate">{lead?.name || "—"}</div>
+                    <div className="text-xs text-slate-500 truncate">{lead?.company || "No company"}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="surface p-4">
+            <div className="text-sm font-extrabold text-slate-900">Rejected Clients</div>
+            <div className="mt-3 space-y-2">
+              {rejectedLeads.length === 0 ? (
+                <div className="text-sm text-slate-500 italic">No rejected clients.</div>
+              ) : (
+                rejectedLeads.slice().sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""))).map((lead) => (
+                  <button key={lead.id} type="button" onClick={() => onOpenLead?.(lead)} className="w-full text-left rounded-lg border border-rose-200 bg-rose-50/50 p-3 hover:bg-rose-50">
+                    <div className="font-bold text-slate-900 truncate">{lead?.name || "—"}</div>
+                    <div className="text-xs text-rose-700 truncate">{lead?.status || "Rejected"}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="surface p-4">
+            <div className="text-sm font-extrabold text-slate-900">Payment Done Clients</div>
+            <div className="mt-3 space-y-2">
+              {paymentDoneLeads.length === 0 ? (
+                <div className="text-sm text-slate-500 italic">No payment done clients.</div>
+              ) : (
+                paymentDoneLeads.slice().sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""))).map((lead) => (
+                  <button key={lead.id} type="button" onClick={() => onOpenLead?.(lead)} className="w-full text-left rounded-lg border border-indigo-200 bg-indigo-50/50 p-3 hover:bg-indigo-50">
+                    <div className="font-bold text-slate-900 truncate">{lead?.name || "—"}</div>
+                    <div className="text-xs text-indigo-700 flex items-center justify-between gap-2">
+                      <span>{lead?.status || "Payment Done"}</span>
+                      <span className="font-bold">{formatCurrency(lead?.loanAmount || 0)}</span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MediatorProfile = ({
+  mediator,
+  leads,
+  onBack,
+  onReport,
+  onUpdateReport,
+  onRejectionReport,
+  onEdit,
+  onDelete,
+  onPendingReport,
+  onFollowUp,
+  onOpenQuickUpdate,
+}) => {
   const [showReportMenu, setShowReportMenu] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const mLeads = leads.filter((l) => l.mediatorId === mediator.id);
+  const isPilotPartner = useMemo(() => isAashishPilotPartner(mediator?.name), [mediator?.name]);
 
   const metrics = useMemo(() => {
     let totalTAT = 0;
@@ -5004,6 +9706,36 @@ const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, on
               <Phone size={16} className="text-slate-700" />
               <span className="hidden sm:inline">Call</span>
             </button>
+            {isPilotPartner && (
+              <>
+                <button
+                  onClick={() => onOpenQuickUpdate?.(mediator.id)}
+                  className="btn-secondary px-4 py-2"
+                  type="button"
+                  title="Open one-touch mobile-friendly partner board"
+                >
+                  <Layout size={16} className="text-slate-700" />
+                  <span className="hidden sm:inline">One-Touch Mode</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    const url = `${window.location.origin}${window.location.pathname}?mode=mediator-lite&mid=${encodeURIComponent(String(mediator.id || ""))}`;
+                    try {
+                      await navigator.clipboard.writeText(url);
+                      alert("Partner one-touch link copied.");
+                    } catch {
+                      alert(url);
+                    }
+                  }}
+                  className="btn-secondary px-4 py-2"
+                  type="button"
+                  title="Copy direct link to one-touch partner board"
+                >
+                  <LinkIcon size={16} className="text-slate-700" />
+                  <span className="hidden sm:inline">Copy Link</span>
+                </button>
+              </>
+            )}
             <button
               onClick={() => setShowReportMenu(!showReportMenu)}
               className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg hover:bg-slate-800 transition-all"
@@ -5160,7 +9892,64 @@ const MediatorProfile = ({ mediator, leads, onBack, onReport, onUpdateReport, on
 
 // --- Lead/Report Components (from original app) ---
 
-const LeadCard = ({ lead, onClick, mediators, onUpdateLead }) => {
+const formatOverdueMinutesShort = (mins) => {
+  const value = Number(mins);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 60) return `${Math.round(value)}m`;
+  if (value < 1440) return `${Math.round(value / 60)}h`;
+  return `${Math.round(value / 1440)}d`;
+};
+
+const normalizeLeadAutomationIndicators = (lead, automation) => {
+  const closedStatuses = new Set(["Deal Closed", "Payment Done", "Not Eligible", "Not Reliable", "Lost to Competitor"]);
+  const docs = lead?.documents || {};
+  const fallbackDocsMissing = ["kyc", "itr", "bank"].filter((k) => !docs?.[k]).map((k) => k.toUpperCase());
+  const docsMissingRaw = automation?.docs_missing;
+  const docsMissing = Array.isArray(docsMissingRaw)
+    ? docsMissingRaw.map((d) => String(d || "").trim().toUpperCase()).filter(Boolean)
+    : fallbackDocsMissing;
+
+  const overdueByMinutes = Number(automation?.overdue_by_minutes || 0);
+  const slaStatus = String(automation?.sla_status || "").trim().toUpperCase();
+  const localDaysDiff = getDaysDiff(lead?.nextFollowUp);
+  const localIsOverdue = localDaysDiff < 0 && !closedStatuses.has(String(lead?.status || ""));
+  const slaOverdue = slaStatus === "OVERDUE" || overdueByMinutes > 0 || localIsOverdue;
+  const overdueLabel = overdueByMinutes > 0 ? formatOverdueMinutesShort(overdueByMinutes) : localIsOverdue ? `${Math.abs(localDaysDiff)}d` : "";
+
+  let nextBestAction = String(automation?.next_best_action || "").trim();
+  let nextBestReason = String(automation?.next_best_reason || "").trim();
+  if (!nextBestAction) {
+    if (docsMissing.length > 0) {
+      nextBestAction = "Collect Docs";
+      nextBestReason = docsMissing.slice(0, 2).join(", ");
+    } else if (String(lead?.status || "") === "New") {
+      nextBestAction = "First Call";
+      nextBestReason = "New lead";
+    } else if (localIsOverdue) {
+      nextBestAction = "Follow Up";
+      nextBestReason = "Overdue next action";
+    } else {
+      nextBestAction = "Update Lead";
+      nextBestReason = "Log latest activity";
+    }
+  }
+
+  return {
+    slaStatus,
+    slaOverdue,
+    overdueByMinutes,
+    overdueLabel,
+    duplicateAlertCount: Math.max(0, Number(automation?.duplicate_alert_count || 0)),
+    nextBestAction,
+    nextBestReason,
+    priorityLabel: String(automation?.priority_label || "").trim(),
+    openTaskCount: Math.max(0, Number(automation?.open_task_count || 0)),
+    overdueTaskCount: Math.max(0, Number(automation?.overdue_task_count || 0)),
+    docsMissing,
+  };
+};
+
+const LeadCard = ({ lead, onClick, mediators, onUpdateLead, automation = null }) => {
   const statusInfo = STATUS_CONFIG[lead.status] || STATUS_CONFIG.New;
   const score = calculateLeadScore(lead);
   const daysDiff = getDaysDiff(lead.nextFollowUp);
@@ -5168,6 +9957,7 @@ const LeadCard = ({ lead, onClick, mediators, onUpdateLead }) => {
   const mediator = mediators.find((m) => m.id === lead.mediatorId);
   const isActive = !["Deal Closed", "Payment Done", "Not Eligible", "Not Reliable"].includes(lead.status);
   const tags = Array.isArray(lead.documents?.tags) ? lead.documents.tags : [];
+  const auto = normalizeLeadAutomationIndicators(lead, automation);
 
   const logNote = (text) => {
     if (!lead?.id) return;
@@ -5224,6 +10014,27 @@ const LeadCard = ({ lead, onClick, mediators, onUpdateLead }) => {
               {tags.length > 3 && <span className="chip">+{tags.length - 3}</span>}
             </div>
           )}
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            {auto.slaOverdue ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-rose-100 text-rose-700 border border-rose-200">
+                SLA Overdue{auto.overdueLabel ? ` • ${auto.overdueLabel}` : ""}
+              </span>
+            ) : auto.slaStatus ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide bg-emerald-50 text-emerald-700 border border-emerald-200">
+                SLA {auto.slaStatus}
+              </span>
+            ) : null}
+            {auto.nextBestAction ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 max-w-full truncate">
+                Next: {auto.nextBestAction}
+              </span>
+            ) : null}
+            {auto.duplicateAlertCount > 0 ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                Duplicates: {auto.duplicateAlertCount}
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="flex flex-col items-end gap-2 pl-2 border-l border-slate-100">
           <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm ${getScoreColor(score)}`}>
@@ -6024,6 +10835,7 @@ const LeadActionModal = ({
   onUpdate,
   onDelete,
   mediators,
+  automation = null,
   onOpenRejectionLetter,
   nativeApp = false,
   backendEnabled = false,
@@ -6035,12 +10847,32 @@ const LeadActionModal = ({
   staffUsers = [],
   staffUsersError = "",
   onReassignOwner,
+  onOpenPartnerStatusPdf,
 }) => {
+  const TRIAGE_STATEMENT_REASONS = [
+    "Client not reachable",
+    "Partner pending collection",
+    "Client promised later",
+    "Wrong/old contact details",
+    "Statement shared but unreadable",
+    "Client refused to share",
+    "Waiting for bank app/netbanking access",
+    "Other",
+  ];
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [attachmentBusy, setAttachmentBusy] = useState({});
   const [manualOverrideOpen, setManualOverrideOpen] = useState(false);
+  const [triagePanelOpen, setTriagePanelOpen] = useState(false);
+  const [triageDraft, setTriageDraft] = useState({
+    contactUpdated: null,
+    phonePdDone: null,
+    statementCollected: null,
+    statementReason: "",
+    perfiosDone: null,
+  });
+  const [includeStatusPdfTimeline, setIncludeStatusPdfTimeline] = useState(true);
 
   const allowManualOverride = !backendEnabled || canReassignOwner;
 
@@ -6208,6 +11040,7 @@ const LeadActionModal = ({
 
   if (!lead) return null;
   const attachments = normalizeAttachments(lead.documents || {});
+  const leadPhoneValue = String(lead.phone || "").trim();
   const mediatorName = mediators?.find?.((m) => m.id === lead.mediatorId)?.name || "Direct/None";
   const ownerLabel = staffUsers?.find?.((u) => String(u.userId) === String(lead.ownerId || ""))?.label || "";
   const lastActivityIso = getLeadLastActivityIso(lead);
@@ -6224,6 +11057,260 @@ const LeadActionModal = ({
   const isClosedStatus = ["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(lead.status);
   const isOverdue = !isClosedStatus && followUpDiffDays < 0;
   const docsCount = ["kyc", "itr", "bank"].reduce((acc, k) => (lead?.documents?.[k] ? acc + 1 : acc), 0);
+  const auto = normalizeLeadAutomationIndicators(lead, automation);
+  const triage = (lead?.documents && typeof lead.documents.triage === "object" && lead.documents.triage) || {};
+  const triagePerfiosPendingAge = (() => {
+    const start = parseIsoOrNull(triage?.perfiosPendingSince);
+    if (!start || triage?.perfiosDone) return "";
+    const ms = Date.now() - start.getTime();
+    if (!Number.isFinite(ms) || ms < 0) return "";
+    const hours = Math.floor(ms / 3600000);
+    const days = Math.floor(hours / 24);
+    if (days > 0) return `${days}d ${hours % 24}h pending`;
+    return `${hours}h pending`;
+  })();
+  const mediatorForLead = mediators?.find?.((m) => String(m.id) === String(lead.mediatorId)) || null;
+  const docsMissingList = ["kyc", "itr", "bank"].filter((k) => !lead?.documents?.[k]);
+
+  const buildLeadPendingWhatsappText = () => {
+    const lines = [];
+    lines.push(`Lead Status Update Request`);
+    lines.push(`Client: ${lead.name || "-"}`);
+    if (lead.company) lines.push(`Company: ${lead.company}`);
+    lines.push(`Current Status: ${lead.status || "-"}`);
+    lines.push(`Contact Details: ${!leadPhoneValue || triage?.contactUpdated === false ? "Pending / Not Updated" : "Available"}${leadPhoneValue ? ` (${leadPhoneValue})` : ""}`);
+    lines.push(`Phone PD: ${triage?.phonePdDone ? "Done" : "Pending"}`);
+    lines.push(`Statement: ${triage?.statementCollected ? "Collected" : "Pending"}${!triage?.statementCollected && triage?.statementReason ? ` (${triage.statementReason})` : ""}`);
+    lines.push(`Statement Working: ${triage?.perfiosDone ? "Done" : "Pending"}${triagePerfiosPendingAge ? ` (${triagePerfiosPendingAge})` : ""}`);
+    if (docsMissingList.length) lines.push(`Docs Pending: ${docsMissingList.map((d) => d.toUpperCase()).join(", ")}`);
+    if (lead.nextFollowUp) lines.push(`Next Action (IST): ${toYmdIST(lead.nextFollowUp)}${formatTimeIST(lead.nextFollowUp) ? ` ${formatTimeIST(lead.nextFollowUp)}` : ""}`);
+    lines.push("");
+    lines.push("Please share latest update and pending items status.");
+    return lines.join("\n");
+  };
+
+  const openPartnerPendingWhatsapp = () => {
+    const targetPhone = String(mediatorForLead?.phone || "").replace(/[^\d+]/g, "");
+    if (!targetPhone) {
+      alert("Mediator/partner phone not available.");
+      return;
+    }
+    const text = buildLeadPendingWhatsappText();
+    window.open(`https://wa.me/${targetPhone}?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+  };
+
+  const downloadLeadPendingWhatsappImage = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1080;
+      canvas.height = 1350;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not supported");
+
+      const bg = ctx.createLinearGradient(0, 0, 1080, 1350);
+      bg.addColorStop(0, "#050b18");
+      bg.addColorStop(1, "#0b162a");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, 1080, 1350);
+
+      // Card container
+      ctx.fillStyle = "#0f1d34";
+      roundRectCanvas(ctx, 40, 40, 1000, 1270, 28, true, false);
+      ctx.strokeStyle = "#23344f";
+      ctx.lineWidth = 2;
+      roundRectCanvas(ctx, 40, 40, 1000, 1270, 28, false, true);
+
+      ctx.fillStyle = "#d7b56d";
+      ctx.font = "700 28px ui-sans-serif, system-ui, -apple-system";
+      ctx.fillText("JC", 78, 92);
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "700 34px ui-sans-serif, system-ui, -apple-system";
+      ctx.fillText("Partner / Mediator Status", 130, 92);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "500 20px ui-sans-serif, system-ui, -apple-system";
+      ctx.fillText("WhatsApp summary (timeline excluded)", 130, 122);
+
+      const statusTone = isClosedStatus ? "#10b981" : isClosedOrRejectedLeadStatus(lead.status) ? "#ef4444" : "#f59e0b";
+      drawPillCanvas(ctx, `${lead.status || "Unknown"}`, 820, 64, statusTone);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "800 52px ui-sans-serif, system-ui, -apple-system";
+      wrapCanvasText(ctx, lead.name || "—", 72, 205, 936, 58, 2);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "600 24px ui-sans-serif, system-ui, -apple-system";
+      const sub = [lead.company, lead.location].filter(Boolean).join(" • ") || "Lead summary";
+      wrapCanvasText(ctx, sub, 72, 272, 936, 30, 2);
+
+      const contactStatus = !leadPhoneValue || triage?.contactUpdated === false ? "Pending / Not Updated" : "Available";
+      const phonePdStatus = triage?.phonePdDone ? "Done" : "Pending";
+      const statementStatus = triage?.statementCollected ? "Collected" : "Pending";
+      const workingStatus = triage?.perfiosDone ? "Done" : "Pending";
+      const nextActionLabel = lead.nextFollowUp ? `${toYmdIST(lead.nextFollowUp)}${formatTimeIST(lead.nextFollowUp) ? ` • ${formatTimeIST(lead.nextFollowUp)}` : ""}` : "Not scheduled";
+
+      const blocks = [
+        { title: "Contact Details", value: contactStatus, sub: leadPhoneValue || "Client phone not updated", tone: contactStatus.startsWith("Pending") ? "rose" : "emerald" },
+        { title: "Phone PD", value: phonePdStatus, sub: "", tone: phonePdStatus === "Done" ? "emerald" : "amber" },
+        { title: "Statement", value: statementStatus, sub: !triage?.statementCollected && triage?.statementReason ? triage.statementReason : "", tone: statementStatus === "Collected" ? "emerald" : "amber" },
+        { title: "Statement Working", value: workingStatus, sub: triagePerfiosPendingAge || "", tone: workingStatus === "Done" ? "emerald" : "amber" },
+        { title: "Docs Pending", value: docsMissingList.length ? docsMissingList.map((d) => d.toUpperCase()).join(", ") : "None", sub: `Collected ${docsCount}/3`, tone: docsMissingList.length ? "rose" : "emerald" },
+        { title: "Next Action (IST)", value: nextActionLabel, sub: `Partner: ${mediatorName}`, tone: "slate" },
+      ];
+
+      const colW = 462;
+      const rowH = 150;
+      blocks.forEach((b, i) => {
+        const x = 72 + (i % 2) * (colW + 12);
+        const y = 335 + Math.floor(i / 2) * (rowH + 14);
+        drawMetricCardCanvas(ctx, { x, y, w: colW, h: rowH, ...b });
+      });
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "700 24px ui-sans-serif, system-ui, -apple-system";
+      ctx.fillText("Message to partner/mediator", 72, 848);
+      ctx.fillStyle = "#0b1527";
+      roundRectCanvas(ctx, 72, 872, 936, 255, 18, true, false);
+      ctx.strokeStyle = "#253248";
+      ctx.lineWidth = 2;
+      roundRectCanvas(ctx, 72, 872, 936, 255, 18, false, true);
+      ctx.fillStyle = "#dbeafe";
+      ctx.font = "600 21px ui-sans-serif, system-ui, -apple-system";
+      const msgPreview = [
+        "Please share latest update for this client.",
+        `Pending: ${[
+          !leadPhoneValue || triage?.contactUpdated === false ? "Contact Details" : null,
+          !triage?.phonePdDone ? "Phone PD" : null,
+          !triage?.statementCollected ? "Statement" : null,
+          triage?.statementCollected && !triage?.perfiosDone ? "Statement Working" : null,
+          docsMissingList.length ? `Docs (${docsMissingList.map((d) => d.toUpperCase()).join(", ")})` : null,
+        ]
+          .filter(Boolean)
+          .join(", ") || "No pending items"}.`,
+        `Next action: ${nextActionLabel}.`,
+      ].join(" ");
+      wrapCanvasText(ctx, msgPreview, 98, 918, 884, 32, 6);
+
+      ctx.fillStyle = "#64748b";
+      ctx.font = "500 18px ui-sans-serif, system-ui, -apple-system";
+      ctx.fillText(`Generated ${toYmdIST(new Date())} • Jubilant Capital`, 72, 1200);
+
+      const url = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Lead_Status_WhatsApp_${String(lead.name || "Lead").replace(/[^\w]+/g, "_")}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      alert(err?.message || "Failed to generate image.");
+    }
+  };
+
+  useEffect(() => {
+    setTriageDraft({
+      contactUpdated: typeof triage?.contactUpdated === "boolean" ? triage.contactUpdated : leadPhoneValue ? true : null,
+      phonePdDone: typeof triage?.phonePdDone === "boolean" ? triage.phonePdDone : null,
+      statementCollected: typeof triage?.statementCollected === "boolean" ? triage.statementCollected : null,
+      statementReason: String(triage?.statementReason || ""),
+      perfiosDone: typeof triage?.perfiosDone === "boolean" ? triage.perfiosDone : null,
+    });
+    // Only reset when changing leads or triage snapshot changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead.id, triage?.contactUpdated, triage?.phonePdDone, triage?.statementCollected, triage?.statementReason, triage?.perfiosDone]);
+
+  useEffect(() => {
+    if (lead.status === "Meeting Scheduled" && !triage?.triageOpenedAt) {
+      setTriagePanelOpen(true);
+    }
+  }, [lead.status, triage?.triageOpenedAt]);
+
+  const saveTriageFlow = () => {
+    const nowIso = new Date().toISOString();
+    const docsCurrent = lead.documents || {};
+    const existingTriage = (docsCurrent && typeof docsCurrent.triage === "object" && docsCurrent.triage) || {};
+    const nextTriage = {
+      ...existingTriage,
+      triageOpenedAt: existingTriage.triageOpenedAt || nowIso,
+      lastReviewedAt: nowIso,
+      contactUpdated: triageDraft.contactUpdated,
+      phonePdDone: triageDraft.phonePdDone,
+      statementCollected: triageDraft.statementCollected,
+      statementReason: triageDraft.statementCollected === false ? triageDraft.statementReason || "" : "",
+      perfiosDone: triageDraft.statementCollected ? triageDraft.perfiosDone : null,
+    };
+
+    const notesAppend = [];
+    const pushNote = (tag, text) => notesAppend.push({ text: `[${tag}]: ${text}`, date: nowIso });
+
+    if (existingTriage.contactUpdated !== nextTriage.contactUpdated) {
+      pushNote("TRIAGE", `Contact details ${nextTriage.contactUpdated ? "confirmed/updated" : "not updated by partner/mediator"}.`);
+    }
+    if (existingTriage.phonePdDone !== nextTriage.phonePdDone) {
+      pushNote("PHONE PD", nextTriage.phonePdDone ? "Phone PD completed." : "Phone PD pending.");
+      if (nextTriage.phonePdDone && !existingTriage.phonePdDoneAt) nextTriage.phonePdDoneAt = nowIso;
+    }
+
+    if (existingTriage.statementCollected !== nextTriage.statementCollected) {
+      pushNote(
+        "STATEMENT",
+        nextTriage.statementCollected
+          ? "Statement collected."
+          : `Statement not received${nextTriage.statementReason ? ` (${nextTriage.statementReason})` : ""}.`
+      );
+      if (nextTriage.statementCollected && !existingTriage.statementCollectedAt) nextTriage.statementCollectedAt = nowIso;
+    }
+
+    if (nextTriage.statementCollected) {
+      if (existingTriage.perfiosDone !== nextTriage.perfiosDone) {
+        if (nextTriage.perfiosDone) {
+          const pendingSince = parseIsoOrNull(existingTriage.perfiosPendingSince || nextTriage.perfiosPendingSince);
+          const lagLabel =
+            pendingSince && Number.isFinite(pendingSince.getTime())
+              ? (() => {
+                  const h = Math.max(0, Math.floor((Date.now() - pendingSince.getTime()) / 3600000));
+                  const d = Math.floor(h / 24);
+                  return d > 0 ? `${d}d ${h % 24}h` : `${h}h`;
+                })()
+              : "";
+          pushNote("STATEMENT WORKING", `Statement working completed${lagLabel ? ` after ${lagLabel}` : ""}.`);
+          nextTriage.perfiosDoneAt = nowIso;
+        } else {
+          pushNote("STATEMENT WORKING", "Statement working pending.");
+        }
+      }
+      if (nextTriage.perfiosDone === false && !existingTriage.perfiosPendingSince) {
+        nextTriage.perfiosPendingSince = nowIso;
+      }
+    } else {
+      nextTriage.perfiosDone = null;
+    }
+
+    let nextStatus = lead.status;
+    let routeNote = "";
+    const phoneMissingOrNotUpdated = !leadPhoneValue || triageDraft.contactUpdated === false;
+    const contactReadyForInternal = triageDraft.contactUpdated === true && !!leadPhoneValue;
+    if (phoneMissingOrNotUpdated) {
+      nextStatus = "Contact Details Not Received";
+      routeNote = "Mapped to mediator pending list: contact details not updated.";
+    } else if (contactReadyForInternal && (triageDraft.phonePdDone === false || triageDraft.phonePdDone == null)) {
+      nextStatus = "Follow-Up Required";
+      routeNote = "Mapped to internal follow-up: phone PD pending.";
+    } else if (triageDraft.statementCollected === false || triageDraft.statementCollected == null) {
+      nextStatus = "Statements Not Received";
+      routeNote = `Mapped to mediator pending list: statements not received${triageDraft.statementReason ? ` (${triageDraft.statementReason})` : ""}.`;
+    } else if (triageDraft.perfiosDone === false || triageDraft.perfiosDone == null) {
+      nextStatus = "Statement Working Pending";
+      routeNote = "Mapped to statement working pending: statement received but processing not completed.";
+    } else if (triageDraft.perfiosDone === true) {
+      routeNote = "Triage complete: phone PD, statement collection and statement working all marked done.";
+    }
+    if (routeNote) pushNote("TRIAGE ROUTE", routeNote);
+
+    onUpdate(lead.id, {
+      status: nextStatus,
+      documents: { ...docsCurrent, triage: nextTriage },
+      notes: [...(lead.notes || []), ...notesAppend],
+    });
+  };
 
   const handleOutcome = (type) => {
     const today = new Date().toISOString();
@@ -6578,6 +11665,227 @@ const LeadActionModal = ({
             <div className="text-[11px] font-bold text-slate-500 mt-1">{attachments.length} attachment{attachments.length === 1 ? "" : "s"}</div>
           </div>
         </div>
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className={`rounded-2xl border p-3 ${auto.slaOverdue ? "border-rose-200 bg-rose-50/80" : "border-slate-200/70 bg-white/70"}`}>
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Automation SLA</div>
+            <div className={`mt-1 font-extrabold ${auto.slaOverdue ? "text-rose-700" : "text-slate-900"}`}>
+              {auto.slaOverdue ? "Overdue" : auto.slaStatus || "Tracked"}
+              {auto.overdueLabel ? ` • ${auto.overdueLabel}` : ""}
+            </div>
+            <div className="text-[11px] font-bold text-slate-500 mt-1">
+              {auto.priorityLabel ? `Priority: ${auto.priorityLabel}` : "Priority not set"}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-slate-200/70 p-3 bg-white/70">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Next Best Action</div>
+            <div className="mt-1 font-extrabold text-slate-900 truncate">{auto.nextBestAction || "—"}</div>
+            <div className="text-[11px] font-bold text-slate-500 mt-1 truncate">
+              {auto.nextBestReason || (auto.docsMissing.length ? `Missing: ${auto.docsMissing.join(", ")}` : "No reason available")}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-slate-200/70 p-3 bg-white/70">
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Duplicate Alerts</div>
+            <div className={`mt-1 font-extrabold ${auto.duplicateAlertCount > 0 ? "text-amber-700" : "text-slate-900"}`}>{auto.duplicateAlertCount}</div>
+            <div className="text-[11px] font-bold text-slate-500 mt-1">
+              Tasks: {auto.openTaskCount} open{auto.overdueTaskCount > 0 ? ` • ${auto.overdueTaskCount} overdue` : ""}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="surface-solid p-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Partner / Mediator Status PDF</div>
+            <div className="font-extrabold text-slate-900 mt-1">Generate status request sheet for this lead</div>
+            <div className="text-[11px] text-slate-500 mt-1">
+              PDF supports optional timeline. WhatsApp image is compact and excludes timeline.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-secondary px-4 py-3 shrink-0" onClick={downloadLeadPendingWhatsappImage}>
+              <Download size={14} /> WhatsApp Image
+            </button>
+            <button
+              type="button"
+              className={`btn-secondary px-4 py-3 shrink-0 ${!mediatorForLead?.phone ? "opacity-50 pointer-events-none" : ""}`}
+              onClick={openPartnerPendingWhatsapp}
+              title={mediatorForLead?.phone ? "Send pending summary to partner/mediator" : "Mediator phone not available"}
+            >
+              <MessageCircle size={14} /> Send Pending
+            </button>
+            <button
+              type="button"
+              className="btn-primary px-4 py-3 shrink-0"
+              onClick={() => onOpenPartnerStatusPdf?.(lead, { includeTimeline: includeStatusPdfTimeline })}
+            >
+              <Printer size={14} /> Generate PDF
+            </button>
+          </div>
+        </div>
+        <label className="mt-3 inline-flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="accent-indigo-600 w-4 h-4"
+            checked={includeStatusPdfTimeline}
+            onChange={(e) => setIncludeStatusPdfTimeline(!!e.target.checked)}
+          />
+          Include lead timeline (notes/history) in PDF
+        </label>
+      </div>
+
+      <div className="surface-solid p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Post-Meeting Triage Flow</div>
+              <div className="font-extrabold text-slate-900 mt-1">Track phone PD {"->"} statement {"->"} statement working and auto-route pending queues</div>
+            <div className="text-[11px] text-slate-500 mt-1">
+              This updates status mapping (mediator pending vs internal follow-up) and writes timeline notes.
+            </div>
+          </div>
+          <button type="button" className="btn-secondary px-3 py-2 shrink-0" onClick={() => setTriagePanelOpen((p) => !p)}>
+            {triagePanelOpen ? "Hide Triage" : "Open Triage"}
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {typeof triage?.contactUpdated === "boolean" && <span className="chip">Contact: {triage.contactUpdated ? "Updated" : "Missing"}</span>}
+          {typeof triage?.phonePdDone === "boolean" && <span className="chip">Phone PD: {triage.phonePdDone ? "Done" : "Pending"}</span>}
+          {typeof triage?.statementCollected === "boolean" && <span className="chip">Statement: {triage.statementCollected ? "Collected" : "Pending"}</span>}
+          {typeof triage?.perfiosDone === "boolean" && <span className="chip">Statement Working: {triage.perfiosDone ? "Done" : "Pending"}</span>}
+          {triagePerfiosPendingAge && <span className="chip bg-amber-50 border-amber-200 text-amber-700">Statement Working {triagePerfiosPendingAge}</span>}
+        </div>
+
+        {triagePanelOpen && (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-500 tracking-wider block mb-1">Phone / Contact updated in app?</label>
+                <select
+                  value={triageDraft.contactUpdated === null ? "" : triageDraft.contactUpdated ? "yes" : "no"}
+                  onChange={(e) =>
+                    setTriageDraft((p) => ({
+                      ...p,
+                      contactUpdated: e.target.value === "" ? null : e.target.value === "yes",
+                    }))
+                  }
+                  className="w-full py-2 text-sm"
+                >
+                  <option value="">Select</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No (Mediator pending)</option>
+                </select>
+                <div className="text-[10px] text-slate-500 mt-1">Current phone: {leadPhoneValue || "Not updated"}</div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-500 tracking-wider block mb-1">Phone PD done?</label>
+                <select
+                  value={triageDraft.phonePdDone === null ? "" : triageDraft.phonePdDone ? "yes" : "no"}
+                  onChange={(e) =>
+                    setTriageDraft((p) => ({
+                      ...p,
+                      phonePdDone: e.target.value === "" ? null : e.target.value === "yes",
+                    }))
+                  }
+                  className="w-full py-2 text-sm"
+                >
+                  <option value="">Select</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No (Internal follow-up)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-500 tracking-wider block mb-1">Statement collected?</label>
+                <select
+                  value={triageDraft.statementCollected === null ? "" : triageDraft.statementCollected ? "yes" : "no"}
+                  onChange={(e) =>
+                    setTriageDraft((p) => ({
+                      ...p,
+                      statementCollected: e.target.value === "" ? null : e.target.value === "yes",
+                      perfiosDone: e.target.value === "yes" ? p.perfiosDone : null,
+                    }))
+                  }
+                  className="w-full py-2 text-sm"
+                >
+                  <option value="">Select</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No (Mediator pending)</option>
+                </select>
+                <div className="text-[10px] text-slate-500 mt-1">Statement can be tracked even if contact/Phone PD is still pending.</div>
+              </div>
+
+              {triageDraft.statementCollected === false ? (
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-500 tracking-wider block mb-1">Statement not received reason</label>
+                  <select
+                    value={triageDraft.statementReason || ""}
+                    onChange={(e) => setTriageDraft((p) => ({ ...p, statementReason: e.target.value }))}
+                    className="w-full py-2 text-sm"
+                  >
+                    <option value="">Select reason</option>
+                    {TRIAGE_STATEMENT_REASONS.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-500 tracking-wider block mb-1">Statement working done?</label>
+                  <select
+                    value={triageDraft.perfiosDone === null ? "" : triageDraft.perfiosDone ? "yes" : "no"}
+                    onChange={(e) =>
+                      setTriageDraft((p) => ({
+                        ...p,
+                        perfiosDone: e.target.value === "" ? null : e.target.value === "yes",
+                      }))
+                    }
+                    className="w-full py-2 text-sm"
+                  >
+                    <option value="">Select</option>
+                    <option value="yes">Yes (mark timeline)</option>
+                    <option value="no">No (track delay)</option>
+                  </select>
+                  <div className="text-[10px] text-slate-500 mt-1">Statement working completion gets logged in timeline with delay duration.</div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-700">
+              <div className="font-bold text-slate-800 mb-1">Routing logic</div>
+              <ul className="space-y-1">
+                  <li>Missing phone/contact update {"->"} <span className="font-bold">Contact Details Not Received</span> (partner/mediator pending)</li>
+                  <li>Phone updated and Phone PD not done {"->"} <span className="font-bold">Internal Follow-Up</span> (status: Follow-Up Required)</li>
+                  <li>Phone PD done but statement not received {"->"} <span className="font-bold">Statements Not Received</span> (partner/mediator pending)</li>
+                  <li>Statement received but statement working not done {"->"} <span className="font-bold">Statement Working Pending</span></li>
+                </ul>
+              </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-primary px-4 py-2" onClick={saveTriageFlow}>
+                <CheckCircle size={14} /> Save Triage & Route
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-4 py-2"
+                onClick={() =>
+                  setTriageDraft((p) => ({
+                    ...p,
+                    perfiosDone: true,
+                    phonePdDone: p.phonePdDone === null ? true : p.phonePdDone,
+                    statementCollected: p.statementCollected === null ? true : p.statementCollected,
+                  }))
+                }
+              >
+                <Sparkles size={14} /> Mark Statement Working Done
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -6973,7 +12281,7 @@ const LeadActionModal = ({
               onClick={() => onOpenRejectionLetter?.(lead)}
               className="w-full py-3 btn-primary"
             >
-              <Printer size={16} /> Print Rejection Letter
+              <Printer size={16} /> Print Mediator Rejection Letter
             </button>
           )}
         </div>
@@ -7031,6 +12339,8 @@ export default function LirasApp({ backend = null }) {
   const supabase = backend?.supabase || null;
   const authUser = backend?.user || null;
   const role = backend?.role || "staff";
+  const partnerPortal = backend?.partnerPortal || null;
+  const isPartnerPortal = Boolean(partnerPortal?.enabled);
   const isAdmin = backendEnabled && role === "admin";
   const currentUser = backendEnabled ? authUser?.email || "User" : "Admin";
   const onLogout = typeof backend?.onLogout === "function" ? backend.onLogout : null;
@@ -7041,6 +12351,8 @@ export default function LirasApp({ backend = null }) {
   const [staffUsers, setStaffUsers] = useState([]);
   const [staffUsersError, setStaffUsersError] = useState("");
   const [staffReloadNonce, setStaffReloadNonce] = useState(0);
+  const [leadAutomationRows, setLeadAutomationRows] = useState([]);
+  const [leadAutomationViewUnavailable, setLeadAutomationViewUnavailable] = useState(false);
 
   const uuidv4 = () => {
     const bytes = new Uint8Array(16);
@@ -7145,12 +12457,15 @@ export default function LirasApp({ backend = null }) {
   const [midDayUpdateId, setMidDayUpdateId] = useState(null);
   const [mediatorRejectionReportId, setMediatorRejectionReportId] = useState(null);
   const [mediatorPendingReportId, setMediatorPendingReportId] = useState(null);
+  const [mediatorQuickUpdateId, setMediatorQuickUpdateId] = useState(null);
   const [rejectionReportLead, setRejectionReportLead] = useState(null);
+  const [leadPartnerStatusReport, setLeadPartnerStatusReport] = useState(null); // { leadId, includeTimeline }
   const [aiTone, setAiTone] = useState(() => safeLocalStorage.getItem("liras_ai_tone") || "partner");
   const [aiLanguage, setAiLanguage] = useState(() => safeLocalStorage.getItem("liras_ai_language") || "English");
   const [pendingCall, setPendingCall] = useState(() => parseJson(safeLocalStorage.getItem("liras_pending_call_v1"), null));
   const [isCallOutcomeOpen, setIsCallOutcomeOpen] = useState(false);
   const [callOutcomeForm, setCallOutcomeForm] = useState({ outcome: "connected", notes: "" });
+  const mediatorLiteDeepLinkHandledRef = useRef(false);
 
   useEffect(() => {
     safeLocalStorage.setItem("liras_ai_tone", aiTone);
@@ -7364,6 +12679,25 @@ export default function LirasApp({ backend = null }) {
   }, [backendEnabled, supabase, authUser?.id]);
 
   useEffect(() => {
+    if (mediatorLiteDeepLinkHandledRef.current) return;
+    if (!Array.isArray(mediators) || mediators.length === 0) return;
+    mediatorLiteDeepLinkHandledRef.current = true;
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const mode = String(params.get("mode") || "").toLowerCase();
+      const mid = String(params.get("mid") || "").trim();
+      if (mode !== "mediator-lite" || !mid) return;
+      const target = mediators.find((m) => String(m?.id || "") === mid);
+      if (!target) return;
+      if (!isAashishPilotPartner(target?.name)) return;
+      setMediatorQuickUpdateId(mid);
+      setActiveView("mediators");
+    } catch {
+      // ignore malformed URL params
+    }
+  }, [mediators]);
+
+  useEffect(() => {
     if (!backendEnabled) return;
     let cancelled = false;
 
@@ -7390,6 +12724,50 @@ export default function LirasApp({ backend = null }) {
       cancelled = true;
     };
   }, [backendEnabled, supabase, authUser?.id, announcementsReloadNonce]);
+
+  useEffect(() => {
+    if (!backendEnabled || !supabase || !authUser?.id) {
+      setLeadAutomationRows([]);
+      setLeadAutomationViewUnavailable(false);
+      return;
+    }
+    if (leadAutomationViewUnavailable) return;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const { data, error } = await supabase
+        .from("lead_management_automation_view")
+        .select(
+          "lead_id,priority_label,sla_status,overdue_by_minutes,next_best_action,next_best_reason,docs_missing,duplicate_alert_count,open_task_count,overdue_task_count"
+        );
+
+      if (cancelled) return;
+
+      if (error) {
+        const msg = String(error?.message || error?.details || "");
+        const code = String(error?.code || "");
+        if (
+          code === "PGRST205" ||
+          /lead_management_automation_view/i.test(msg) ||
+          /schema cache/i.test(msg) ||
+          /does not exist/i.test(msg)
+        ) {
+          setLeadAutomationRows([]);
+          setLeadAutomationViewUnavailable(true);
+          return;
+        }
+        console.warn("Lead automation view load failed", error);
+        return;
+      }
+
+      setLeadAutomationRows(Array.isArray(data) ? data : []);
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [backendEnabled, supabase, authUser?.id, leads.length, leadAutomationViewUnavailable]);
 
   useEffect(() => {
     if (!backendEnabled || !isAdmin) return;
@@ -7526,19 +12904,32 @@ export default function LirasApp({ backend = null }) {
   };
 
   const stats = useMemo(
-    () => ({
-      total: leads.length,
-      today: leads.filter((l) => isTodayIST(l.nextFollowUp)).length,
-      overdue: leads.filter((l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)).length,
-      stale: leads.filter((l) => {
-        if (!l) return false;
-        if (["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status)) return false;
-        const lastIso = getLeadLastActivityIso(l);
-        return daysSinceIST(lastIso) >= STALE_AFTER_DAYS;
-      }).length,
-      watch: leads.filter((l) => l.isHighPotential).length,
-      renewal: leads.filter((l) => l.status === "Payment Done" && getDaysDiff(l.nextFollowUp) <= 30).length,
-    }),
+    () => {
+      const monthKeys = [];
+      const anchor = new Date(`${toYmIST(new Date())}-01T00:00:00+05:30`);
+      for (let i = 0; i < 6; i += 1) {
+        const d = new Date(anchor.getTime());
+        d.setMonth(d.getMonth() + i);
+        monthKeys.push(toYmIST(d));
+      }
+      const renewal = leads.filter((l) => {
+        if (!isRenewalEligibleLead(l)) return false;
+        const info = getRenewalTimelineInfo(l);
+        const renewalMonth = info?.renewalDate ? toYmIST(info.renewalDate) : "";
+        if (renewalMonth && monthKeys.includes(renewalMonth)) return true;
+        const nextAction = parseIsoOrNull(l?.nextFollowUp);
+        const nextActionMonth = nextAction ? toYmIST(nextAction) : "";
+        return Boolean(nextActionMonth && monthKeys.includes(nextActionMonth));
+      }).length;
+      return {
+        total: leads.length,
+        today: leads.filter((l) => isTodayIST(l.nextFollowUp)).length,
+        overdue: leads.filter((l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)).length,
+        stale: leads.filter((l) => isStaleLead(l)).length,
+        watch: leads.filter((l) => l.isHighPotential).length,
+        renewal,
+      };
+    },
     [leads]
   );
 
@@ -7612,6 +13003,15 @@ export default function LirasApp({ backend = null }) {
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [leads]);
+
+  const leadAutomationByLeadId = useMemo(() => {
+    const map = {};
+    (leadAutomationRows || []).forEach((row) => {
+      const key = String(row?.lead_id || "");
+      if (key) map[key] = row;
+    });
+    return map;
+  }, [leadAutomationRows]);
 
   const activeMediatorForProfile = useMemo(() => mediators.find((m) => m.id === activeView), [mediators, activeView]);
 
@@ -7741,11 +13141,104 @@ export default function LirasApp({ backend = null }) {
 
   const updateLead = (id, updates, opts = {}) => {
     const skipBackend = !!opts.skipBackend;
-    setLeads((prev) => (prev || []).map((l) => (l.id === id ? { ...l, ...updates } : l)));
+    let prevLeadSnapshot = null;
+    let nextLeadSnapshot = null;
+    setLeads((prev) =>
+      (prev || []).map((l) => {
+        if (l.id !== id) return l;
+        prevLeadSnapshot = l;
+        nextLeadSnapshot = { ...l, ...updates };
+        return nextLeadSnapshot;
+      })
+    );
     setActiveLead((prev) => (prev && prev.id === id ? { ...prev, ...updates } : prev));
 
     if (!skipBackend && backendEnabled) {
       scheduleLeadPersist(id);
+    }
+
+    const followStatusChanged =
+      nextLeadSnapshot &&
+      isFollowUpStatusValue(nextLeadSnapshot.status) &&
+      (
+        !prevLeadSnapshot ||
+        !isFollowUpStatusValue(prevLeadSnapshot.status) ||
+        String(prevLeadSnapshot.nextFollowUp || "") !== String(nextLeadSnapshot.nextFollowUp || "")
+      );
+
+    if (followStatusChanged) {
+      const ownerId = String(nextLeadSnapshot.ownerId || authUser?.id || "");
+      const assignedTo = String(nextLeadSnapshot.ownerId || authUser?.id || "");
+      const baseDueAt = nextLeadSnapshot.nextFollowUp ? ensureIsoString(nextLeadSnapshot.nextFollowUp, nextBusinessDay10AmIstIso()) : nextBusinessDay10AmIstIso();
+      const dueYmd = toYmdIST(baseDueAt) || toYmdIST(new Date());
+      const dedupeKey = `FOLLOW_UP:${nextLeadSnapshot.id}:${dueYmd}`;
+      const localTaskId = `fu_${String(nextLeadSnapshot.id)}_${dueYmd}`;
+      const title = `Follow up: ${nextLeadSnapshot.name || "Lead"}`;
+      const taskNotes = `Auto-created from lead status (${String(nextLeadSnapshot.status || "")})`;
+
+      setTasks((prev) => {
+        const list = Array.isArray(prev) ? [...prev] : [];
+        const idx = list.findIndex((t) => String(t?.dedupeKey || "") === dedupeKey || String(t?.id || "") === localTaskId);
+        const nextTask = {
+          id: idx >= 0 ? String(list[idx].id || localTaskId) : localTaskId,
+          title,
+          dueAt: baseDueAt,
+          priority: "medium",
+          leadId: String(nextLeadSnapshot.id),
+          notes: idx >= 0 && list[idx]?.notes ? String(list[idx].notes) : taskNotes,
+          done: idx >= 0 ? Boolean(list[idx].done) : false,
+          createdAt: idx >= 0 ? String(list[idx].createdAt || new Date().toISOString()) : new Date().toISOString(),
+          dedupeKey,
+          taskType: "FOLLOW_UP",
+          source: "lead_status",
+        };
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...nextTask };
+          return list;
+        }
+        return [nextTask, ...list];
+      });
+
+      if (backendEnabled && supabase && ownerId) {
+        void (async () => {
+          try {
+            const { data: existing, error: findErr } = await supabase
+              .from("tasks")
+              .select("id,status")
+              .eq("dedupe_key", dedupeKey)
+              .limit(1)
+              .maybeSingle();
+            if (findErr) throw findErr;
+
+            const payload = {
+              owner_id: ownerId,
+              created_by: authUser?.id || null,
+              assigned_to: assignedTo || null,
+              lead_id: nextLeadSnapshot.id,
+              task_type: "FOLLOW_UP",
+              status: String(existing?.status || "OPEN") === "DONE" ? "DONE" : "OPEN",
+              title,
+              due_at: baseDueAt,
+              due_window_end: new Date(new Date(baseDueAt).getTime() + 8 * 60 * 60 * 1000).toISOString(),
+              dedupe_key: dedupeKey,
+              payload_json: {
+                lead_status: String(nextLeadSnapshot.status || ""),
+                source: "web_lead_status_update",
+              },
+            };
+
+            if (existing?.id) {
+              const { error: updErr } = await supabase.from("tasks").update(payload).eq("id", existing.id);
+              if (updErr) throw updErr;
+            } else {
+              const { error: insErr } = await supabase.from("tasks").insert(payload);
+              if (insErr) throw insErr;
+            }
+          } catch {
+            // The SQL migration / tasks table may not exist yet; local task is still created.
+          }
+        })();
+      }
     }
   };
 
@@ -8338,6 +13831,19 @@ export default function LirasApp({ backend = null }) {
   if (rejectionReportLead) {
     return <RejectReportView lead={rejectionReportLead} onBack={() => setRejectionReportLead(null)} />;
   }
+  if (leadPartnerStatusReport?.leadId) {
+    const lead = leads.find((l) => String(l.id) === String(leadPartnerStatusReport.leadId));
+    if (!lead) return null;
+    const mediator = mediators.find((m) => String(m.id) === String(lead.mediatorId));
+    return (
+      <LeadPartnerStatusRequestPdfView
+        lead={lead}
+        mediator={mediator}
+        includeTimeline={!!leadPartnerStatusReport.includeTimeline}
+        onBack={() => setLeadPartnerStatusReport(null)}
+      />
+    );
+  }
   if (reportType === "eod") {
     return <EodActivityReport leads={leads} mediators={mediators} staffUsers={staffUsers} onBack={() => setReportType(null)} />;
   }
@@ -8348,6 +13854,35 @@ export default function LirasApp({ backend = null }) {
   }
   if (reportType === "clearance_pdf") {
     return <ClearancePrintReport leads={leads} mediators={mediators} onBack={() => setReportType(null)} />;
+  }
+  if (reportType === "rejection_internal") {
+    return <InternalRejectionMasterReportView leads={leads} mediators={mediators} onBack={() => setReportType(null)} />;
+  }
+  if (reportType === "owner_daily_partner") {
+    return (
+      <OwnerDailyPartnerReportView
+        leads={leads}
+        mediators={mediators}
+        staffUsers={staffUsers}
+        backendEnabled={backendEnabled}
+        authUser={authUser}
+        currentUser={currentUser}
+        onBack={() => setReportType(null)}
+      />
+    );
+  }
+  if (reportType === "daily_work_plan") {
+    return (
+      <DailyWorkUpdatePlanReportView
+        leads={leads}
+        mediators={mediators}
+        staffUsers={staffUsers}
+        backendEnabled={backendEnabled}
+        authUser={authUser}
+        currentUser={currentUser}
+        onBack={() => setReportType(null)}
+      />
+    );
   }
   if (reportType && ["daily", "monthly", "quarterly"].includes(reportType)) {
     return <EnhancedProfessionalReport type={reportType} leads={leads} mediators={mediators} ai={ai} onBack={() => setReportType(null)} />;
@@ -8379,6 +13914,74 @@ export default function LirasApp({ backend = null }) {
       />
     );
   }
+  if (isPartnerPortal) {
+    const sessionEmail = String(authUser?.email || "").trim().toLowerCase();
+    const emailMap = partnerPortal?.emailMediatorMap && typeof partnerPortal.emailMediatorMap === "object" ? partnerPortal.emailMediatorMap : {};
+    const mappedHintRaw = String(emailMap[sessionEmail] || "").trim();
+    const mappedHint = mappedHintRaw.toLowerCase();
+
+    let portalMediator = null;
+    if (mappedHint) {
+      portalMediator =
+        mediators.find((m) => String(m?.id || "").toLowerCase() === mappedHint) ||
+        mediators.find((m) => String(m?.name || "").toLowerCase() === mappedHint) ||
+        mediators.find((m) => String(m?.name || "").toLowerCase().includes(mappedHint));
+    }
+    if (!portalMediator) {
+      portalMediator = mediators.find((m) => isAashishPilotPartner(m?.name));
+    }
+    if (!portalMediator) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+          <div className="surface p-6 max-w-md w-full text-center">
+            <div className="text-lg font-extrabold text-slate-900">Portal setup incomplete</div>
+            <div className="text-sm text-slate-500 mt-2">Aashish partner profile is not available in this account.</div>
+            {onLogout ? (
+              <button type="button" className="btn-primary mt-4" onClick={onLogout}>
+                Sign out
+              </button>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <PartnerSimpleStatusPortal
+        mediator={portalMediator}
+        leads={leads}
+        onUpdateLead={updateLead}
+        onLogout={onLogout}
+      />
+    );
+  }
+  if (mediatorQuickUpdateId) {
+    const mediator = mediators.find((m) => String(m.id) === String(mediatorQuickUpdateId));
+    if (!mediator || !isAashishPilotPartner(mediator?.name)) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+          <div className="surface p-6 max-w-md w-full text-center">
+            <div className="text-lg font-extrabold text-slate-900">Partner board unavailable</div>
+            <div className="text-sm text-slate-500 mt-2">This pilot board is currently enabled only for Aashish.</div>
+            <button type="button" className="btn-primary mt-4" onClick={() => setMediatorQuickUpdateId(null)}>
+              Back to app
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <MediatorQuickUpdateView
+        mediator={mediator}
+        leads={leads}
+        onBack={() => setMediatorQuickUpdateId(null)}
+        onUpdateLead={updateLead}
+        onOpenLead={(lead) => {
+          setMediatorQuickUpdateId(null);
+          setActiveLead(lead);
+        }}
+      />
+    );
+  }
 
   let displayLeads = filteredLeads;
   if (activeView === "today") displayLeads = filteredLeads.filter((l) => isTodayIST(l.nextFollowUp));
@@ -8387,13 +13990,10 @@ export default function LirasApp({ backend = null }) {
       (l) => getDaysDiff(l.nextFollowUp) < 0 && !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable"].includes(l.status)
     );
   else if (activeView === "stale")
-    displayLeads = filteredLeads.filter((l) => {
-      if (!l) return false;
-      if (["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status)) return false;
-      return daysSinceIST(getLeadLastActivityIso(l)) >= STALE_AFTER_DAYS;
-    });
+    displayLeads = filteredLeads.filter((l) => isStaleLead(l));
   else if (activeView === "watchlist") displayLeads = filteredLeads.filter((l) => l.isHighPotential);
-  else if (activeView === "renewal_watch") displayLeads = filteredLeads.filter((l) => l.status === "Payment Done" && getDaysDiff(l.nextFollowUp) <= 30);
+  else if (activeView === "renewal_watch")
+    displayLeads = filteredLeads.filter((l) => isRenewalEligibleLead(l));
   if (activeView === "all" && tagFilter) {
     displayLeads = displayLeads.filter((l) => (Array.isArray(l.documents?.tags) ? l.documents.tags : []).includes(tagFilter));
   }
@@ -8403,7 +14003,9 @@ export default function LirasApp({ backend = null }) {
   const pendingReviews = leads.filter((l) => l.status === "Meeting Scheduled" && l.nextFollowUp && new Date(l.nextFollowUp) <= new Date());
   const dailyPending = leads.filter(
     (l) =>
-      !["Payment Done", "Deal Closed", "Not Eligible", "Not Reliable", "Lost to Competitor"].includes(l.status) &&
+      !isClosedOrRejectedLeadStatus(l.status) &&
+      l.status !== "Meeting Scheduled" &&
+      !(parseIsoOrNull(l?.nextFollowUp) && getDaysDiff(l.nextFollowUp) > 0) &&
       (!l.notes.length || !isTodayIST(l.notes[l.notes.length - 1].date))
   );
   const clearanceCount = pendingReviews.length + dailyPending.length;
@@ -8413,7 +14015,7 @@ export default function LirasApp({ backend = null }) {
   const isCrmSection =
     ["android_myday", "android_tasks", "android_partners", "mediators"].includes(activeView) || Boolean(activeMediatorForProfile);
   const isReportsSection = ["reports", "analytics"].includes(activeView);
-  const isUnderwritingSection = ["underwriting", "statement_autopilot", "pd"].includes(activeView);
+  const isUnderwritingSection = ["underwriting", "pd"].includes(activeView);
   const isSettingsSection = activeView === "settings";
   const collectionsBadge = clearanceCount > 0 ? clearanceCount : stats.overdue > 0 ? stats.overdue : undefined;
 
@@ -8494,7 +14096,7 @@ export default function LirasApp({ backend = null }) {
           />
           <SidebarItem
             icon={ClipboardList}
-            label="Collections"
+            label="Lead Management"
             active={["today", "overdue", "renewal_watch", "clearance"].includes(activeView)}
             count={collectionsBadge}
             alert={clearanceCount > 0 || stats.overdue > 0}
@@ -8610,6 +14212,7 @@ export default function LirasApp({ backend = null }) {
                     onRejectionReport={setMediatorRejectionReportId}
                     onPendingReport={setMediatorPendingReportId}
                     onFollowUp={handleMediatorFollowUp}
+                    onOpenQuickUpdate={setMediatorQuickUpdateId}
                     onEdit={setEditingMediator}
                     onDelete={(id) => {
                       if (deleteMediator(id)) setActiveView("mediators");
@@ -8702,7 +14305,6 @@ export default function LirasApp({ backend = null }) {
                 value={activeView}
                 tabs={[
                   { value: "underwriting", label: "Underwriting" },
-                  { value: "statement_autopilot", label: "Statement Autopilot" },
                   { value: "pd", label: "PD" },
                 ]}
                 onChange={(next) => {
@@ -8722,9 +14324,6 @@ export default function LirasApp({ backend = null }) {
                       setIsSidebarOpen(false);
                     }}
                   />
-                )}
-                {activeView === "statement_autopilot" && (
-                  <StatementAutopilotView backend={backend} leads={leads} isAdmin={isAdmin} />
                 )}
                 {activeView === "pd" && pdApplicationId && (
                   <PdView
@@ -9067,7 +14666,16 @@ export default function LirasApp({ backend = null }) {
                     ) : (
                       leads
                         .filter((l) => l.status === "Meeting Scheduled" && (isTodayIST(l.nextFollowUp) || isTomorrowIST(l.nextFollowUp)))
-                        .map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} onUpdateLead={updateLead} />)
+                        .map((l) => (
+                          <LeadCard
+                            key={l.id}
+                            lead={l}
+                            automation={leadAutomationByLeadId[String(l.id)] || null}
+                            mediators={mediators}
+                            onClick={setActiveLead}
+                            onUpdateLead={updateLead}
+                          />
+                        ))
                     )}
                   </div>
                 </div>
@@ -9075,7 +14683,18 @@ export default function LirasApp({ backend = null }) {
                   <h3 className="font-extrabold text-slate-900 mb-4 flex items-center gap-2 pb-2 border-b border-slate-200/60">
                     <Clock className="text-slate-600" size={18} /> Recent Activity
                   </h3>
-                  <div className="space-y-3">{leads.slice(0, 5).map((l) => <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} onUpdateLead={updateLead} />)}</div>
+                  <div className="space-y-3">
+                    {leads.slice(0, 5).map((l) => (
+                      <LeadCard
+                        key={l.id}
+                        lead={l}
+                        automation={leadAutomationByLeadId[String(l.id)] || null}
+                        mediators={mediators}
+                        onClick={setActiveLead}
+                        onUpdateLead={updateLead}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -9209,9 +14828,20 @@ export default function LirasApp({ backend = null }) {
                   </div>
                 </div>
               )}
-              {displayLeads.map((l) => (
-                <LeadCard key={l.id} lead={l} mediators={mediators} onClick={setActiveLead} onUpdateLead={updateLead} />
-              ))}
+              {activeView === "renewal_watch" ? (
+                <RenewalWatchTimeline leads={displayLeads} onOpenLead={setActiveLead} />
+              ) : (
+                displayLeads.map((l) => (
+                  <LeadCard
+                    key={l.id}
+                    lead={l}
+                    automation={leadAutomationByLeadId[String(l.id)] || null}
+                    mediators={mediators}
+                    onClick={setActiveLead}
+                    onUpdateLead={updateLead}
+                  />
+                ))
+              )}
               </div>
             </div>
           )}
@@ -9292,28 +14922,44 @@ export default function LirasApp({ backend = null }) {
                   <div className="text-sm text-slate-600 mt-1">Decision-focused exports for partners, audits, and internal reviews.</div>
 
                   <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-white"
+                      onClick={() => setReportType("owner_daily_partner")}
+                    >
+                      <div className="font-extrabold text-slate-900">Daily Activity Report</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        Open leads + today actions only (calls, dealt, met, payment, rejected, added-open-EOD)
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition border-emerald-200 bg-gradient-to-br from-emerald-50/70 to-white"
+                      onClick={() => setReportType("daily_work_plan")}
+                    >
+                      <div className="font-extrabold text-slate-900">Daily Work Update + Day Plan</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        Separate report for daily group update and next-day execution plan
+                      </div>
+                    </button>
                     <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("monthly")}>
                       <div className="font-extrabold text-slate-900">Monthly Performance</div>
                       <div className="text-xs text-slate-500 mt-1">Pipeline + closures + mediator performance</div>
-                    </button>
-                    <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("quarterly")}>
-                      <div className="font-extrabold text-slate-900">Quarterly Report</div>
-                      <div className="text-xs text-slate-500 mt-1">Higher-level performance view</div>
-                    </button>
-                    <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("daily")}>
-                      <div className="font-extrabold text-slate-900">Daily Brief</div>
-                      <div className="text-xs text-slate-500 mt-1">Daily operational report</div>
                     </button>
                     <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("clearance_pdf")}>
                       <div className="font-extrabold text-slate-900">Clearance PDF</div>
                       <div className="text-xs text-slate-500 mt-1">Print-ready loose-ends clearance list</div>
                     </button>
+                    <button
+                      type="button"
+                      className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition border-rose-200 bg-gradient-to-br from-rose-50/70 to-white"
+                      onClick={() => setReportType("rejection_internal")}
+                    >
+                      <div className="font-extrabold text-slate-900">Detailed Rejection List (Internal)</div>
+                      <div className="text-xs text-slate-500 mt-1">Combined rejected clients with detailed reasons and contributor trail</div>
+                    </button>
                     {backendEnabled && isAdmin && (
                       <>
-                        <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("daily_activity")}>
-                          <div className="font-extrabold text-slate-900">Daily Activity (Admin)</div>
-                          <div className="text-xs text-slate-500 mt-1">Staff actions, calls, meetings</div>
-                        </button>
                         <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("eod")}>
                           <div className="font-extrabold text-slate-900">EOD Activity (Admin)</div>
                           <div className="text-xs text-slate-500 mt-1">End-of-day clearance + staff summary</div>
@@ -9322,6 +14968,8 @@ export default function LirasApp({ backend = null }) {
                     )}
                   </div>
                 </div>
+
+                <ReportsHealthCheckPanel backendEnabled={backendEnabled} supabase={supabase} authUser={authUser} leads={leads} />
               </div>
             </div>
           )}
@@ -9592,6 +15240,7 @@ export default function LirasApp({ backend = null }) {
             backendEnabled={backendEnabled}
             supabase={supabase}
             ai={ai}
+            automation={leadAutomationByLeadId[String(activeLead.id)] || null}
             mediators={
               backendEnabled && isAdmin && activeLead.ownerId
                 ? mediators.filter((m) => m.id === "3" || !m.ownerId || m.ownerId === activeLead.ownerId)
@@ -9612,6 +15261,13 @@ export default function LirasApp({ backend = null }) {
             staffUsers={staffUsers}
             staffUsersError={staffUsersError}
             onReassignOwner={(leadId, newOwnerId) => void reassignLeadOwner(leadId, newOwnerId)}
+            onOpenPartnerStatusPdf={(lead, opts = {}) => {
+              setActiveLead(null);
+              setLeadPartnerStatusReport({
+                leadId: lead.id,
+                includeTimeline: !!opts.includeTimeline,
+              });
+            }}
           />
         )}
       </Modal>
