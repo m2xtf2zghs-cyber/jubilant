@@ -7,6 +7,15 @@ import { deleteAttachmentBlob, getAttachmentBlob, putAttachmentBlob } from "./at
 import { callAdminAction } from "./backend/adminClient.js";
 import { getFunctionsBaseUrl, setFunctionsBaseUrl } from "./backend/functionsBase.js";
 import { BRAND, BrandMark, ReportBrandHeader } from "./brand/Brand.jsx";
+import {
+  buildOpenclawFollowupQueues,
+  isOpenclawConfigured,
+  openclawClientFollowupDraft,
+  openclawFollowupSummary,
+  openclawMediatorFollowupDraft,
+  pingGateway,
+  sendWhatsappMessage,
+} from "./openclaw/index.js";
 import AndroidCrm from "./android/AndroidCrm.jsx";
 import UnderwritingView from "./underwriting/UnderwritingView.jsx";
 import PdView from "./pd/PdView.jsx";
@@ -4030,34 +4039,10 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
   }, [mediators, todayYmd, backendEnabled, authUser?.id]);
 
   const openValue = useMemo(() => openLeads.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0), [openLeads]);
-  const allOpenLeadRows = useMemo(
-    () =>
-      [...openLeads].sort((a, b) => {
-        const aTs = parseIsoOrNull(a?.nextFollowUp)?.getTime() || Number.MAX_SAFE_INTEGER;
-        const bTs = parseIsoOrNull(b?.nextFollowUp)?.getTime() || Number.MAX_SAFE_INTEGER;
-        return aTs - bTs;
-      }),
-    [openLeads]
-  );
   const meetingTodayClients = useMemo(
     () => openLeads.filter((l) => l?.status === "Meeting Scheduled" && l?.nextFollowUp && isTodayIST(l.nextFollowUp)),
     [openLeads]
   );
-  const staleOpenClients = useMemo(() => openLeads.filter((l) => isStaleLead(l)), [openLeads]);
-  const stalePartnerStatuses = new Set(["Partner Follow-Up", "Statements Not Received", "Contact Details Not Received", "Interest Rate Issue"]);
-  const staleInternalStatuses = new Set(["Follow-Up Required", "No Appointment", "Commercial Client", "New"]);
-  const stalePartnerFollowUp = useMemo(
-    () => staleOpenClients.filter((l) => stalePartnerStatuses.has(String(l?.status || ""))),
-    [staleOpenClients]
-  );
-  const staleOwnFollowUp = useMemo(() => {
-    return staleOpenClients.filter((l) => {
-      const status = String(l?.status || "");
-      if (stalePartnerStatuses.has(status)) return false;
-      if (staleInternalStatuses.has(status)) return true;
-      return true; // default bucket = internal follow-up
-    });
-  }, [staleOpenClients]);
   const openClientsByMediator = useMemo(() => {
     const counts = new Map();
     openLeads.forEach((l) => {
@@ -4135,8 +4120,6 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
               <div className="space-y-1">
                 <div className="text-[10px] uppercase tracking-wider text-slate-500">Report Date (IST)</div>
                 <div className="text-slate-900">{todayYmd}</div>
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-2">Open Leads (Current)</div>
-                <div className="text-slate-900 font-extrabold">{openLeads.length}</div>
               </div>
             }
           />
@@ -4177,20 +4160,9 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
-            <div className="surface-solid p-3 border border-blue-100 bg-blue-50/50">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">All Open Leads</div>
-              <div className="text-2xl font-extrabold text-blue-700 mt-1">{allOpenLeadRows.length}</div>
-            </div>
             <div className="surface-solid p-3 border border-purple-100 bg-purple-50/50">
               <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Meeting Today Clients</div>
               <div className="text-2xl font-extrabold text-purple-700 mt-1">{meetingTodayClients.length}</div>
-            </div>
-            <div className="surface-solid p-3 border border-rose-100 bg-rose-50/50">
-              <div className="text-[10px] uppercase font-extrabold tracking-wider text-slate-500">Stale Clients (Open)</div>
-              <div className="text-2xl font-extrabold text-rose-700 mt-1">{staleOpenClients.length}</div>
-              <div className="text-[10px] text-slate-600 font-bold mt-1">
-                Partner: {stalePartnerFollowUp.length} • Own: {staleOwnFollowUp.length}
-              </div>
             </div>
           </div>
 
@@ -4256,29 +4228,58 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-extrabold">
                     <tr>
-                      <th className="px-3 py-2 text-left">Lead</th>
-                      <th className="px-3 py-2 text-left">Entry</th>
-                      <th className="px-3 py-2 text-left">Last Update</th>
-                      <th className="px-3 py-2 text-left">Status</th>
+                      <th className="px-4 py-3 text-left">Lead</th>
+                      <th className="px-4 py-3 text-left">Entry</th>
+                      <th className="px-4 py-3 text-left">Last Update</th>
+                      <th className="px-4 py-3 text-left">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {lifecycleRows.slice(0, 18).map((r) => (
-                      <tr key={`lc-${r.id}`}>
-                        <td className="px-3 py-2">
-                          <div className="font-extrabold text-slate-800">{r.name}</div>
-                          <div className="text-[10px] text-slate-500">{r.company || "—"}</div>
-                          <div className="text-[10px] text-violet-700 font-bold mt-0.5">Mediator: {r.mediatorName}</div>
-                        </td>
-                        <td className="px-3 py-2 font-bold text-slate-700">{r.entryAt ? formatDateTime(r.entryAt) : "—"}</td>
-                        <td className="px-3 py-2 font-bold text-slate-700">{r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}</td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[r.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
-                            {r.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {lifecycleRows.slice(0, 18).map((r) => {
+                      const latestUpdateParsed = parseBriefingLedgerNote(r.lastNoteText);
+                      const latestUpdateTone = briefingLedgerNoteTone(latestUpdateParsed.tag);
+                      const isTriageLatestUpdate = String(latestUpdateParsed.tag || "").toUpperCase().includes("TRIAGE");
+                      return (
+                      <React.Fragment key={`lc-${r.id}`}>
+                        <tr className="align-top">
+                          <td className="px-4 pt-4 pb-2">
+                            <div className="font-extrabold text-[15px] leading-tight text-slate-900">{r.name}</div>
+                            <div className="text-[11px] text-slate-500 mt-1">{r.company || "—"}</div>
+                            <div className="text-[11px] text-violet-700 font-extrabold mt-2">Mediator: {r.mediatorName}</div>
+                          </td>
+                          <td className="px-4 pt-4 pb-2 font-extrabold text-[13px] leading-snug text-slate-700">
+                            {r.entryAt ? formatDateTime(r.entryAt) : "—"}
+                          </td>
+                          <td className="px-4 pt-4 pb-2 font-extrabold text-[13px] leading-snug text-slate-700">
+                            {r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}
+                          </td>
+                          <td className="px-4 pt-4 pb-2">
+                            <div className="flex justify-start">
+                              <span className={`inline-flex px-2.5 py-1.5 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[r.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                                {r.status}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td colSpan="4" className="px-4 pb-4 pt-0">
+                            <div className={`rounded-xl border px-3 py-3 ${latestUpdateTone.card} ${isTriageLatestUpdate ? "border-l-4 border-l-indigo-500" : ""}`}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-extrabold">Latest Update</div>
+                                {latestUpdateParsed.tag && latestUpdateParsed.tag !== "NOTE" ? (
+                                  <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.18em] ${latestUpdateTone.badge}`}>
+                                    {latestUpdateParsed.tag}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-1.5 text-[13px] leading-snug font-extrabold text-slate-900 whitespace-pre-wrap">
+                                {r.lastNoteText || "—"}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </React.Fragment>
+                    )})}
                     {lifecycleRows.length === 0 && (
                       <tr>
                         <td colSpan="4" className="px-3 py-4 text-slate-500 italic text-center">
@@ -4289,42 +4290,86 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
                   </tbody>
                 </table>
               </div>
-              <div className="block lg:hidden p-3 space-y-2 bg-white print:hidden">
+              <div className="block lg:hidden p-3 space-y-3 bg-white print:hidden">
                 {lifecycleRows.length === 0 ? (
                   <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 italic">
                     No open lead activity captured today.
                   </div>
                 ) : (
-                  lifecycleRows.slice(0, 18).map((r) => (
-                    <article key={`mobile-lc-${r.id}`} className="rounded-xl border border-violet-100 p-3 bg-violet-50/20">
-                      <div className="text-sm font-extrabold text-slate-900">{r.name}</div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">{r.company || "—"}</div>
-                      <div className="text-[11px] text-violet-700 font-bold mt-1">Mediator: {r.mediatorName}</div>
-                      <div className="mt-2 text-[11px] text-slate-700 font-semibold">
-                        Entry: {r.entryAt ? formatDateTime(r.entryAt) : "—"}
-                      </div>
-                      <div className="text-[11px] text-slate-700 font-semibold">
-                        Last update: {r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}
-                      </div>
-                      <div className="mt-2">
-                        <span className={`inline-flex px-2 py-1 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[r.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
+                  lifecycleRows.slice(0, 18).map((r) => {
+                    const latestUpdateParsed = parseBriefingLedgerNote(r.lastNoteText);
+                    const latestUpdateTone = briefingLedgerNoteTone(latestUpdateParsed.tag);
+                    const isTriageLatestUpdate = String(latestUpdateParsed.tag || "").toUpperCase().includes("TRIAGE");
+                    return (
+                    <article key={`mobile-lc-${r.id}`} className="rounded-xl border border-slate-200 p-3.5 bg-white shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[16px] leading-tight font-extrabold text-slate-900">{r.name}</div>
+                          <div className="text-[11px] text-slate-500 mt-1">{r.company || "—"}</div>
+                          <div className="text-[11px] text-violet-700 font-extrabold mt-2">Mediator: {r.mediatorName}</div>
+                        </div>
+                        <span className={`inline-flex shrink-0 px-2.5 py-1.5 rounded-lg border text-[10px] font-extrabold uppercase ${STATUS_CONFIG[r.status]?.color || "bg-slate-100 text-slate-700 border-slate-200"}`}>
                           {r.status}
                         </span>
                       </div>
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                          <div className="text-[9px] uppercase tracking-[0.22em] text-slate-500 font-extrabold">Entry</div>
+                          <div className="mt-1 text-[12px] leading-snug font-extrabold text-slate-800">{r.entryAt ? formatDateTime(r.entryAt) : "—"}</div>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                          <div className="text-[9px] uppercase tracking-[0.22em] text-slate-500 font-extrabold">Last Update</div>
+                          <div className="mt-1 text-[12px] leading-snug font-extrabold text-slate-800">{r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}</div>
+                        </div>
+                      </div>
+                      <div className={`mt-3 rounded-xl border px-3 py-3 ${latestUpdateTone.card} ${isTriageLatestUpdate ? "border-l-4 border-l-indigo-500" : ""}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-extrabold">Latest Update</div>
+                          {latestUpdateParsed.tag && latestUpdateParsed.tag !== "NOTE" ? (
+                            <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.18em] ${latestUpdateTone.badge}`}>
+                              {latestUpdateParsed.tag}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-1.5 text-[13px] leading-snug font-extrabold text-slate-900 whitespace-pre-wrap">
+                          {r.lastNoteText || "—"}
+                        </div>
+                      </div>
                     </article>
-                  ))
+                  )})
                 )}
               </div>
-              <div className="hidden print:block p-3 space-y-2 bg-white">
-                {lifecycleRows.slice(0, 18).map((r) => (
-                  <div key={`print-lc-${r.id}`} className="rounded-lg border border-slate-200 p-2 print:break-inside-avoid">
-                    <div className="text-sm font-extrabold text-slate-900">{r.name}</div>
-                    <div className="text-[11px] text-violet-700 font-bold">Mediator: {r.mediatorName}</div>
-                    <div className="text-[11px] text-slate-600 mt-1">Entry: {r.entryAt ? formatDateTime(r.entryAt) : "—"}</div>
-                    <div className="text-[11px] text-slate-600">Last: {r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}</div>
-                    <div className="text-[11px] text-slate-600">Status: {r.status}</div>
+              <div className="hidden print:block p-3 space-y-3 bg-white">
+                {lifecycleRows.slice(0, 18).map((r) => {
+                  const latestUpdateParsed = parseBriefingLedgerNote(r.lastNoteText);
+                  const latestUpdateTone = briefingLedgerNoteTone(latestUpdateParsed.tag);
+                  const isTriageLatestUpdate = String(latestUpdateParsed.tag || "").toUpperCase().includes("TRIAGE");
+                  return (
+                  <div key={`print-lc-${r.id}`} className="rounded-lg border border-slate-200 p-3 print:break-inside-avoid">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-extrabold text-slate-900">{r.name}</div>
+                        <div className="text-[11px] text-violet-700 font-bold mt-1">Mediator: {r.mediatorName}</div>
+                      </div>
+                      <div className="text-[11px] text-slate-600 font-semibold">{r.status}</div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                      <div>Entry: {r.entryAt ? formatDateTime(r.entryAt) : "—"}</div>
+                      <div>Last: {r.lastActionAt ? formatDateTime(r.lastActionAt) : "—"}</div>
+                    </div>
+                    <div className={`mt-2 rounded-md border px-2.5 py-2 ${latestUpdateTone.card} ${isTriageLatestUpdate ? "border-l-4 border-l-indigo-500" : ""}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[9px] uppercase tracking-[0.22em] text-slate-500 font-extrabold">Latest Update</div>
+                        {latestUpdateParsed.tag && latestUpdateParsed.tag !== "NOTE" ? (
+                          <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[8px] font-extrabold uppercase tracking-[0.16em] ${latestUpdateTone.badge}`}>
+                            {latestUpdateParsed.tag}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 text-[11px] leading-snug font-extrabold text-slate-900 whitespace-pre-wrap">{r.lastNoteText || "—"}</div>
+                    </div>
                   </div>
-                ))}
+                )})}
               </div>
             </div>
 
@@ -4348,25 +4393,7 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-            <div className="rounded-2xl border border-blue-200 overflow-hidden">
-              <div className="px-4 py-2.5 bg-blue-100 text-blue-800 font-extrabold text-sm">All Open Leads</div>
-              <div className="p-3 bg-white space-y-2">
-                {allOpenLeadRows.length === 0 ? (
-                  <div className="text-xs text-slate-500 italic">No open leads.</div>
-                ) : (
-                  allOpenLeadRows.slice(0, 12).map((l) => (
-                    <div key={`open-${l.id}`} className="rounded-lg border border-blue-100 p-2">
-                      <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
-                      <div className="text-[11px] text-blue-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
-                      <div className="text-xs text-slate-600 font-bold mt-1">
-                        Next: {l.nextFollowUp ? formatDateTime(l.nextFollowUp) : "Not set"} • {l.status}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+          <div className="grid grid-cols-1 gap-4 mb-6">
             <div className="rounded-2xl border border-purple-200 overflow-hidden">
               <div className="px-4 py-2.5 bg-purple-100 text-purple-800 font-extrabold text-sm">Meeting Today Clients</div>
               <div className="p-3 bg-white space-y-2">
@@ -4385,56 +4412,6 @@ const OwnerDailyPartnerReportView = ({ leads, mediators, staffUsers = [], onBack
                       </div>
                     </div>
                   ))
-                )}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-rose-200 overflow-hidden">
-              <div className="px-4 py-2.5 bg-rose-100 text-rose-800 font-extrabold text-sm">Stale Clients (Open)</div>
-              <div className="p-3 bg-white space-y-2">
-                {staleOpenClients.length === 0 ? (
-                  <div className="text-xs text-slate-500 italic">No stale open leads.</div>
-                ) : (
-                  <>
-                    <div className="rounded-lg border border-rose-100 p-2 bg-rose-50/40">
-                      <div className="text-xs font-extrabold uppercase tracking-wider text-rose-700">
-                        Partner Follow-up Stale ({stalePartnerFollowUp.length})
-                      </div>
-                    </div>
-                    {stalePartnerFollowUp.length === 0 ? (
-                      <div className="text-xs text-slate-500 italic px-1">No partner-follow-up stale leads.</div>
-                    ) : (
-                      stalePartnerFollowUp.map((l) => (
-                        <div key={`stale-partner-${l.id}`} className="rounded-lg border border-rose-100 p-2">
-                          <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
-                          <div className="text-[11px] text-rose-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
-                          <div className="text-xs text-slate-600 font-bold mt-1">
-                            Reason: Partner follow-up pending • Last activity: {formatDateTime(getLeadLastActivityIso(l))}
-                          </div>
-                          <div className="text-[11px] text-slate-500 font-semibold mt-1">Status: {l.status}</div>
-                        </div>
-                      ))
-                    )}
-
-                    <div className="rounded-lg border border-amber-100 p-2 bg-amber-50/40 mt-2">
-                      <div className="text-xs font-extrabold uppercase tracking-wider text-amber-700">
-                        Own/Internal Follow-up Stale ({staleOwnFollowUp.length})
-                      </div>
-                    </div>
-                    {staleOwnFollowUp.length === 0 ? (
-                      <div className="text-xs text-slate-500 italic px-1">No internal-follow-up stale leads.</div>
-                    ) : (
-                      staleOwnFollowUp.map((l) => (
-                        <div key={`stale-own-${l.id}`} className="rounded-lg border border-amber-100 p-2">
-                          <div className="text-sm font-extrabold text-slate-900">{l.name}</div>
-                          <div className="text-[11px] text-amber-700 font-bold mt-0.5">Mediator: {resolveLeadMediatorName(l)}</div>
-                          <div className="text-xs text-slate-600 font-bold mt-1">
-                            Reason: Own follow-up pending • Last activity: {formatDateTime(getLeadLastActivityIso(l))}
-                          </div>
-                          <div className="text-[11px] text-slate-500 font-semibold mt-1">Status: {l.status}</div>
-                        </div>
-                      ))
-                    )}
-                  </>
                 )}
               </div>
             </div>
@@ -5120,7 +5097,66 @@ const DailyWorkUpdatePlanReportView = ({
       ]),
     [addedStillOpenEod.length, addedToday.length, buildDetailPages, eodPortraitAddedChunks, eodPortraitMediatorChunks, eodPortraitMetChunks, eodPortraitOpenChunks, eodPortraitPaidChunks, eodPortraitRejectedChunks, mediatorTouches.length, metToday.length, paymentDoneToday.length, rejectedToday.length]
   );
-  const eodSquarePageCount = 1 + eodSquareDetailPages.length;
+  const eodSquareInlineSections = useMemo(
+    () =>
+      [
+        {
+          key: "added",
+          title: "Added Today",
+          tone: "violet",
+          count: addedToday.length,
+          nodes: addedToday.map((lead) => renderLeadExportCard(lead, "violet")),
+        },
+        {
+          key: "paid",
+          title: "Payment Done",
+          tone: "emerald",
+          count: paymentDoneToday.length,
+          nodes: paymentDoneToday.map((lead) => renderLeadExportCard(lead, "emerald")),
+        },
+        {
+          key: "met",
+          title: "Clients Met",
+          tone: "teal",
+          count: metToday.length,
+          nodes: metToday.map((lead) => renderLeadExportCard(lead, "teal")),
+        },
+        {
+          key: "rejected",
+          title: "Rejected Today",
+          tone: "violet",
+          count: rejectedToday.length,
+          nodes: rejectedToday.map((lead) => renderLeadExportCard(lead, "violet")),
+        },
+        {
+          key: "openEod",
+          title: "Added but Open EOD",
+          tone: "amber",
+          count: addedStillOpenEod.length,
+          nodes: addedStillOpenEod.map((lead) => renderLeadExportCard(lead, "amber")),
+        },
+        {
+          key: "mediators",
+          title: "Mediators Spoken Today",
+          tone: "indigo",
+          count: mediatorTouches.length,
+          nodes: mediatorTouches.map((row) => renderMediatorTouchCard(row, "eod-inline-med")),
+        },
+      ].filter((section) => section.count > 0),
+    [addedStillOpenEod, addedToday, mediatorTouches, metToday, paymentDoneToday, rejectedToday]
+  );
+  const eodSquareInlineItemCount =
+    addedToday.length +
+    paymentDoneToday.length +
+    metToday.length +
+    rejectedToday.length +
+    addedStillOpenEod.length +
+    mediatorTouches.length;
+  const eodCanInlineSingleSquarePage =
+    eodSquareInlineSections.length > 0 &&
+    eodSquareInlineSections.length <= 4 &&
+    eodSquareInlineItemCount <= 6;
+  const eodSquarePageCount = eodCanInlineSingleSquarePage ? 1 : 1 + eodSquareDetailPages.length;
   const eodPortraitPageCount = 1 + eodPortraitDetailPages.length;
 
   const renderExportFooter = (pageNumber, totalPages, sectionName = "") => (
@@ -5497,9 +5533,24 @@ const DailyWorkUpdatePlanReportView = ({
                         {addedToday.length} added • {paymentDoneToday.length} paid • {metToday.length} met • {rejectedToday.length} rejected • {addedStillOpenEod.length} still open at EOD
                       </div>
                       <div className="mt-4 text-sm font-semibold text-slate-600">
-                        Detail pages include added today, payment done, clients met, rejected today, still open at EOD, and mediators spoken today.
+                        {eodCanInlineSingleSquarePage
+                          ? "All sections fit into this export, so every EOD detail is included on this single image."
+                          : "Detail pages include added today, payment done, clients met, rejected today, still open at EOD, and mediators spoken today."}
                       </div>
                     </div>
+                    {eodCanInlineSingleSquarePage ? (
+                      <div className="mt-4 grid grid-cols-2 gap-4 flex-1 min-h-0 content-start">
+                        {eodSquareInlineSections.map((section) => (
+                          <div
+                            key={`eod-inline-${section.key}`}
+                            className="rounded-[28px] border border-slate-200 bg-white/90 shadow-sm p-4 overflow-hidden flex flex-col"
+                          >
+                            {renderExportSectionHeader(`${section.title} • ${section.count}`, section.tone)}
+                            <div className="mt-3 space-y-2 overflow-hidden">{section.nodes}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     {renderExportFooter(pageIndex + 1, eodSquarePageCount, "Summary")}
                   </>
                 ) : (
@@ -5777,6 +5828,558 @@ const DailyWorkUpdatePlanReportView = ({
 
           <div className="mt-6 text-center text-[11px] text-slate-400">
             Confidential • Generated by {BRAND.product} • {BRAND.name}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const OpenClawFollowUpStudio = ({
+  leads,
+  mediators,
+  onBack,
+  onUpdateLead,
+  backendEnabled = false,
+  supabase = null,
+  authUser = null,
+}) => {
+  const [language, setLanguage] = useState("English");
+  const [gatewayState, setGatewayState] = useState(isOpenclawConfigured ? "checking" : "not_configured");
+  const [gatewayError, setGatewayError] = useState("");
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryText, setSummaryText] = useState("");
+  const [draftBusy, setDraftBusy] = useState({});
+  const [mediatorsDrafts, setMediatorsDrafts] = useState({});
+  const [clientDrafts, setClientDrafts] = useState({});
+  const [actionFeedback, setActionFeedback] = useState("");
+
+  useEffect(() => {
+    let closed = false;
+    if (!isOpenclawConfigured) {
+      setGatewayState("not_configured");
+      setGatewayError("");
+      return () => {
+        closed = true;
+      };
+    }
+    setGatewayState("checking");
+    setGatewayError("");
+    pingGateway()
+      .then(() => {
+        if (closed) return;
+        setGatewayState("ready");
+      })
+      .catch((err) => {
+        if (closed) return;
+        setGatewayState("unreachable");
+        setGatewayError(err?.message || "Could not reach OpenClaw gateway.");
+      });
+    return () => {
+      closed = true;
+    };
+  }, []);
+
+  const normalizePhone = (phone) => {
+    const digits = String(phone || "").replace(/\D/g, "");
+    if (!digits) return "";
+    if (digits.startsWith("91") && digits.length === 12) return `+${digits}`;
+    if (digits.length === 10) return `+91${digits}`;
+    if (String(phone || "").trim().startsWith("+")) return String(phone).trim();
+    return `+${digits}`;
+  };
+
+  const { mediatorQueueBase, clientQueue, mediatorQueueSummary } = useMemo(
+    () => buildOpenclawFollowupQueues({ leads, mediators }),
+    [leads, mediators]
+  );
+
+  const setBusyFlag = (key, value) => {
+    setDraftBusy((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const findLeadById = useCallback(
+    (leadId) => (Array.isArray(leads) ? leads.find((lead) => String(lead?.id || "") === String(leadId || "")) : null),
+    [leads]
+  );
+
+  const appendDraftToLeadNote = useCallback(
+    (leadId, prefix, draftText, label = "") => {
+      if (!onUpdateLead) throw new Error("Lead update function is not available.");
+      const lead = findLeadById(leadId);
+      if (!lead) throw new Error("Lead not found for note save.");
+      const nowIso = new Date().toISOString();
+      const noteText = label ? `${prefix}: ${label}\n${draftText}` : `${prefix}\n${draftText}`;
+      onUpdateLead(leadId, {
+        notes: [...(lead.notes || []), { text: noteText, date: nowIso }],
+      });
+      return lead;
+    },
+    [findLeadById, onUpdateLead]
+  );
+
+  const upsertDraftTask = useCallback(
+    async ({ leadId, title, draftText, dueAt, mediatorName = "", taskScope = "client" }) => {
+      if (!backendEnabled || !supabase || !authUser?.id) {
+        throw new Error("Backend task creation requires a logged-in backend session.");
+      }
+      const safeDueAt = ensureIsoString(dueAt, new Date().toISOString());
+      const dueYmd = toYmdIST(safeDueAt) || toYmdIST(new Date());
+      const dedupeKey = `OPENCLAW:${taskScope}:${leadId}:${dueYmd}`;
+      const payload = {
+        owner_id: authUser.id,
+        created_by: authUser.id,
+        assigned_to: authUser.id,
+        lead_id: leadId,
+        task_type: "FOLLOW_UP",
+        status: "OPEN",
+        title,
+        due_at: safeDueAt,
+        due_window_end: new Date(new Date(safeDueAt).getTime() + 8 * 60 * 60 * 1000).toISOString(),
+        dedupe_key: dedupeKey,
+        payload_json: {
+          source: "openclaw_followup_studio",
+          mediator_name: mediatorName,
+          draft: draftText,
+          task_scope: taskScope,
+        },
+      };
+
+      const { data: existing, error: findErr } = await supabase
+        .from("tasks")
+        .select("id")
+        .eq("dedupe_key", dedupeKey)
+        .maybeSingle();
+      if (findErr) throw findErr;
+
+      if (existing?.id) {
+        const { error: updateErr } = await supabase.from("tasks").update(payload).eq("id", existing.id);
+        if (updateErr) throw updateErr;
+        return existing.id;
+      }
+
+      const { data: inserted, error: insertErr } = await supabase.from("tasks").insert(payload).select("id").maybeSingle();
+      if (insertErr) throw insertErr;
+      return inserted?.id || dedupeKey;
+    },
+    [authUser?.id, backendEnabled, supabase]
+  );
+
+  const generateMediatorDraft = async (group) => {
+    const key = `mediator_${group?.mediator?.id}`;
+    setBusyFlag(key, true);
+    try {
+      const text = await openclawMediatorFollowupDraft({
+        mediator: group.mediator,
+        leads: group.rows,
+        language,
+      });
+      setMediatorsDrafts((prev) => ({ ...prev, [group.mediator.id]: text }));
+    } catch (err) {
+      alert(err?.message || "Could not generate mediator draft.");
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  const generateClientDraft = async (row) => {
+    const key = `client_${row.id}`;
+    setBusyFlag(key, true);
+    try {
+      const text = await openclawClientFollowupDraft({ lead: row, language });
+      setClientDrafts((prev) => ({ ...prev, [row.id]: text }));
+    } catch (err) {
+      alert(err?.message || "Could not generate client draft.");
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  const saveMediatorDraftToNotes = async (group) => {
+    const draft = mediatorsDrafts[group?.mediator?.id] || "";
+    if (!draft) return alert("Generate a draft first.");
+    const key = `mediator_save_${group?.mediator?.id}`;
+    setBusyFlag(key, true);
+    try {
+      group.rows.forEach((row) => {
+        appendDraftToLeadNote(row.id, "[OPENCLAW MEDIATOR DRAFT]", draft, `Mediator: ${group.mediator?.name || "Partner"}`);
+      });
+      setActionFeedback(`Saved mediator draft to ${group.rows.length} lead note${group.rows.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      alert(err?.message || "Could not save mediator draft to notes.");
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  const saveClientDraftToNotes = async (row) => {
+    const draft = clientDrafts[row.id] || "";
+    if (!draft) return alert("Generate a draft first.");
+    const key = `client_save_${row.id}`;
+    setBusyFlag(key, true);
+    try {
+      appendDraftToLeadNote(row.id, "[OPENCLAW CLIENT DRAFT]", draft, `Client: ${row.name}`);
+      setActionFeedback(`Saved client draft note for ${row.name}.`);
+    } catch (err) {
+      alert(err?.message || "Could not save client draft to notes.");
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  const createMediatorDraftTasks = async (group) => {
+    const draft = mediatorsDrafts[group?.mediator?.id] || "";
+    if (!draft) return alert("Generate a draft first.");
+    const key = `mediator_task_${group?.mediator?.id}`;
+    setBusyFlag(key, true);
+    try {
+      for (const row of group.rows) {
+        await upsertDraftTask({
+          leadId: row.id,
+          title: `OpenClaw mediator follow-up: ${row.name}`,
+          draftText: draft,
+          dueAt: row.nextFollowUp || new Date().toISOString(),
+          mediatorName: group.mediator?.name || "",
+          taskScope: "mediator",
+        });
+      }
+      setActionFeedback(`Created or updated ${group.rows.length} mediator follow-up task${group.rows.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      alert(err?.message || "Could not create mediator tasks.");
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  const createClientDraftTask = async (row) => {
+    const draft = clientDrafts[row.id] || "";
+    if (!draft) return alert("Generate a draft first.");
+    const key = `client_task_${row.id}`;
+    setBusyFlag(key, true);
+    try {
+      await upsertDraftTask({
+        leadId: row.id,
+        title: `OpenClaw client follow-up: ${row.name}`,
+        draftText: draft,
+        dueAt: row.nextFollowUp || new Date().toISOString(),
+        mediatorName: row.mediatorName || "",
+        taskScope: "client",
+      });
+      setActionFeedback(`Created or updated client follow-up task for ${row.name}.`);
+    } catch (err) {
+      alert(err?.message || "Could not create client task.");
+    } finally {
+      setBusyFlag(key, false);
+    }
+  };
+
+  const sendDraft = async (rawPhone, message, label) => {
+    const phone = normalizePhone(rawPhone);
+    if (!phone) return alert(`No phone number for ${label}.`);
+    if (!message) return alert("Generate a draft first.");
+    if (!window.confirm(`Send this OpenClaw draft to ${label}?`)) return;
+    try {
+      await sendWhatsappMessage(phone, message);
+      alert(`Sent to ${label}.`);
+    } catch (err) {
+      alert(err?.message || `Could not send message to ${label}.`);
+    }
+  };
+
+  const generateSummary = async () => {
+    setSummaryBusy(true);
+    try {
+      const text = await openclawFollowupSummary({
+        mediatorQueue: mediatorQueueSummary,
+        clientQueue,
+        language,
+      });
+      setSummaryText(text);
+    } catch (err) {
+      alert(err?.message || "Could not generate queue summary.");
+    } finally {
+      setSummaryBusy(false);
+    }
+  };
+
+  const gatewayChip =
+    gatewayState === "ready"
+      ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+      : gatewayState === "checking"
+        ? "bg-amber-100 text-amber-700 border-amber-200"
+        : "bg-rose-100 text-rose-700 border-rose-200";
+
+  return (
+    <div className="p-6 overflow-y-auto h-full animate-fade-in space-y-4">
+      <div className="surface p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">OpenClaw</div>
+            <div className="text-2xl font-extrabold text-slate-900 mt-2">Follow-Up Studio</div>
+            <div className="text-sm text-slate-600 mt-1">
+              OpenRouter-backed drafts for mediator follow-ups, client follow-ups, and owner queue summary.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-extrabold uppercase tracking-[0.18em] ${gatewayChip}`}>
+              {gatewayState === "ready" ? "Gateway Ready" : gatewayState === "checking" ? "Checking Gateway" : "Gateway Not Ready"}
+            </span>
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+            >
+              {AI_LANGUAGE_OPTIONS.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="btn-secondary px-3 py-2" onClick={onBack}>
+              <ArrowLeft size={14} /> Back
+            </button>
+          </div>
+        </div>
+
+        {!isOpenclawConfigured && (
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            OpenClaw env is not configured. Set `VITE_OPENCLAW_GATEWAY_URL` and `VITE_OPENCLAW_GATEWAY_TOKEN` before using this studio.
+          </div>
+        )}
+        {gatewayState === "unreachable" && gatewayError && (
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">{gatewayError}</div>
+        )}
+        {actionFeedback ? (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-900">
+            {actionFeedback}
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="surface-solid p-4 border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-white">
+            <div className="text-xs uppercase tracking-[0.22em] font-bold text-indigo-600">Mediator Queue</div>
+            <div className="mt-2 text-3xl font-black text-slate-900">{mediatorQueueBase.length}</div>
+            <div className="text-xs text-slate-500 mt-1">Partners needing updates</div>
+          </div>
+          <div className="surface-solid p-4 border-cyan-200 bg-gradient-to-br from-cyan-50/60 to-white">
+            <div className="text-xs uppercase tracking-[0.22em] font-bold text-cyan-700">Client Queue</div>
+            <div className="mt-2 text-3xl font-black text-slate-900">{clientQueue.length}</div>
+            <div className="text-xs text-slate-500 mt-1">Clients needing follow-up</div>
+          </div>
+          <div className="surface-solid p-4">
+            <div className="text-xs uppercase tracking-[0.22em] font-bold text-slate-500">Due Today</div>
+            <div className="mt-2 text-3xl font-black text-slate-900">{clientQueue.filter((row) => isTodayIST(row.nextFollowUp)).length}</div>
+            <div className="text-xs text-slate-500 mt-1">Client queue due today</div>
+          </div>
+          <div className="surface-solid p-4">
+            <div className="text-xs uppercase tracking-[0.22em] font-bold text-slate-500">Overdue</div>
+            <div className="mt-2 text-3xl font-black text-slate-900">{clientQueue.filter((row) => getDaysDiff(row.nextFollowUp) < 0).length}</div>
+            <div className="text-xs text-slate-500 mt-1">Past next-action date</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="surface p-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Owner Summary</div>
+            <div className="text-xl font-extrabold text-slate-900 mt-2">Queue Snapshot</div>
+            <div className="text-sm text-slate-600 mt-1">Generate a concise owner-facing summary from the current mediator and client follow-up queues.</div>
+          </div>
+          <button
+            type="button"
+            disabled={gatewayState !== "ready" || summaryBusy}
+            onClick={generateSummary}
+            className={`px-4 py-3 rounded-xl font-extrabold text-sm flex items-center gap-2 ${
+              gatewayState === "ready" && !summaryBusy
+                ? "bg-slate-900 text-white hover:bg-black"
+                : "bg-slate-200 text-slate-500"
+            }`}
+          >
+            <Sparkles size={14} /> {summaryBusy ? "Generating…" : "Generate Summary"}
+          </button>
+        </div>
+        {summaryText ? (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <div className="text-sm whitespace-pre-wrap font-medium text-slate-800 leading-relaxed">{summaryText}</div>
+            <div className="mt-3 flex gap-2">
+              <button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={() => copyToClipboard(summaryText)}>
+                Copy
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="surface p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Mediator Follow-Up</div>
+              <div className="text-xl font-extrabold text-slate-900 mt-2">Partner Queue</div>
+            </div>
+            <div className="text-sm font-bold text-slate-500">{mediatorQueueBase.reduce((sum, group) => sum + group.rows.length, 0)} leads</div>
+          </div>
+
+          <div className="mt-4 space-y-4">
+            {mediatorQueueBase.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">No partner-side follow-up queue right now.</div>
+            ) : (
+              mediatorQueueBase.map((group) => {
+                const draft = mediatorsDrafts[group.mediator.id] || "";
+                const busy = !!draftBusy[`mediator_${group.mediator.id}`];
+                return (
+                  <div key={`oc-mediator-${group.mediator.id}`} className="rounded-3xl border border-slate-200 p-5 bg-white">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="text-lg font-extrabold text-slate-900">{group.mediator.name}</div>
+                        <div className="text-xs text-slate-500 font-bold mt-1">{group.rows.length} client follow-up case{group.rows.length === 1 ? "" : "s"}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={gatewayState !== "ready" || busy}
+                          onClick={() => generateMediatorDraft(group)}
+                          className={`px-3 py-2 rounded-xl text-xs font-extrabold ${gatewayState === "ready" && !busy ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-slate-200 text-slate-500"}`}
+                        >
+                          {busy ? "Generating…" : "Generate Draft"}
+                        </button>
+                        <button type="button" className="btn-secondary px-3 py-2 text-xs" disabled={!draft} onClick={() => copyToClipboard(draft)}>
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={!draft || !!draftBusy[`mediator_save_${group.mediator.id}`]}
+                          onClick={() => saveMediatorDraftToNotes(group)}
+                        >
+                          Save to Notes
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={!draft || !backendEnabled || !!draftBusy[`mediator_task_${group.mediator.id}`]}
+                          onClick={() => createMediatorDraftTasks(group)}
+                        >
+                          Create Tasks
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={!draft || gatewayState !== "ready"}
+                          onClick={() => sendDraft(group.mediator.phone, draft, group.mediator.name)}
+                        >
+                          Send via OpenClaw
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-2">
+                      {group.rows.slice(0, 6).map((row) => (
+                        <div key={`oc-mediator-row-${row.id}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-bold text-slate-900">{row.name}</div>
+                              <div className="text-[11px] text-slate-500 font-semibold mt-1">
+                                {row.status} • {row.nextFollowUpLabel}
+                              </div>
+                            </div>
+                            <span className="inline-flex rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-extrabold uppercase text-slate-500">
+                              {row.company || "Lead"}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-xs font-semibold text-slate-700">{row.latestNoteText}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {draft ? (
+                      <div className="mt-4 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4">
+                        <div className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-indigo-700">Draft</div>
+                        <div className="mt-2 whitespace-pre-wrap text-sm font-medium text-slate-800 leading-relaxed">{draft}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="surface p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">Client Follow-Up</div>
+              <div className="text-xl font-extrabold text-slate-900 mt-2">Client Queue</div>
+            </div>
+            <div className="text-sm font-bold text-slate-500">{clientQueue.length} clients</div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {clientQueue.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">No client-side follow-up queue right now.</div>
+            ) : (
+              clientQueue.slice(0, 18).map((row) => {
+                const draft = clientDrafts[row.id] || "";
+                const busy = !!draftBusy[`client_${row.id}`];
+                return (
+                  <div key={`oc-client-${row.id}`} className="rounded-3xl border border-slate-200 p-4 bg-white">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="font-extrabold text-slate-900">{row.name}</div>
+                        <div className="text-xs text-slate-500 font-semibold mt-1">
+                          {row.status} • {row.nextFollowUpLabel} • {row.mediatorName}
+                        </div>
+                        <div className="text-sm font-semibold text-slate-700 mt-2">{row.latestNoteText}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={gatewayState !== "ready" || busy}
+                          onClick={() => generateClientDraft(row)}
+                          className={`px-3 py-2 rounded-xl text-xs font-extrabold ${gatewayState === "ready" && !busy ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-slate-200 text-slate-500"}`}
+                        >
+                          {busy ? "Generating…" : "Generate Draft"}
+                        </button>
+                        <button type="button" className="btn-secondary px-3 py-2 text-xs" disabled={!draft} onClick={() => copyToClipboard(draft)}>
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={!draft || !!draftBusy[`client_save_${row.id}`]}
+                          onClick={() => saveClientDraftToNotes(row)}
+                        >
+                          Save to Notes
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={!draft || !backendEnabled || !!draftBusy[`client_task_${row.id}`]}
+                          onClick={() => createClientDraftTask(row)}
+                        >
+                          Create Task
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-3 py-2 text-xs"
+                          disabled={!draft || gatewayState !== "ready"}
+                          onClick={() => sendDraft(row.phone, draft, row.name)}
+                        >
+                          Send via OpenClaw
+                        </button>
+                      </div>
+                    </div>
+                    {draft ? (
+                      <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+                        <div className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-emerald-700">Draft</div>
+                        <div className="mt-2 whitespace-pre-wrap text-sm font-medium text-slate-800 leading-relaxed">{draft}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       </div>
@@ -13884,6 +14487,19 @@ export default function LirasApp({ backend = null }) {
       />
     );
   }
+  if (reportType === "openclaw_followup") {
+    return (
+      <OpenClawFollowUpStudio
+        leads={leads}
+        mediators={mediators}
+        onBack={() => setReportType(null)}
+        onUpdateLead={updateLead}
+        backendEnabled={backendEnabled}
+        supabase={supabase}
+        authUser={authUser}
+      />
+    );
+  }
   if (reportType && ["daily", "monthly", "quarterly"].includes(reportType)) {
     return <EnhancedProfessionalReport type={reportType} leads={leads} mediators={mediators} ai={ai} onBack={() => setReportType(null)} />;
   }
@@ -14940,6 +15556,16 @@ export default function LirasApp({ backend = null }) {
                       <div className="font-extrabold text-slate-900">Daily Work Update + Day Plan</div>
                       <div className="text-xs text-slate-500 mt-1">
                         Separate report for daily group update and next-day execution plan
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition border-cyan-200 bg-gradient-to-br from-cyan-50/70 to-white"
+                      onClick={() => setReportType("openclaw_followup")}
+                    >
+                      <div className="font-extrabold text-slate-900">OpenClaw Follow-Up Studio</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        OpenRouter-backed drafts for mediator follow-ups, client callbacks, and owner queue summary
                       </div>
                     </button>
                     <button type="button" className="surface-solid p-4 text-left hover:ring-1 hover:ring-slate-200 transition" onClick={() => setReportType("monthly")}>
