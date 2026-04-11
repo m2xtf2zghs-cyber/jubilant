@@ -1,0 +1,19 @@
+from __future__ import annotations
+
+from app.parsers.banks.token_adapter import TokenBankAdapter
+from app.parsers.banks.row_refiners import refine_common_row
+from app.parsers.interfaces import ParsedStatement, PdfDocument
+
+
+class HdfcAdapter(TokenBankAdapter):
+    code = "HDFC"
+
+    def __init__(self) -> None:
+        super().__init__(code="HDFC", detect_tokens=("HDFC BANK", "HDFCBANK"))
+
+    def parse(self, doc: PdfDocument, config: dict) -> ParsedStatement:
+        parsed = super().parse(doc, config)
+        for row in parsed.rows:
+            refine_common_row(row)
+        parsed.metadata.source_bank = "HDFC"
+        return parsed

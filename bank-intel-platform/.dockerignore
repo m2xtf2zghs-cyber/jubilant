@@ -1,0 +1,11 @@
+.git
+.pytest_cache
+.venv
+.venv312
+__pycache__
+*.pyc
+data
+out
+dist
+build
+tests

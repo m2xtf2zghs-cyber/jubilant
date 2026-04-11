@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+PRIMARY_TYPES = {
+    "SALES",
+    "PURCHASE",
+    "EXPENSE",
+    "CASH",
+    "CASH DEPOSIT",
+    "CASH WITHDRAWAL",
+    "BANK FIN",
+    "PVT FIN",
+    "RETURN",
+    "DOUBT",
+    "ODD FIG",
+    "SIS CON",
+    "TAX",
+    "GST",
+    "BANK CHARGES",
+    "INTEREST",
+    "SALARY",
+    "TRANSFER",
+    "SELF",
+    "INSURANCE",
+    "RENT",
+    "UTILITIES",
+    "UNKNOWN",
+}

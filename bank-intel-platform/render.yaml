@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: bank-intel-platform
+    runtime: docker
+    plan: starter
+    region: singapore
+    numInstances: 1
+    autoDeployTrigger: off
+    healthCheckPath: /api/health/ready
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: ENV
+        value: prod
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ENABLE_CONSOLE
+        value: false
+      - key: ENFORCE_HTTPS_REDIRECT
+        value: true
+      - key: MAX_UPLOAD_MB
+        value: 50
+      - key: MAX_FILES_PER_JOB
+        value: 12
+      - key: TRUSTED_HOSTS
+        sync: false
+      - key: AUTH_BEARER_TOKENS
+        sync: false
+      - key: AUTH_EXEMPT_PATHS
+        value: /,/health,/api/health,/api/health/ready
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bank-intel-db
+          property: connectionString
+    disk:
+      name: bank-intel-data
+      mountPath: /app/data
+      sizeGB: 5
+
+databases:
+  - name: bank-intel-db
+    plan: basic-256mb
+    region: singapore
+    databaseName: bankintel
+    postgresMajorVersion: "17"
+    storageAutoscalingEnabled: false

@@ -1,0 +1,37 @@
+bank_patterns:
+  BOI:
+    detect_tokens: ["BANK OF INDIA", "BKID", "STAR CONNECT"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  TMB:
+    detect_tokens: ["TAMILNAD MERCANTILE BANK", "TMB"]
+    row_start_regex: "^\\s*\\d{2}[-/]\\d{2}[-/]\\d{2,4}"
+  HDFC:
+    detect_tokens: ["HDFC BANK", "HDFCBANK"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  SBI:
+    detect_tokens: ["STATE BANK OF INDIA", "SBI"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  ICICI:
+    detect_tokens: ["ICICI BANK", "ICICI"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  AXIS:
+    detect_tokens: ["AXIS BANK"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  CANARA:
+    detect_tokens: ["CANARA BANK"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  IOB:
+    detect_tokens: ["INDIAN OVERSEAS BANK", "IOB"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  KVB:
+    detect_tokens: ["KARUR VYSYA BANK", "KVB", "KARB", "KBL"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  FEDERAL:
+    detect_tokens: ["FEDERAL BANK"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  INDUSIND:
+    detect_tokens: ["INDUSIND BANK"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"
+  YES:
+    detect_tokens: ["YES BANK"]
+    row_start_regex: "^\\s*(?:\\d+\\s+)?\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}"

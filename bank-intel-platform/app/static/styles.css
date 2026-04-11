@@ -1,0 +1,249 @@
+:root {
+  --bg: #f4efe6;
+  --panel: rgba(255, 250, 240, 0.92);
+  --ink: #231815;
+  --muted: #6f6258;
+  --line: #d6c8bb;
+  --accent: #8d3b2e;
+  --accent-soft: #e2b89d;
+  --shadow: 0 18px 40px rgba(54, 31, 17, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top right, rgba(141, 59, 46, 0.18), transparent 30%),
+    linear-gradient(135deg, #f7f1e6 0%, #efe4d5 100%);
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  padding: 24px;
+  border-right: 1px solid var(--line);
+  background: rgba(255, 247, 238, 0.88);
+  backdrop-filter: blur(8px);
+}
+
+.brand h1,
+.hero h2,
+.section-head h2 {
+  margin: 0;
+  font-family: "Trebuchet MS", Georgia, serif;
+  letter-spacing: 0.04em;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.job-list {
+  margin-top: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.job-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.job-card.active {
+  border-color: var(--accent);
+}
+
+.content {
+  padding: 24px;
+  display: grid;
+  gap: 20px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid rgba(111, 98, 88, 0.18);
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -80px -80px auto;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: rgba(141, 59, 46, 0.1);
+}
+
+.upload-form,
+.grid,
+.summary-block {
+  display: grid;
+  gap: 12px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid.two.compact {
+  align-items: start;
+}
+
+label span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+textarea {
+  resize: vertical;
+  font-family: "Courier New", ui-monospace, monospace;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff9f0;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent-soft);
+}
+
+.actions,
+.section-head,
+.inline-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+}
+
+.meta-card {
+  min-height: 140px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.4);
+  white-space: pre-line;
+}
+
+.search {
+  max-width: 320px;
+}
+
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1100px;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(214, 200, 187, 0.8);
+  vertical-align: top;
+  font-size: 14px;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: #efe2d4;
+  z-index: 1;
+  text-align: left;
+}
+
+.narration {
+  max-width: 320px;
+  white-space: normal;
+}
+
+.file-drop input {
+  padding: 18px;
+  border-style: dashed;
+}
+
+@media (max-width: 1080px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  .section-head,
+  .inline-actions,
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

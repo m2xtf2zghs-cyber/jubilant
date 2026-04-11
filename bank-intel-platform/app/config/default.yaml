@@ -1,0 +1,53 @@
+project:
+  currency: INR
+  timezone: Asia/Kolkata
+
+classification:
+  primary_types:
+    - SALES
+    - PURCHASE
+    - EXPENSE
+    - BANK FIN
+    - PVT FIN
+    - NAMES
+    - CASH
+    - DOUBT
+    - RETURN
+    - REVERSAL
+    - INSURANCE
+    - SIS CON
+    - UNMATCH SIS CON
+    - INB TRF
+    - UNMATCH INB TRF
+    - ODD FIG
+    - PROP
+    - UNKNOWN
+
+narration:
+  channel_keywords:
+    RTGS: ["RTGS", "I/W RTGS"]
+    NEFT: ["NEFT", "NECS"]
+    IMPS: ["IMPS"]
+    UPI: ["UPI"]
+    CASH: ["CASH", "ATM", "CS/", "CHEPA", "SELF"]
+    CHEQUE: ["CHQ", "CHEQUE"]
+  purpose_keywords:
+    TAX: ["GST", "CBDT", "TIN", "TAX"]
+    INTEREST: ["INT", "INTEREST"]
+    CHARGES: ["CHARGE", "CHARGES", "PENAL"]
+
+thresholds:
+  odd_figure_round_base: 100000
+  private_fin_round_min: 500000
+  confidence_default: 0.4
+
+workbook:
+  include_cons_when_multi_account: true
+
+sister_concerns:
+  map:
+    AFFAN METALS: AFFAN METALS
+    VEERA INDUSTRIES: VEERA INDUSTRIES
+    VEERAVINDUSTRIES: VEERA INDUSTRIES
+    VEERA PROPERTIES: VEERA PROPERTIES
+    VEERA PROPERIES: VEERA PROPERTIES

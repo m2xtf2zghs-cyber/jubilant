@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bank Intel Analyst Console</title>
+    <link rel="stylesheet" href="/console/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Analyst Console</p>
+          <h1>Bank Intel</h1>
+        </div>
+        <button id="refreshJobsBtn" class="ghost">Refresh Jobs</button>
+        <div id="jobList" class="job-list"></div>
+      </aside>
+
+      <main class="content">
+        <section class="panel hero">
+          <div>
+            <p class="eyebrow">Upload + Rules</p>
+            <h2>New Case</h2>
+          </div>
+          <form id="uploadForm" class="upload-form">
+            <div class="grid two">
+              <label>
+                <span>Case Name</span>
+                <input name="job_name" value="Statement Parse Job" required />
+              </label>
+              <label>
+                <span>Analyst Name</span>
+                <input name="analyst_name" value="ANALYST" />
+              </label>
+              <label>
+                <span>Account Holder</span>
+                <input name="account_holder" />
+              </label>
+              <label>
+                <span>PAN</span>
+                <input name="pan" />
+              </label>
+              <label>
+                <span>Mobile</span>
+                <input name="mobile" />
+              </label>
+              <label>
+                <span>Email</span>
+                <input name="email" />
+              </label>
+            </div>
+            <label>
+              <span>Address</span>
+              <textarea name="address" rows="2"></textarea>
+            </label>
+            <label>
+              <span>Other Bank Note</span>
+              <input name="other_bank_note" placeholder="YES - SBI OD pending / NO" />
+            </label>
+            <label>
+              <span>Feedback</span>
+              <textarea name="feedback" rows="2"></textarea>
+            </label>
+            <label>
+              <span>Borrower YAML Rules</span>
+              <textarea id="yamlRules" name="yaml_rules" rows="10" spellcheck="false" placeholder="rules_engine:
+  sales_patterns:
+    - pattern: MRF LTD
+      label: MRF LIMITED
+  purchase_patterns:
+    - pattern: BHARAT PETROLEUM
+      label: BHARAT PETROLEUM
+  bank_fin_patterns:
+    - pattern: IDFC FIRST BANK
+      label: IDFC FIRST BANK
+  lender_grouping:
+    - lender: IDFC FIRST BANK
+      patterns: [IDFC FIRST BANK, BILD-IDFCFIRSTBK]
+      split_by_emi_amount: true"></textarea>
+            </label>
+            <label class="file-drop">
+              <span>PDF Statements</span>
+              <input id="fileInput" type="file" name="files" accept="application/pdf" multiple required />
+            </label>
+            <div class="actions">
+              <button type="submit">Upload And Parse</button>
+              <p id="uploadStatus" class="status"></p>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Case Review</p>
+              <h2 id="activeJobTitle">No Job Selected</h2>
+            </div>
+            <div class="inline-actions">
+              <button id="reparseBtn" class="ghost">Re-Parse</button>
+              <button id="exportBtn" class="ghost">Export XLSX</button>
+              <button id="downloadBtn" class="ghost">Download Latest</button>
+            </div>
+          </div>
+
+          <div class="grid two compact">
+            <label>
+              <span>Stored YAML Rules</span>
+              <textarea id="jobRules" rows="10" spellcheck="false"></textarea>
+            </label>
+            <div class="summary-block">
+              <div id="jobMeta" class="meta-card"></div>
+              <button id="saveRulesBtn">Save Rules</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Transaction Review</p>
+              <h2>Override Grid</h2>
+            </div>
+            <input id="searchInput" class="search" placeholder="Filter by narration / party / type" />
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Date</th>
+                  <th>Account</th>
+                  <th>Type</th>
+                  <th>Party</th>
+                  <th>DR</th>
+                  <th>CR</th>
+                  <th>Description</th>
+                  <th>Notes</th>
+                  <th>Save</th>
+                </tr>
+              </thead>
+              <tbody id="txnTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="txnRowTemplate">
+      <tr>
+        <td data-cell="id"></td>
+        <td data-cell="date"></td>
+        <td data-cell="account"></td>
+        <td>
+          <select data-field="classification_primary"></select>
+        </td>
+        <td>
+          <input data-field="normalized_party" />
+        </td>
+        <td data-cell="dr"></td>
+        <td data-cell="cr"></td>
+        <td class="narration" data-cell="desc"></td>
+        <td>
+          <input data-field="analyst_notes" />
+        </td>
+        <td>
+          <button data-action="save">Save</button>
+        </td>
+      </tr>
+    </template>
+
+    <script src="/console/app.js" type="module"></script>
+  </body>
+</html>

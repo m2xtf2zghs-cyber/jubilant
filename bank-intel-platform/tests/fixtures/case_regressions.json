@@ -1,0 +1,110 @@
+{
+  "cases": [
+    {
+      "name": "AFFAN",
+      "job_id": "JOB-20260410043318-481be2e9",
+      "manual_workbook": "AFFAN METALS-FINAL WORKINGS- 05-02-2026.xlsx",
+      "accounts": {
+        "TMB-5048": {
+          "min_match_pct": 100.0,
+          "min_type_match_pct": 97.5,
+          "max_manual_only": 0,
+          "max_parsed_only": 1
+        },
+        "TMB-0123": {
+          "min_match_pct": 100.0,
+          "min_type_match_pct": 98.0,
+          "max_manual_only": 0,
+          "max_parsed_only": 0
+        }
+      },
+      "workbook_assertions": [
+        {
+          "sheet": "ANALYSIS",
+          "cell": "A1",
+          "equals": "Summary Info"
+        },
+        {
+          "sheet": "ODD FIG",
+          "cell": "C1",
+          "equals": "TMB-5048-CA"
+        },
+        {
+          "sheet": "RETURN",
+          "cell": "C5",
+          "equals": "TMB-0123-OD"
+        },
+        {
+          "sheet": "CONS",
+          "cell": "D2",
+          "contains": "AFFAN METALS & VEERA INDUSTRIES"
+        },
+        {
+          "sheet": "FINAL",
+          "cell": "G14",
+          "equals": "INWARD CHEQUE RETURN"
+        },
+        {
+          "sheet": "FINAL",
+          "cell": "G16",
+          "equals": "IRREUGULAR REPAYMENT FINANCE"
+        },
+        {
+          "sheet": "PIVOT-TMB-5048-CA",
+          "cell": "D1",
+          "equals": "AFFAN METALS\nTMB-5048-CA"
+        },
+        {
+          "sheet": "PIVOT-TMB-5048-CA",
+          "cell": "C6",
+          "equals": "MONTH"
+        },
+        {
+          "sheet": "XNS-TMB-5048-CA",
+          "cell": "A1",
+          "equals": "Sl. No."
+        }
+      ]
+    },
+    {
+      "name": "DHARA",
+      "job_id": "JOB-20260410043513-05aed433",
+      "manual_workbook": "DHARA LOGISTICS-FINAL WORKING-02.03.2026.xlsx",
+      "accounts": {
+        "BOI-0005": {
+          "min_match_pct": 94.5,
+          "min_type_match_pct": 98.5,
+          "max_manual_only": 250,
+          "max_parsed_only": 5
+        }
+      },
+      "workbook_assertions": [
+        {
+          "sheet": "ANALYSIS",
+          "cell": "A1",
+          "equals": "Summary Info"
+        },
+        {
+          "sheet": "ODD FIG",
+          "cell": "C1",
+          "equals": "BOI-0005-OD"
+        },
+        {
+          "sheet": "FINAL",
+          "cell": "G14",
+          "equals": "INWARD CHEQUE RETURN"
+        },
+        {
+          "sheet": "PIVOT-BOI-0005-OD",
+          "cell": "D1",
+          "equals": "DHARA LOGISTICS\nBOI-0005-OD"
+        },
+        {
+          "sheet": "XNS-BOI-0005-OD",
+          "cell": "A1",
+          "equals": "Sl. No."
+        }
+      ]
+    }
+  ]
+}
